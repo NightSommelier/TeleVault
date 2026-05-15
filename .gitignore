@@ -1,0 +1,30 @@
+# Local secrets and runtime config
+.env
+.env.*
+!.env.example
+config.env
+*.key
+*.pem
+*.p8
+*.p12
+*.crt
+*.pub
+
+# Local database/session/cache artifacts
+*.sqlite
+*.sqlite3
+*.db
+*.session
+*.session-journal
+
+# Go build/test outputs
+bin/
+dist/
+coverage.out
+*.test
+
+# OS/editor noise
+.DS_Store
+.idea/
+.vscode/
+*.swp
