@@ -1,12 +1,14 @@
 package httpserver
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"log/slog"
 	"net/http"
 
 	"filippo.io/age"
+	"github.com/televault/TeleVault/backend/internal/adminsettings"
 	"github.com/televault/TeleVault/backend/internal/auth"
 	"github.com/televault/TeleVault/backend/internal/config"
 	"github.com/televault/TeleVault/backend/internal/crypto/secrets"
@@ -66,12 +68,25 @@ func (s *Server) routes() {
 	s.mux.Handle("GET /files/{id}", authHandler.RequireAuth(http.HandlerFunc(filesHandler.Get)))
 	s.mux.Handle("GET /files/{id}/download", authHandler.RequireAuth(http.HandlerFunc(filesHandler.Download)))
 
+	adminSettingsStore := adminsettings.NewStore(s.db, s.cfg)
 	uploadsHandler := uploads.NewHandler(s.db, s.ageRecipient, telegramSessionCrypto, s.telegram, uploads.Settings{
 		PartSize: s.cfg.UploadPartSizeBytes,
+		PartSizeProvider: func(ctx context.Context) (int64, error) {
+			settings, err := adminSettingsStore.UploadSettings(ctx)
+			if err != nil {
+				return 0, err
+			}
+			return settings.UploadPartSizeBytes, nil
+		},
 	})
 	s.mux.Handle("POST /uploads", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(uploadsHandler.Create))))
 	s.mux.Handle("POST /uploads/{id}/parts/{part_number}", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(uploadsHandler.UploadPart))))
 	s.mux.Handle("POST /uploads/{id}/complete", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(uploadsHandler.Complete))))
+
+	adminHandler := adminsettings.NewHandler(s.db, s.cfg)
+	s.mux.Handle("GET /admin/settings", authHandler.RequireAuth(authHandler.RequireAdmin(http.HandlerFunc(adminHandler.GetSettings))))
+	s.mux.Handle("PATCH /admin/settings/upload", authHandler.RequireAuth(authHandler.RequireAdmin(authHandler.RequireCSRF(http.HandlerFunc(adminHandler.PatchUploadSettings)))))
+	s.mux.Handle("PATCH /admin/telegram-accounts/{user_id}/limits", authHandler.RequireAuth(authHandler.RequireAdmin(authHandler.RequireCSRF(http.HandlerFunc(adminHandler.PatchTelegramAccountLimit)))))
 }
 
 func (s *Server) healthz(w http.ResponseWriter, r *http.Request) {

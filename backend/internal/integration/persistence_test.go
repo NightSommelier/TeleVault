@@ -10,7 +10,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/televault/TeleVault/backend/internal/adminsettings"
 	"github.com/televault/TeleVault/backend/internal/auth"
+	"github.com/televault/TeleVault/backend/internal/config"
 	"github.com/televault/TeleVault/backend/internal/db"
 	"github.com/televault/TeleVault/backend/internal/files"
 	"github.com/televault/TeleVault/backend/internal/uploads"
@@ -171,6 +173,54 @@ func TestFilesUploadsPersistenceOwnerIsolationAndCompletion(t *testing.T) {
 	}
 }
 
+func TestAdminUploadSettingsVaultUploadPartSize(t *testing.T) {
+	database := openIntegrationDB(t)
+	sessionStore := auth.NewSessionStore(database)
+	settingsStore := adminsettings.NewStore(database, config.Config{
+		UploadPartSizeBytes:        64,
+		TelegramDocumentLimitBytes: 1024,
+		UploadSafetyMarginBytes:    64,
+	})
+	uploadStore := uploads.NewStore(database)
+	ctx := context.Background()
+
+	admin, cleanupAdmin := createUserThroughLogin(t, database, sessionStore, 940_000_000_000+time.Now().UnixNano()%1_000_000_000)
+	defer cleanupAdmin()
+
+	settings, err := settingsStore.UpdateUploadSettings(ctx, adminsettings.UploadSettings{
+		UploadPartSizeBytes:        128,
+		TelegramDocumentLimitBytes: 1024,
+		UploadSafetyMarginBytes:    64,
+	}, admin.ID)
+	if err != nil {
+		t.Fatalf("UpdateUploadSettings() error = %v", err)
+	}
+	if settings.UploadPartSizeBytes != 128 {
+		t.Fatalf("UploadPartSizeBytes = %d, want 128", settings.UploadPartSizeBytes)
+	}
+	t.Cleanup(func() {
+		_, _ = settingsStore.UpdateUploadSettings(context.Background(), adminsettings.UploadSettings{
+			UploadPartSizeBytes:        config.DefaultUploadPartSizeBytes,
+			TelegramDocumentLimitBytes: config.DefaultTelegramDocumentLimitBytes,
+			UploadSafetyMarginBytes:    config.DefaultUploadSafetyMarginBytes,
+		}, "")
+	})
+
+	upload, err := uploadStore.Create(ctx, uploads.CreateUploadParams{
+		OwnerID:       admin.ID,
+		Name:          "admin-settings.bin",
+		PlaintextSize: 256,
+		PartSize:      settings.UploadPartSizeBytes,
+		ExpiresAt:     time.Now().Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("Create upload error = %v", err)
+	}
+	if upload.PartSize != 128 {
+		t.Fatalf("upload PartSize = %d, want admin setting 128", upload.PartSize)
+	}
+}
+
 func openIntegrationDB(t *testing.T) *sql.DB {
 	t.Helper()
 
@@ -202,13 +252,13 @@ func ensureLatestMigration(t *testing.T, database *sql.DB) {
 SELECT EXISTS (
     SELECT 1
     FROM schema_migrations
-    WHERE version = '000007'
+    WHERE version = '000008'
 )`).Scan(&exists)
 	if err != nil {
 		t.Fatalf("schema migration check failed: %v", err)
 	}
 	if !exists {
-		t.Fatalf("TEST_DATABASE_URL database is not migrated through 000007; run go run ./cmd/migrate up first")
+		t.Fatalf("TEST_DATABASE_URL database is not migrated through 000008; run go run ./cmd/migrate up first")
 	}
 }
 

@@ -1,6 +1,7 @@
 package uploads
 
 import (
+	"context"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
@@ -22,7 +23,8 @@ const (
 )
 
 type Settings struct {
-	PartSize int64
+	PartSize         int64
+	PartSizeProvider func(context.Context) (int64, error)
 }
 
 type Handler struct {
@@ -87,13 +89,19 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	partSize, err := h.partSize(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "upload_settings_load_failed")
+		return
+	}
+
 	upload, err := h.store.Create(r.Context(), CreateUploadParams{
 		OwnerID:           user.ID,
 		ParentID:          strings.TrimSpace(request.ParentID),
 		Name:              name,
 		MimeType:          strings.TrimSpace(request.MimeType),
 		PlaintextSize:     request.PlaintextSize,
-		PartSize:          h.settings.PartSize,
+		PartSize:          partSize,
 		IdempotencyKey:    idempotencyKey,
 		ChecksumAlgorithm: checksumAlgorithm,
 		Checksum:          checksum,
@@ -111,6 +119,13 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"upload": uploadResponse(upload),
 	})
+}
+
+func (h *Handler) partSize(ctx context.Context) (int64, error) {
+	if h.settings.PartSizeProvider != nil {
+		return h.settings.PartSizeProvider(ctx)
+	}
+	return h.settings.PartSize, nil
 }
 
 func (h *Handler) UploadPart(w http.ResponseWriter, r *http.Request) {

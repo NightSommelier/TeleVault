@@ -39,3 +39,19 @@ func (h *Handler) RequireAuth(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r.WithContext(withUser(r.Context(), user)))
 	})
 }
+
+func (h *Handler) RequireAdmin(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user, ok := UserFromContext(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "missing_authenticated_user")
+			return
+		}
+		if user.Role != "admin" {
+			writeError(w, http.StatusForbidden, "admin_required")
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
