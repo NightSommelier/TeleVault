@@ -64,6 +64,7 @@ Foundation started on 2026-05-15:
 - Added in-memory rate limiting for Telegram auth endpoints by remote IP and phone hash.
 - Added admin settings model/API for global upload limits and per-account Telegram limit overrides.
 - Added effective per-account upload limit resolution and Telegram limit probe state fields.
+- Added a local admin bootstrap CLI for listing users and promoting or demoting trusted Telegram users without manual SQL.
 
 Accepted MVP decisions:
 
@@ -610,10 +611,9 @@ teledrive-2/
 
 ## 13. Immediate Next Steps
 
-1. Add local bootstrap admin auth flow.
-2. Add active safe Telegram limit probing for per-account detected limits.
-3. Add distributed Valkey-backed auth rate limiting for multi-instance deployments.
-4. Add QR-code login as an additional Telegram auth path.
+1. Add active safe Telegram limit probing for per-account detected limits.
+2. Add distributed Valkey-backed auth rate limiting for multi-instance deployments.
+3. Add QR-code login as an additional Telegram auth path.
 
 ## 13.1 Deferred Planned Auth Work
 

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/televault/TeleVault/backend/internal/adminsettings"
+	"github.com/televault/TeleVault/backend/internal/adminusers"
 	"github.com/televault/TeleVault/backend/internal/auth"
 	"github.com/televault/TeleVault/backend/internal/config"
 	"github.com/televault/TeleVault/backend/internal/db"
@@ -265,6 +266,36 @@ func TestEffectiveUploadSettingsUseAccountLimit(t *testing.T) {
 	}
 	if effective.Source != "account_manual" {
 		t.Fatalf("Source = %q, want account_manual", effective.Source)
+	}
+}
+
+func TestAdminUsersPromoteAndDemoteByTelegramID(t *testing.T) {
+	database := openIntegrationDB(t)
+	sessionStore := auth.NewSessionStore(database)
+	adminUserStore := adminusers.NewStore(database)
+	ctx := context.Background()
+
+	user, cleanupUser := createUserThroughLogin(t, database, sessionStore, 960_000_000_000+time.Now().UnixNano()%1_000_000_000)
+	defer cleanupUser()
+
+	promoted, err := adminUserStore.PromoteByTelegramID(ctx, user.TelegramID)
+	if err != nil {
+		t.Fatalf("PromoteByTelegramID() error = %v", err)
+	}
+	if promoted.ID != user.ID || promoted.Role != "admin" {
+		t.Fatalf("PromoteByTelegramID() = %+v, want same user with admin role", promoted)
+	}
+
+	demoted, err := adminUserStore.DemoteByTelegramID(ctx, user.TelegramID)
+	if err != nil {
+		t.Fatalf("DemoteByTelegramID() error = %v", err)
+	}
+	if demoted.ID != user.ID || demoted.Role != "user" {
+		t.Fatalf("DemoteByTelegramID() = %+v, want same user with user role", demoted)
+	}
+
+	if _, err := adminUserStore.PromoteByTelegramID(ctx, 999_999_999_999_999); !errors.Is(err, adminusers.ErrUserNotFound) {
+		t.Fatalf("missing user error = %v, want adminusers.ErrUserNotFound", err)
 	}
 }
 
