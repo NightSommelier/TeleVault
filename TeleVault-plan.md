@@ -47,6 +47,12 @@ Foundation started on 2026-05-15:
 - Added auth audit events for Telegram code send, login, refresh, and logout.
 - Added double-submit CSRF protection for cookie-authenticated refresh/logout requests.
 - Added owner-only files/folders metadata API: `GET /files`, `POST /folders`, `GET /files/{id}`.
+- Added upload session API: `POST /uploads`.
+- Added upload part API: `POST /uploads/{id}/parts/{part_number}` encrypts request bodies with age, uploads ciphertext to Telegram Saved Messages, and records part metadata.
+- Added upload completion API: `POST /uploads/{id}/complete` promotes verified upload sessions into `files` and `file_parts`.
+- Smoke-tested single-part upload with `test.png`: encrypted part stored in Telegram Saved Messages and file promoted to ready metadata.
+- Added authenticated download API: `GET /files/{id}/download` fetches encrypted Telegram parts, decrypts with age, and streams plaintext.
+- Smoke-tested `test.png` download: downloaded SHA-256 matched the local original.
 - Added `.env.example`.
 
 Accepted MVP decisions:
@@ -57,6 +63,11 @@ Accepted MVP decisions:
 - MVP sharing: no public links or user-to-user sharing in the first usable version.
 - MVP upload path: start with synchronous API streaming to Telegram, then add worker-based retries/cleanup where needed.
 - MVP frontend: reuse/adapt the existing React UI only after the backend encrypted owner-only flow is stable.
+- Upload sizing: adapt per-connection/per-account upload parts to current Telegram limits with a safety margin. Baseline Telegram limits are 2 GB for free accounts and 4 GB for Premium accounts.
+- Upload backend: direct encrypted streaming to Telegram is the primary path; object storage is a future pluggable backend or staging option.
+- Admin access: a separate admin panel will manage server-side Telegram accounts and operational settings, with a separate bootstrap path so admin access does not hinge on one Telegram account.
+- Auth methods: support Telegram phone/code login now and QR login as an additional method where practical.
+- Key model: keep the app-controlled age identity for server-side encryption in MVP; per-user age key export/import is a future private-vault mode.
 
 Critical plan corrections from the audit:
 
@@ -589,11 +600,14 @@ teledrive-2/
 
 ## 13. Immediate Next Steps
 
-1. Smoke-test folder creation and listing with the authenticated session.
-2. Add upload session API: `POST /uploads`.
-3. Add Telegram 2FA password handling for accounts that require it.
-4. Add auth/files endpoint integration tests around challenge/session/policy persistence.
-5. Add dedicated rate limiting for Telegram auth endpoints.
+1. Add multipart checksum strategy that verifies whole-file integrity without retaining plaintext.
+2. Add cleanup/retry handling for failed Telegram part uploads and abandoned upload sessions.
+3. Add integration tests or a dev smoke-test command for upload/download.
+4. Add Telegram 2FA password handling for accounts that require it.
+5. Add auth/files/uploads endpoint integration tests around challenge/session/policy persistence.
+6. Add dedicated rate limiting for Telegram auth endpoints.
+7. Add admin settings/model for Telegram account limits and upload safety margins.
+8. Add QR-code login as an additional Telegram auth path.
 
 ## 14. Reference Files in Current Project
 

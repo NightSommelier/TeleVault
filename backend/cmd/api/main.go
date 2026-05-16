@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/televault/TeleVault/backend/internal/config"
+	"github.com/televault/TeleVault/backend/internal/crypto/agefile"
 	"github.com/televault/TeleVault/backend/internal/crypto/secrets"
 	"github.com/televault/TeleVault/backend/internal/db"
 	"github.com/televault/TeleVault/backend/internal/httpserver"
@@ -40,6 +41,17 @@ func main() {
 		os.Exit(1)
 	}
 
+	ageRecipient, err := agefile.RecipientFromIdentity(cfg.AppAgeIdentity)
+	if err != nil {
+		logger.Error("age recipient initialization failed", "error", err)
+		os.Exit(1)
+	}
+	ageIdentity, err := agefile.IdentityFromString(cfg.AppAgeIdentity)
+	if err != nil {
+		logger.Error("age identity initialization failed", "error", err)
+		os.Exit(1)
+	}
+
 	telegramAppID, err := cfg.TelegramAppID()
 	if err != nil {
 		logger.Error("telegram api id validation failed", "error", err)
@@ -56,7 +68,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           httpserver.New(cfg, logger, database, secretsBox, telegramClient),
+		Handler:           httpserver.New(cfg, logger, database, secretsBox, ageRecipient, ageIdentity, telegramClient),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

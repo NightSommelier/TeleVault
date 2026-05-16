@@ -6,30 +6,41 @@ import (
 	"log/slog"
 	"net/http"
 
+	"filippo.io/age"
 	"github.com/televault/TeleVault/backend/internal/auth"
 	"github.com/televault/TeleVault/backend/internal/config"
 	"github.com/televault/TeleVault/backend/internal/crypto/secrets"
 	"github.com/televault/TeleVault/backend/internal/db"
 	"github.com/televault/TeleVault/backend/internal/files"
+	"github.com/televault/TeleVault/backend/internal/uploads"
 )
 
 type Server struct {
-	cfg      config.Config
-	logger   *slog.Logger
-	db       *sql.DB
-	secrets  *secrets.Box
-	telegram auth.TelegramAuthClient
-	mux      *http.ServeMux
+	cfg          config.Config
+	logger       *slog.Logger
+	db           *sql.DB
+	secrets      *secrets.Box
+	ageRecipient age.Recipient
+	ageIdentity  age.Identity
+	telegram     telegramClient
+	mux          *http.ServeMux
 }
 
-func New(cfg config.Config, logger *slog.Logger, database *sql.DB, secretsBox *secrets.Box, telegramClient auth.TelegramAuthClient) http.Handler {
+type telegramClient interface {
+	auth.TelegramAuthClient
+	auth.TelegramStorageClient
+}
+
+func New(cfg config.Config, logger *slog.Logger, database *sql.DB, secretsBox *secrets.Box, ageRecipient age.Recipient, ageIdentity age.Identity, telegram telegramClient) http.Handler {
 	server := &Server{
-		cfg:      cfg,
-		logger:   logger,
-		db:       database,
-		secrets:  secretsBox,
-		telegram: telegramClient,
-		mux:      http.NewServeMux(),
+		cfg:          cfg,
+		logger:       logger,
+		db:           database,
+		secrets:      secretsBox,
+		ageRecipient: ageRecipient,
+		ageIdentity:  ageIdentity,
+		telegram:     telegram,
+		mux:          http.NewServeMux(),
 	}
 
 	server.routes()
@@ -41,17 +52,24 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /healthz", s.healthz)
 	s.mux.HandleFunc("GET /readyz", s.readyz)
 
-	authHandler := auth.NewHandler(s.cfg, s.logger, s.db, auth.NewTelegramSessionCrypto(s.secrets), s.telegram)
+	telegramSessionCrypto := auth.NewTelegramSessionCrypto(s.secrets)
+	authHandler := auth.NewHandler(s.cfg, s.logger, s.db, telegramSessionCrypto, s.telegram)
 	s.mux.HandleFunc("POST /auth/telegram/send-code", authHandler.SendTelegramCode)
 	s.mux.HandleFunc("POST /auth/telegram/login", authHandler.LoginWithTelegram)
 	s.mux.Handle("POST /auth/refresh", authHandler.RequireCSRF(http.HandlerFunc(authHandler.Refresh)))
 	s.mux.Handle("POST /auth/logout", authHandler.RequireCSRF(http.HandlerFunc(authHandler.Logout)))
 	s.mux.Handle("GET /me", authHandler.RequireAuth(http.HandlerFunc(authHandler.Me)))
 
-	filesHandler := files.NewHandler(s.db)
+	filesHandler := files.NewHandler(s.db, telegramSessionCrypto, s.ageIdentity, s.telegram)
 	s.mux.Handle("GET /files", authHandler.RequireAuth(http.HandlerFunc(filesHandler.List)))
 	s.mux.Handle("POST /folders", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(filesHandler.CreateFolder))))
 	s.mux.Handle("GET /files/{id}", authHandler.RequireAuth(http.HandlerFunc(filesHandler.Get)))
+	s.mux.Handle("GET /files/{id}/download", authHandler.RequireAuth(http.HandlerFunc(filesHandler.Download)))
+
+	uploadsHandler := uploads.NewHandler(s.db, s.ageRecipient, telegramSessionCrypto, s.telegram)
+	s.mux.Handle("POST /uploads", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(uploadsHandler.Create))))
+	s.mux.Handle("POST /uploads/{id}/parts/{part_number}", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(uploadsHandler.UploadPart))))
+	s.mux.Handle("POST /uploads/{id}/complete", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(uploadsHandler.Complete))))
 }
 
 func (s *Server) healthz(w http.ResponseWriter, r *http.Request) {

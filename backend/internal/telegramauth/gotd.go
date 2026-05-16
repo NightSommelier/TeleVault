@@ -2,12 +2,18 @@ package telegramauth
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
+	"math"
+	"math/big"
 
 	"github.com/gotd/td/session"
 	"github.com/gotd/td/telegram"
+	"github.com/gotd/td/telegram/downloader"
+	"github.com/gotd/td/telegram/uploader"
 	"github.com/gotd/td/tg"
 
 	"github.com/televault/TeleVault/backend/internal/auth"
@@ -128,6 +134,207 @@ func (c *Client) SignIn(ctx context.Context, phone string, code string, challeng
 	}
 
 	return base64.StdEncoding.EncodeToString(sessionBytes), profile, nil
+}
+
+func (c *Client) UploadEncryptedPart(ctx context.Context, encodedSession string, storagePeer string, name string, body io.Reader) (auth.TelegramUploadResult, error) {
+	sessionBytes, err := base64.StdEncoding.DecodeString(encodedSession)
+	if err != nil {
+		return auth.TelegramUploadResult{}, err
+	}
+
+	storage := &session.StorageMemory{}
+	if err := storage.StoreSession(ctx, sessionBytes); err != nil {
+		return auth.TelegramUploadResult{}, err
+	}
+
+	client := telegram.NewClient(c.appID, c.appHash, telegram.Options{
+		NoUpdates:         true,
+		SessionStorage:    storage,
+		UpdateHandler:     nil,
+		Device:            telegram.DeviceConfig{AppVersion: "TeleDrive 2.0"},
+		CompressThreshold: -1,
+	})
+
+	peer := storagePeer
+	if peer == "" {
+		peer = "self"
+	}
+	if peer != "self" {
+		return auth.TelegramUploadResult{}, fmt.Errorf("unsupported telegram storage peer %q", peer)
+	}
+
+	var messageID int64
+	if err := client.Run(ctx, func(ctx context.Context) error {
+		inputFile, err := uploader.NewUploader(client.API()).FromReader(ctx, name, body)
+		if err != nil {
+			return err
+		}
+
+		randomID, err := randomInt64()
+		if err != nil {
+			return err
+		}
+
+		updates, err := client.API().MessagesSendMedia(ctx, &tg.MessagesSendMediaRequest{
+			Peer: &tg.InputPeerSelf{},
+			Media: &tg.InputMediaUploadedDocument{
+				File:      inputFile,
+				MimeType:  "application/octet-stream",
+				ForceFile: true,
+				Attributes: []tg.DocumentAttributeClass{
+					&tg.DocumentAttributeFilename{FileName: name},
+				},
+			},
+			Message:  "",
+			RandomID: randomID,
+		})
+		if err != nil {
+			return err
+		}
+
+		messageID, err = sentMessageID(updates)
+		return err
+	}); err != nil {
+		return auth.TelegramUploadResult{}, err
+	}
+
+	return auth.TelegramUploadResult{
+		Peer:      peer,
+		MessageID: messageID,
+	}, nil
+}
+
+func (c *Client) DownloadEncryptedPart(ctx context.Context, encodedSession string, storagePeer string, messageID int64, dst io.Writer) error {
+	sessionBytes, err := base64.StdEncoding.DecodeString(encodedSession)
+	if err != nil {
+		return err
+	}
+
+	storage := &session.StorageMemory{}
+	if err := storage.StoreSession(ctx, sessionBytes); err != nil {
+		return err
+	}
+
+	client := telegram.NewClient(c.appID, c.appHash, telegram.Options{
+		NoUpdates:         true,
+		SessionStorage:    storage,
+		UpdateHandler:     nil,
+		Device:            telegram.DeviceConfig{AppVersion: "TeleDrive 2.0"},
+		CompressThreshold: -1,
+	})
+
+	peer := storagePeer
+	if peer == "" {
+		peer = "self"
+	}
+	if peer != "self" {
+		return fmt.Errorf("unsupported telegram storage peer %q", peer)
+	}
+	if messageID <= 0 || messageID > int64(math.MaxInt) {
+		return fmt.Errorf("invalid telegram message id %d", messageID)
+	}
+
+	return client.Run(ctx, func(ctx context.Context) error {
+		location, err := documentLocation(ctx, client.API(), int(messageID))
+		if err != nil {
+			return err
+		}
+
+		_, err = downloader.NewDownloader().
+			Download(client.API(), location).
+			Stream(ctx, dst)
+		return err
+	})
+}
+
+func randomInt64() (int64, error) {
+	n, err := rand.Int(rand.Reader, big.NewInt(math.MaxInt64))
+	if err != nil {
+		return 0, err
+	}
+	return n.Int64() + 1, nil
+}
+
+func sentMessageID(updates tg.UpdatesClass) (int64, error) {
+	switch value := updates.(type) {
+	case *tg.UpdateShortSentMessage:
+		return int64(value.ID), nil
+	case *tg.Updates:
+		for _, update := range value.Updates {
+			newMessage, ok := update.(*tg.UpdateNewMessage)
+			if !ok {
+				continue
+			}
+			message, ok := newMessage.Message.(*tg.Message)
+			if ok {
+				return int64(message.ID), nil
+			}
+		}
+	case *tg.UpdatesCombined:
+		for _, update := range value.Updates {
+			newMessage, ok := update.(*tg.UpdateNewMessage)
+			if !ok {
+				continue
+			}
+			message, ok := newMessage.Message.(*tg.Message)
+			if ok {
+				return int64(message.ID), nil
+			}
+		}
+	}
+
+	return 0, fmt.Errorf("unexpected messages.sendMedia response %T", updates)
+}
+
+func documentLocation(ctx context.Context, api *tg.Client, messageID int) (*tg.InputDocumentFileLocation, error) {
+	messages, err := api.MessagesGetMessages(ctx, []tg.InputMessageClass{
+		&tg.InputMessageID{ID: messageID},
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	message, err := firstMessage(messages)
+	if err != nil {
+		return nil, err
+	}
+
+	media, ok := message.Media.(*tg.MessageMediaDocument)
+	if !ok {
+		return nil, fmt.Errorf("message %d does not contain document media", messageID)
+	}
+	document, ok := media.Document.(*tg.Document)
+	if !ok {
+		return nil, fmt.Errorf("message %d document has unexpected type %T", messageID, media.Document)
+	}
+
+	return &tg.InputDocumentFileLocation{
+		ID:            document.ID,
+		AccessHash:    document.AccessHash,
+		FileReference: document.FileReference,
+	}, nil
+}
+
+func firstMessage(messages tg.MessagesMessagesClass) (*tg.Message, error) {
+	switch value := messages.(type) {
+	case *tg.MessagesMessages:
+		return firstConcreteMessage(value.Messages)
+	case *tg.MessagesMessagesSlice:
+		return firstConcreteMessage(value.Messages)
+	case *tg.MessagesChannelMessages:
+		return firstConcreteMessage(value.Messages)
+	default:
+		return nil, fmt.Errorf("unexpected messages.getMessages response %T", messages)
+	}
+}
+
+func firstConcreteMessage(messages []tg.MessageClass) (*tg.Message, error) {
+	for _, message := range messages {
+		if typed, ok := message.(*tg.Message); ok {
+			return typed, nil
+		}
+	}
+	return nil, errors.New("message not found")
 }
 
 func displayName(firstName string, lastName string) string {

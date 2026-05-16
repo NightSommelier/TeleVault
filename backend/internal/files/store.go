@@ -29,6 +29,19 @@ type File struct {
 	UpdatedAt      time.Time
 }
 
+type FilePart struct {
+	PartNumber        int
+	TelegramPeer      string
+	TelegramMessageID int64
+	CiphertextSize    int64
+	Checksum          []byte
+}
+
+type TelegramSession struct {
+	EncryptedSession []byte
+	StoragePeer      sql.NullString
+}
+
 type Store struct {
 	db *sql.DB
 }
@@ -100,6 +113,59 @@ WHERE owner_id = $1
 	}
 
 	return file, nil
+}
+
+func (s *Store) DownloadData(ctx context.Context, ownerID string, id string) (File, []FilePart, TelegramSession, error) {
+	file, err := s.GetByID(ctx, ownerID, id)
+	if err != nil {
+		return File{}, nil, TelegramSession{}, err
+	}
+	if file.Type != TypeFile || file.Status != StatusReady {
+		return File{}, nil, TelegramSession{}, ErrNotFound
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+SELECT part_number, telegram_peer, telegram_message_id, ciphertext_size, checksum
+FROM file_parts
+WHERE file_id = $1
+ORDER BY part_number ASC`,
+		id,
+	)
+	if err != nil {
+		return File{}, nil, TelegramSession{}, err
+	}
+	defer rows.Close()
+
+	var parts []FilePart
+	for rows.Next() {
+		var part FilePart
+		if err := rows.Scan(&part.PartNumber, &part.TelegramPeer, &part.TelegramMessageID, &part.CiphertextSize, &part.Checksum); err != nil {
+			return File{}, nil, TelegramSession{}, err
+		}
+		parts = append(parts, part)
+	}
+	if err := rows.Err(); err != nil {
+		return File{}, nil, TelegramSession{}, err
+	}
+	if len(parts) == 0 {
+		return File{}, nil, TelegramSession{}, ErrNotFound
+	}
+
+	var session TelegramSession
+	err = s.db.QueryRowContext(ctx, `
+SELECT encrypted_session, storage_peer
+FROM telegram_sessions
+WHERE user_id = $1`,
+		ownerID,
+	).Scan(&session.EncryptedSession, &session.StoragePeer)
+	if errors.Is(err, sql.ErrNoRows) {
+		return File{}, nil, TelegramSession{}, ErrNotFound
+	}
+	if err != nil {
+		return File{}, nil, TelegramSession{}, err
+	}
+
+	return file, parts, session, nil
 }
 
 func (s *Store) CreateFolder(ctx context.Context, ownerID string, parentID string, name string) (File, error) {

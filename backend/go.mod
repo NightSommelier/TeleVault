@@ -3,11 +3,13 @@ module github.com/televault/TeleVault/backend
 go 1.26.2
 
 require (
+	filippo.io/age v1.3.1
 	github.com/gotd/td v0.144.0
 	github.com/jackc/pgx/v5 v5.9.2
 )
 
 require (
+	filippo.io/hpke v0.4.0 // indirect
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/coder/websocket v1.8.14 // indirect

@@ -4,18 +4,31 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
+	"strconv"
 	"strings"
 
+	"filippo.io/age"
+
 	"github.com/televault/TeleVault/backend/internal/auth"
+	"github.com/televault/TeleVault/backend/internal/crypto/agefile"
 )
 
 type Handler struct {
-	store *Store
+	store         *Store
+	sessionCrypto auth.TelegramSessionCrypto
+	ageIdentity   age.Identity
+	telegram      auth.TelegramStorageClient
 }
 
-func NewHandler(db *sql.DB) *Handler {
-	return &Handler{store: NewStore(db)}
+func NewHandler(db *sql.DB, sessionCrypto auth.TelegramSessionCrypto, ageIdentity age.Identity, telegram auth.TelegramStorageClient) *Handler {
+	return &Handler{
+		store:         NewStore(db),
+		sessionCrypto: sessionCrypto,
+		ageIdentity:   ageIdentity,
+		telegram:      telegram,
+	}
 }
 
 func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
@@ -104,6 +117,67 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (h *Handler) Download(w http.ResponseWriter, r *http.Request) {
+	user, ok := auth.UserFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "missing_authenticated_user")
+		return
+	}
+
+	id := strings.TrimSpace(r.PathValue("id"))
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "file_id_required")
+		return
+	}
+
+	file, parts, telegramSession, err := h.store.DownloadData(r.Context(), user.ID, id)
+	if errors.Is(err, ErrNotFound) {
+		writeError(w, http.StatusNotFound, "file_not_found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "file_download_load_failed")
+		return
+	}
+
+	session, err := h.sessionCrypto.DecryptForTelegramID(user.TelegramID, telegramSession.EncryptedSession)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "telegram_session_decrypt_failed")
+		return
+	}
+
+	name := nullableString(file.NamePlain)
+	if name == "" {
+		name = "download"
+	}
+	mimeType := nullableString(file.MimeType)
+	if mimeType == "" {
+		mimeType = "application/octet-stream"
+	}
+
+	w.Header().Set("Content-Type", mimeType)
+	w.Header().Set("Content-Disposition", "attachment; filename="+strconv.Quote(name))
+	if file.PlaintextSize.Valid {
+		w.Header().Set("Content-Length", strconv.FormatInt(file.PlaintextSize.Int64, 10))
+	}
+
+	for _, part := range parts {
+		reader, writer := io.Pipe()
+		errCh := make(chan error, 1)
+		go func(part FilePart) {
+			err := h.telegram.DownloadEncryptedPart(r.Context(), session, part.TelegramPeer, part.TelegramMessageID, writer)
+			_ = writer.CloseWithError(err)
+			errCh <- err
+		}(part)
+
+		decryptErr := agefile.DecryptStream(w, reader, h.ageIdentity)
+		downloadErr := <-errCh
+		if decryptErr != nil || downloadErr != nil {
+			return
+		}
+	}
+}
+
 type createFolderRequest struct {
 	Name     string `json:"name"`
 	ParentID string `json:"parent_id"`
@@ -139,6 +213,13 @@ func fileResponse(file File) map[string]any {
 func nullableStringValue(value sql.NullString) any {
 	if !value.Valid {
 		return nil
+	}
+	return value.String
+}
+
+func nullableString(value sql.NullString) string {
+	if !value.Valid {
+		return ""
 	}
 	return value.String
 }

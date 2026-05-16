@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"errors"
+	"io"
 	"strconv"
 	"time"
 
@@ -38,6 +39,16 @@ type TelegramAuthClient interface {
 	SignIn(ctx context.Context, phone string, code string, challenge TelegramCodeChallenge) (session string, profile TelegramProfile, err error)
 }
 
+type TelegramUploadResult struct {
+	Peer      string
+	MessageID int64
+}
+
+type TelegramStorageClient interface {
+	UploadEncryptedPart(ctx context.Context, session string, storagePeer string, name string, body io.Reader) (TelegramUploadResult, error)
+	DownloadEncryptedPart(ctx context.Context, session string, storagePeer string, messageID int64, dst io.Writer) error
+}
+
 type TelegramSessionCrypto struct {
 	box *secrets.Box
 }
@@ -60,6 +71,14 @@ func telegramChallengeAAD(phoneHash []byte) string {
 
 func (c TelegramSessionCrypto) Decrypt(userID string, encryptedSession []byte) (string, error) {
 	plaintext, err := c.box.Decrypt(encryptedSession, telegramSessionAAD(userID))
+	if err != nil {
+		return "", err
+	}
+	return string(plaintext), nil
+}
+
+func (c TelegramSessionCrypto) DecryptForTelegramID(telegramID int64, encryptedSession []byte) (string, error) {
+	plaintext, err := c.box.Decrypt(encryptedSession, telegramSessionAAD(telegramUserAAD(telegramID)))
 	if err != nil {
 		return "", err
 	}
