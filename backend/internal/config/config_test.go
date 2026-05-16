@@ -67,6 +67,36 @@ func TestValidateRequiresProductionSecureCookieAndCORS(t *testing.T) {
 	assertErrorContains(t, err, "CORS_ALLOWED_ORIGINS is required in production")
 }
 
+func TestValidateRejectsUnsafeUploadLimits(t *testing.T) {
+	cfg := validConfig()
+	cfg.UploadPartSizeBytes = 100
+	cfg.TelegramDocumentLimitBytes = 128
+	cfg.UploadSafetyMarginBytes = 64
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("Validate() error = nil, want upload limit error")
+	}
+
+	assertErrorContains(t, err, "UPLOAD_PART_SIZE_BYTES plus UPLOAD_SAFETY_MARGIN_BYTES must not exceed TELEGRAM_DOCUMENT_LIMIT_BYTES")
+}
+
+func TestValidateRejectsNonPositiveUploadLimits(t *testing.T) {
+	cfg := validConfig()
+	cfg.UploadPartSizeBytes = 0
+	cfg.TelegramDocumentLimitBytes = -1
+	cfg.UploadSafetyMarginBytes = -1
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("Validate() error = nil, want upload limit errors")
+	}
+
+	assertErrorContains(t, err, "UPLOAD_PART_SIZE_BYTES must be greater than 0")
+	assertErrorContains(t, err, "TELEGRAM_DOCUMENT_LIMIT_BYTES must be greater than 0")
+	assertErrorContains(t, err, "UPLOAD_SAFETY_MARGIN_BYTES must be greater than or equal to 0")
+}
+
 func TestValidateRejectsInvalidAgeIdentityShape(t *testing.T) {
 	cfg := validConfig()
 	cfg.AppAgeIdentity = "not-an-age-identity"
@@ -104,6 +134,10 @@ func validConfig() Config {
 		SecureCookie:        false,
 		CookieSameSite:      "Lax",
 		CredentialsCORSMode: true,
+
+		UploadPartSizeBytes:        DefaultUploadPartSizeBytes,
+		TelegramDocumentLimitBytes: DefaultTelegramDocumentLimitBytes,
+		UploadSafetyMarginBytes:    DefaultUploadSafetyMarginBytes,
 	}
 }
 

@@ -66,7 +66,9 @@ func (s *Server) routes() {
 	s.mux.Handle("GET /files/{id}", authHandler.RequireAuth(http.HandlerFunc(filesHandler.Get)))
 	s.mux.Handle("GET /files/{id}/download", authHandler.RequireAuth(http.HandlerFunc(filesHandler.Download)))
 
-	uploadsHandler := uploads.NewHandler(s.db, s.ageRecipient, telegramSessionCrypto, s.telegram)
+	uploadsHandler := uploads.NewHandler(s.db, s.ageRecipient, telegramSessionCrypto, s.telegram, uploads.Settings{
+		PartSize: s.cfg.UploadPartSizeBytes,
+	})
 	s.mux.Handle("POST /uploads", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(uploadsHandler.Create))))
 	s.mux.Handle("POST /uploads/{id}/parts/{part_number}", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(uploadsHandler.UploadPart))))
 	s.mux.Handle("POST /uploads/{id}/complete", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(uploadsHandler.Complete))))

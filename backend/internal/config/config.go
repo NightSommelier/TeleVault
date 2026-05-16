@@ -13,6 +13,10 @@ import (
 const (
 	EnvDevelopment = "development"
 	EnvProduction  = "production"
+
+	DefaultUploadPartSizeBytes        int64 = 64 * 1024 * 1024
+	DefaultTelegramDocumentLimitBytes int64 = 2 * 1024 * 1024 * 1024
+	DefaultUploadSafetyMarginBytes    int64 = 64 * 1024 * 1024
 )
 
 type Config struct {
@@ -30,6 +34,10 @@ type Config struct {
 	SecureCookie        bool
 	CookieSameSite      string
 	CredentialsCORSMode bool
+
+	UploadPartSizeBytes        int64
+	TelegramDocumentLimitBytes int64
+	UploadSafetyMarginBytes    int64
 }
 
 type DatabaseConfig struct {
@@ -49,6 +57,17 @@ func Load() (Config, error) {
 		TelegramAPIID:      os.Getenv("TELEGRAM_API_ID"),
 		TelegramAPIHash:    os.Getenv("TELEGRAM_API_HASH"),
 		CookieSameSite:     getEnv("COOKIE_SAME_SITE", "Lax"),
+	}
+
+	var err error
+	if cfg.UploadPartSizeBytes, err = parseInt64Default(os.Getenv("UPLOAD_PART_SIZE_BYTES"), DefaultUploadPartSizeBytes); err != nil {
+		return Config{}, fmt.Errorf("UPLOAD_PART_SIZE_BYTES must be an integer: %w", err)
+	}
+	if cfg.TelegramDocumentLimitBytes, err = parseInt64Default(os.Getenv("TELEGRAM_DOCUMENT_LIMIT_BYTES"), DefaultTelegramDocumentLimitBytes); err != nil {
+		return Config{}, fmt.Errorf("TELEGRAM_DOCUMENT_LIMIT_BYTES must be an integer: %w", err)
+	}
+	if cfg.UploadSafetyMarginBytes, err = parseInt64Default(os.Getenv("UPLOAD_SAFETY_MARGIN_BYTES"), DefaultUploadSafetyMarginBytes); err != nil {
+		return Config{}, fmt.Errorf("UPLOAD_SAFETY_MARGIN_BYTES must be an integer: %w", err)
 	}
 
 	cfg.CORSAllowedOrigins = splitCSV(os.Getenv("CORS_ALLOWED_ORIGINS"))
@@ -126,6 +145,21 @@ func (cfg Config) Validate() error {
 		problems = append(problems, "COOKIE_SAME_SITE must be Lax or Strict")
 	}
 
+	if cfg.UploadPartSizeBytes <= 0 {
+		problems = append(problems, "UPLOAD_PART_SIZE_BYTES must be greater than 0")
+	}
+	if cfg.TelegramDocumentLimitBytes <= 0 {
+		problems = append(problems, "TELEGRAM_DOCUMENT_LIMIT_BYTES must be greater than 0")
+	}
+	if cfg.UploadSafetyMarginBytes < 0 {
+		problems = append(problems, "UPLOAD_SAFETY_MARGIN_BYTES must be greater than or equal to 0")
+	}
+	if cfg.UploadPartSizeBytes > 0 && cfg.TelegramDocumentLimitBytes > 0 && cfg.UploadSafetyMarginBytes >= 0 {
+		if cfg.UploadPartSizeBytes > cfg.TelegramDocumentLimitBytes-cfg.UploadSafetyMarginBytes {
+			problems = append(problems, "UPLOAD_PART_SIZE_BYTES plus UPLOAD_SAFETY_MARGIN_BYTES must not exceed TELEGRAM_DOCUMENT_LIMIT_BYTES")
+		}
+	}
+
 	if cfg.Env == EnvProduction {
 		if !cfg.SecureCookie {
 			problems = append(problems, "SECURE_COOKIE must be true in production")
@@ -187,6 +221,14 @@ func parseBoolDefault(value string, fallback bool) bool {
 	default:
 		return fallback
 	}
+}
+
+func parseInt64Default(value string, fallback int64) (int64, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return fallback, nil
+	}
+	return strconv.ParseInt(value, 10, 64)
 }
 
 func requireSecret(problems *[]string, name string, value string, minLen int) {

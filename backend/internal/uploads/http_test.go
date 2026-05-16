@@ -36,15 +36,16 @@ func TestParseChecksumRejectsInvalidValue(t *testing.T) {
 }
 
 func TestPartCount(t *testing.T) {
+	partSize := int64(64 * 1024 * 1024)
 	tests := map[int64]int64{
-		0:                   0,
-		1:                   1,
-		defaultPartSize:     1,
-		defaultPartSize + 1: 2,
+		0:            0,
+		1:            1,
+		partSize:     1,
+		partSize + 1: 2,
 	}
 
 	for size, want := range tests {
-		if got := partCount(size, defaultPartSize); got != want {
+		if got := partCount(size, partSize); got != want {
 			t.Fatalf("partCount(%d) = %d, want %d", size, got, want)
 		}
 	}

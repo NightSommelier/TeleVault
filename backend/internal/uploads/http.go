@@ -18,24 +18,29 @@ import (
 )
 
 const (
-	defaultPartSize = 64 * 1024 * 1024
-	uploadTTL       = 24 * time.Hour
+	uploadTTL = 24 * time.Hour
 )
+
+type Settings struct {
+	PartSize int64
+}
 
 type Handler struct {
 	store         *Store
 	ageRecipient  age.Recipient
 	sessionCrypto auth.TelegramSessionCrypto
 	telegram      auth.TelegramStorageClient
+	settings      Settings
 	now           func() time.Time
 }
 
-func NewHandler(db *sql.DB, ageRecipient age.Recipient, sessionCrypto auth.TelegramSessionCrypto, telegram auth.TelegramStorageClient) *Handler {
+func NewHandler(db *sql.DB, ageRecipient age.Recipient, sessionCrypto auth.TelegramSessionCrypto, telegram auth.TelegramStorageClient, settings Settings) *Handler {
 	return &Handler{
 		store:         NewStore(db),
 		ageRecipient:  ageRecipient,
 		sessionCrypto: sessionCrypto,
 		telegram:      telegram,
+		settings:      settings,
 		now:           time.Now,
 	}
 }
@@ -88,7 +93,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		Name:              name,
 		MimeType:          strings.TrimSpace(request.MimeType),
 		PlaintextSize:     request.PlaintextSize,
-		PartSize:          defaultPartSize,
+		PartSize:          h.settings.PartSize,
 		IdempotencyKey:    idempotencyKey,
 		ChecksumAlgorithm: checksumAlgorithm,
 		Checksum:          checksum,
