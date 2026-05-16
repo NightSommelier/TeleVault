@@ -128,11 +128,15 @@ func (h *Handler) UploadPart(w http.ResponseWriter, r *http.Request) {
 	}
 
 	now := h.now()
-	if err := h.store.EnsureActiveUpload(r.Context(), user.ID, uploadID, now); errors.Is(err, ErrUploadNotFound) {
+	upload, err := h.store.UploadIntegrityState(r.Context(), user.ID, uploadID, partNumber, now)
+	if errors.Is(err, ErrUploadNotFound) {
 		writeError(w, http.StatusNotFound, "upload_not_found")
 		return
 	} else if errors.Is(err, ErrUploadExpired) {
 		writeError(w, http.StatusConflict, "upload_expired")
+		return
+	} else if errors.Is(err, ErrUploadPartOutOfOrder) {
+		writeError(w, http.StatusConflict, "upload_part_out_of_order")
 		return
 	} else if err != nil {
 		writeError(w, http.StatusInternalServerError, "upload_check_failed")
@@ -157,10 +161,16 @@ func (h *Handler) UploadPart(w http.ResponseWriter, r *http.Request) {
 
 	peer := nullableString(telegramSession.StoragePeer)
 	name := uploadPartName(uploadID, partNumber)
+	plaintextHash, err := agefile.NewSHA256FromState(upload.ChecksumState)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "upload_checksum_state_invalid")
+		return
+	}
+
 	reader, writer := io.Pipe()
 	resultCh := make(chan encryptResult, 1)
 	go func() {
-		result, err := agefile.EncryptStream(writer, r.Body, h.ageRecipient)
+		result, err := agefile.EncryptStreamWithHash(writer, r.Body, h.ageRecipient, plaintextHash)
 		if err != nil {
 			_ = writer.CloseWithError(err)
 			resultCh <- encryptResult{err: err}
@@ -173,6 +183,7 @@ func (h *Handler) UploadPart(w http.ResponseWriter, r *http.Request) {
 	telegramResult, err := h.telegram.UploadEncryptedPart(r.Context(), session, peer, name, reader)
 	if err != nil {
 		_ = reader.CloseWithError(err)
+		_ = h.store.MarkPartFailed(r.Context(), user.ID, uploadID, partNumber)
 		writeError(w, http.StatusBadGateway, "telegram_part_upload_failed")
 		return
 	}
@@ -192,6 +203,8 @@ func (h *Handler) UploadPart(w http.ResponseWriter, r *http.Request) {
 		PlaintextSize:  result.PlaintextSize,
 		CiphertextSize: result.CiphertextSize,
 		Checksum:       result.Checksum,
+		ChecksumState:  result.HashState,
+		UploadedSize:   upload.UploadedSize + result.PlaintextSize,
 		TelegramPeer:   telegramResult.Peer,
 		MessageID:      telegramResult.MessageID,
 		Now:            now,
@@ -202,6 +215,10 @@ func (h *Handler) UploadPart(w http.ResponseWriter, r *http.Request) {
 	}
 	if errors.Is(err, ErrUploadExpired) {
 		writeError(w, http.StatusConflict, "upload_expired")
+		return
+	}
+	if errors.Is(err, ErrUploadPartOutOfOrder) {
+		writeError(w, http.StatusConflict, "upload_part_out_of_order")
 		return
 	}
 	if err != nil {
@@ -250,10 +267,6 @@ func (h *Handler) Complete(w http.ResponseWriter, r *http.Request) {
 	}
 	if errors.Is(err, ErrUploadChecksumMismatch) {
 		writeError(w, http.StatusConflict, "upload_checksum_mismatch")
-		return
-	}
-	if errors.Is(err, ErrMultipartChecksumUnsupported) {
-		writeError(w, http.StatusConflict, "multipart_checksum_unsupported")
 		return
 	}
 	if err != nil {

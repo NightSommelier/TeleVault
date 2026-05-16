@@ -2,7 +2,9 @@ package uploads
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding"
 	"errors"
 	"time"
 )
@@ -14,7 +16,7 @@ var ErrTelegramSessionNotFound = errors.New("telegram session not found")
 var ErrUploadIncomplete = errors.New("upload incomplete")
 var ErrUploadSizeMismatch = errors.New("upload size mismatch")
 var ErrUploadChecksumMismatch = errors.New("upload checksum mismatch")
-var ErrMultipartChecksumUnsupported = errors.New("multipart checksum verification is not supported yet")
+var ErrUploadPartOutOfOrder = errors.New("upload part out of order")
 
 const (
 	StatusPending   = "pending"
@@ -34,6 +36,9 @@ type Upload struct {
 	IdempotencyKey    sql.NullString
 	ChecksumAlgorithm sql.NullString
 	Checksum          []byte
+	ChecksumState     []byte
+	UploadedSize      int64
+	NextPartNumber    int
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
 	ExpiresAt         time.Time
@@ -91,6 +96,8 @@ type CompletePartParams struct {
 	PlaintextSize  int64
 	CiphertextSize int64
 	Checksum       []byte
+	ChecksumState  []byte
+	UploadedSize   int64
 	TelegramPeer   string
 	MessageID      int64
 	Now            time.Time
@@ -100,6 +107,10 @@ type CompleteUploadParams struct {
 	OwnerID  string
 	UploadID string
 	Now      time.Time
+}
+
+type CleanupResult struct {
+	ExpiredUploads int64
 }
 
 type Store struct {
@@ -128,7 +139,8 @@ INSERT INTO uploads (
 )
 VALUES ($1, NULLIF($2, '')::uuid, $3, NULLIF($4, ''), $5, $6, 'pending', NULLIF($7, ''), $8, $9)
 RETURNING id, owner_id, parent_id, name_plain, mime_type, plaintext_size, part_size, status,
-          idempotency_key, checksum_algorithm, checksum, created_at, updated_at, expires_at`,
+          idempotency_key, checksum_algorithm, checksum, checksum_state, plaintext_uploaded_size,
+          next_part_number, created_at, updated_at, expires_at`,
 		params.OwnerID,
 		params.ParentID,
 		params.Name,
@@ -149,15 +161,16 @@ func (s *Store) CompletePart(ctx context.Context, params CompletePartParams) (Up
 	defer tx.Rollback()
 
 	var expiresAt time.Time
+	var nextPartNumber int
 	err = tx.QueryRowContext(ctx, `
-SELECT expires_at
+SELECT expires_at, next_part_number
 FROM uploads
 WHERE id = $1
   AND owner_id = $2
   AND status IN ('pending', 'uploading')`,
 		params.UploadID,
 		params.OwnerID,
-	).Scan(&expiresAt)
+	).Scan(&expiresAt, &nextPartNumber)
 	if errors.Is(err, sql.ErrNoRows) {
 		return UploadPart{}, ErrUploadNotFound
 	}
@@ -177,6 +190,9 @@ WHERE id = $1
 			return UploadPart{}, err
 		}
 		return UploadPart{}, ErrUploadExpired
+	}
+	if nextPartNumber != params.PartNumber {
+		return UploadPart{}, ErrUploadPartOutOfOrder
 	}
 
 	part, err := scanUploadPart(tx.QueryRowContext(ctx, `
@@ -203,16 +219,33 @@ RETURNING id, upload_id, part_number, plaintext_size, ciphertext_size, checksum,
 		return UploadPart{}, err
 	}
 
-	if _, err := tx.ExecContext(ctx, `
+	result, err := tx.ExecContext(ctx, `
 UPDATE uploads
-SET status = 'uploading', updated_at = now()
+SET status = 'uploading',
+    checksum_state = $3,
+    plaintext_uploaded_size = $4,
+    next_part_number = $5,
+    updated_at = now()
 WHERE id = $1
   AND owner_id = $2
-  AND status = 'pending'`,
+  AND status IN ('pending', 'uploading')
+  AND next_part_number = $6`,
 		params.UploadID,
 		params.OwnerID,
-	); err != nil {
+		nullableBytes(params.ChecksumState),
+		params.UploadedSize,
+		params.PartNumber+1,
+		params.PartNumber,
+	)
+	if err != nil {
 		return UploadPart{}, err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return UploadPart{}, err
+	}
+	if rows == 0 {
+		return UploadPart{}, ErrUploadPartOutOfOrder
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -220,6 +253,43 @@ WHERE id = $1
 	}
 
 	return part, nil
+}
+
+func (s *Store) MarkPartFailed(ctx context.Context, ownerID string, uploadID string, partNumber int) error {
+	_, err := s.db.ExecContext(ctx, `
+INSERT INTO upload_parts (upload_id, part_number, status)
+SELECT id, $3, 'failed'
+FROM uploads
+WHERE id = $1
+  AND owner_id = $2
+  AND status IN ('pending', 'uploading')
+ON CONFLICT (upload_id, part_number)
+DO UPDATE SET status = 'failed'`,
+		uploadID,
+		ownerID,
+		partNumber,
+	)
+	return err
+}
+
+func (s *Store) ExpireAbandoned(ctx context.Context, now time.Time) (CleanupResult, error) {
+	result, err := s.db.ExecContext(ctx, `
+UPDATE uploads
+SET status = 'expired', updated_at = now()
+WHERE status IN ('pending', 'uploading')
+  AND expires_at <= $1`,
+		now,
+	)
+	if err != nil {
+		return CleanupResult{}, err
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return CleanupResult{}, err
+	}
+
+	return CleanupResult{ExpiredUploads: rows}, nil
 }
 
 func (s *Store) CompleteUpload(ctx context.Context, params CompleteUploadParams) (File, error) {
@@ -231,7 +301,8 @@ func (s *Store) CompleteUpload(ctx context.Context, params CompleteUploadParams)
 
 	upload, err := scanUpload(tx.QueryRowContext(ctx, `
 SELECT id, owner_id, parent_id, name_plain, mime_type, plaintext_size, part_size, status,
-       idempotency_key, checksum_algorithm, checksum, created_at, updated_at, expires_at
+       idempotency_key, checksum_algorithm, checksum, checksum_state, plaintext_uploaded_size,
+       next_part_number, created_at, updated_at, expires_at
 FROM uploads
 WHERE id = $1
   AND owner_id = $2
@@ -285,10 +356,11 @@ WHERE id = $1
 	}
 
 	if len(upload.Checksum) > 0 {
-		if expectedParts != 1 {
-			return File{}, ErrMultipartChecksumUnsupported
+		finalChecksum, err := checksumFromState(upload.ChecksumState)
+		if err != nil {
+			return File{}, err
 		}
-		if len(parts) != 1 || !bytesEqual(parts[0].Checksum, upload.Checksum) {
+		if !bytesEqual(finalChecksum, upload.Checksum) {
 			return File{}, ErrUploadChecksumMismatch
 		}
 	}
@@ -368,6 +440,33 @@ WHERE id = $1
 	return nil
 }
 
+func (s *Store) UploadIntegrityState(ctx context.Context, ownerID string, uploadID string, partNumber int, now time.Time) (Upload, error) {
+	upload, err := scanUpload(s.db.QueryRowContext(ctx, `
+SELECT id, owner_id, parent_id, name_plain, mime_type, plaintext_size, part_size, status,
+       idempotency_key, checksum_algorithm, checksum, checksum_state, plaintext_uploaded_size,
+       next_part_number, created_at, updated_at, expires_at
+FROM uploads
+WHERE id = $1
+  AND owner_id = $2
+  AND status IN ('pending', 'uploading')`,
+		uploadID,
+		ownerID,
+	))
+	if errors.Is(err, sql.ErrNoRows) {
+		return Upload{}, ErrUploadNotFound
+	}
+	if err != nil {
+		return Upload{}, err
+	}
+	if !upload.ExpiresAt.After(now) {
+		return Upload{}, ErrUploadExpired
+	}
+	if upload.NextPartNumber != partNumber {
+		return Upload{}, ErrUploadPartOutOfOrder
+	}
+	return upload, nil
+}
+
 func (s *Store) TelegramSession(ctx context.Context, ownerID string) (TelegramSession, error) {
 	var session TelegramSession
 	err := s.db.QueryRowContext(ctx, `
@@ -395,7 +494,8 @@ VALUES ($1, NULLIF($2, '')::uuid, $3, NULLIF($4, ''), $5, $6, 'pending', $7, NUL
 ON CONFLICT (owner_id, idempotency_key) WHERE idempotency_key IS NOT NULL
 DO UPDATE SET updated_at = uploads.updated_at
 RETURNING id, owner_id, parent_id, name_plain, mime_type, plaintext_size, part_size, status,
-          idempotency_key, checksum_algorithm, checksum, created_at, updated_at, expires_at`,
+          idempotency_key, checksum_algorithm, checksum, checksum_state, plaintext_uploaded_size,
+          next_part_number, created_at, updated_at, expires_at`,
 		params.OwnerID,
 		params.ParentID,
 		params.Name,
@@ -455,6 +555,9 @@ func scanUpload(row rowScanner) (Upload, error) {
 		&upload.IdempotencyKey,
 		&upload.ChecksumAlgorithm,
 		&upload.Checksum,
+		&upload.ChecksumState,
+		&upload.UploadedSize,
+		&upload.NextPartNumber,
 		&upload.CreatedAt,
 		&upload.UpdatedAt,
 		&upload.ExpiresAt,
@@ -571,4 +674,18 @@ func bytesEqual(a []byte, b []byte) bool {
 		result |= a[i] ^ b[i]
 	}
 	return result == 0
+}
+
+func checksumFromState(state []byte) ([]byte, error) {
+	hash := sha256.New()
+	if len(state) > 0 {
+		unmarshaler, ok := hash.(encoding.BinaryUnmarshaler)
+		if !ok {
+			return nil, errors.New("sha256 state cannot be unmarshaled")
+		}
+		if err := unmarshaler.UnmarshalBinary(state); err != nil {
+			return nil, err
+		}
+	}
+	return hash.Sum(nil), nil
 }

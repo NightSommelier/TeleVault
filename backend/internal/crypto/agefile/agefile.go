@@ -2,7 +2,9 @@ package agefile
 
 import (
 	"crypto/sha256"
+	"encoding"
 	"errors"
+	"hash"
 	"io"
 
 	"filippo.io/age"
@@ -12,6 +14,7 @@ type EncryptResult struct {
 	PlaintextSize  int64
 	CiphertextSize int64
 	Checksum       []byte
+	HashState      []byte
 }
 
 func RecipientFromIdentity(identity string) (age.Recipient, error) {
@@ -27,8 +30,15 @@ func IdentityFromString(identity string) (age.Identity, error) {
 }
 
 func EncryptStream(dst io.Writer, src io.Reader, recipient age.Recipient) (EncryptResult, error) {
+	return EncryptStreamWithHash(dst, src, recipient, sha256.New())
+}
+
+func EncryptStreamWithHash(dst io.Writer, src io.Reader, recipient age.Recipient, plaintextHash hash.Hash) (EncryptResult, error) {
 	if recipient == nil {
 		return EncryptResult{}, errors.New("age recipient is required")
+	}
+	if plaintextHash == nil {
+		return EncryptResult{}, errors.New("plaintext hash is required")
 	}
 
 	counter := &countingWriter{writer: dst}
@@ -37,8 +47,9 @@ func EncryptStream(dst io.Writer, src io.Reader, recipient age.Recipient) (Encry
 		return EncryptResult{}, err
 	}
 
-	hash := sha256.New()
-	plaintextCounter := &countingWriter{writer: hash}
+	partHash := sha256.New()
+	hashWriter := io.MultiWriter(partHash, plaintextHash)
+	plaintextCounter := &countingWriter{writer: hashWriter}
 	plaintextReader := io.TeeReader(src, plaintextCounter)
 
 	if _, err := io.Copy(encrypted, plaintextReader); err != nil {
@@ -49,11 +60,41 @@ func EncryptStream(dst io.Writer, src io.Reader, recipient age.Recipient) (Encry
 		return EncryptResult{}, err
 	}
 
+	state, err := marshalHashState(plaintextHash)
+	if err != nil {
+		return EncryptResult{}, err
+	}
+
 	return EncryptResult{
 		PlaintextSize:  plaintextCounter.n,
 		CiphertextSize: counter.n,
-		Checksum:       hash.Sum(nil),
+		Checksum:       partHash.Sum(nil),
+		HashState:      state,
 	}, nil
+}
+
+func NewSHA256FromState(state []byte) (hash.Hash, error) {
+	plaintextHash := sha256.New()
+	if len(state) == 0 {
+		return plaintextHash, nil
+	}
+
+	unmarshaler, ok := plaintextHash.(encoding.BinaryUnmarshaler)
+	if !ok {
+		return nil, errors.New("sha256 state cannot be unmarshaled")
+	}
+	if err := unmarshaler.UnmarshalBinary(state); err != nil {
+		return nil, err
+	}
+	return plaintextHash, nil
+}
+
+func marshalHashState(plaintextHash hash.Hash) ([]byte, error) {
+	marshaler, ok := plaintextHash.(encoding.BinaryMarshaler)
+	if !ok {
+		return nil, errors.New("sha256 state cannot be marshaled")
+	}
+	return marshaler.MarshalBinary()
 }
 
 func DecryptStream(dst io.Writer, src io.Reader, identity age.Identity) error {

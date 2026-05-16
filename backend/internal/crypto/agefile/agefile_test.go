@@ -30,6 +30,9 @@ func TestEncryptStream(t *testing.T) {
 	if len(result.Checksum) != 32 {
 		t.Fatalf("Checksum length = %d, want 32", len(result.Checksum))
 	}
+	if len(result.HashState) == 0 {
+		t.Fatal("HashState is empty")
+	}
 
 	reader, err := age.Decrypt(bytes.NewReader(ciphertext.Bytes()), identity)
 	if err != nil {
@@ -41,6 +44,50 @@ func TestEncryptStream(t *testing.T) {
 	}
 	if !bytes.Equal(decrypted, plaintext) {
 		t.Fatal("decrypted plaintext mismatch")
+	}
+}
+
+func TestEncryptStreamWithHashContinuesSHA256State(t *testing.T) {
+	identity, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatalf("GenerateX25519Identity() error = %v", err)
+	}
+
+	firstHash, err := NewSHA256FromState(nil)
+	if err != nil {
+		t.Fatalf("NewSHA256FromState(nil) error = %v", err)
+	}
+	var firstCiphertext bytes.Buffer
+	first, err := EncryptStreamWithHash(&firstCiphertext, bytes.NewReader([]byte("hello ")), identity.Recipient(), firstHash)
+	if err != nil {
+		t.Fatalf("EncryptStreamWithHash(first) error = %v", err)
+	}
+
+	secondHash, err := NewSHA256FromState(first.HashState)
+	if err != nil {
+		t.Fatalf("NewSHA256FromState(first.HashState) error = %v", err)
+	}
+	var secondCiphertext bytes.Buffer
+	second, err := EncryptStreamWithHash(&secondCiphertext, bytes.NewReader([]byte("world")), identity.Recipient(), secondHash)
+	if err != nil {
+		t.Fatalf("EncryptStreamWithHash(second) error = %v", err)
+	}
+
+	finalHash, err := NewSHA256FromState(second.HashState)
+	if err != nil {
+		t.Fatalf("NewSHA256FromState(second.HashState) error = %v", err)
+	}
+	got := finalHash.Sum(nil)
+
+	wantHash, err := NewSHA256FromState(nil)
+	if err != nil {
+		t.Fatalf("NewSHA256FromState(nil) error = %v", err)
+	}
+	_, _ = wantHash.Write([]byte("hello world"))
+	want := wantHash.Sum(nil)
+
+	if !bytes.Equal(got, want) {
+		t.Fatal("continued hash state did not match whole plaintext hash")
 	}
 }
 

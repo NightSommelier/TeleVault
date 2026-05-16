@@ -53,6 +53,10 @@ Foundation started on 2026-05-15:
 - Smoke-tested single-part upload with `test.png`: encrypted part stored in Telegram Saved Messages and file promoted to ready metadata.
 - Added authenticated download API: `GET /files/{id}/download` fetches encrypted Telegram parts, decrypts with age, and streams plaintext.
 - Smoke-tested `test.png` download: downloaded SHA-256 matched the local original.
+- Added rolling SHA-256 upload integrity state so multipart uploads can verify whole-file checksum without retaining plaintext.
+- Smoke-tested checksum-backed upload/download with `integrity.txt`.
+- Added cleanup command for abandoned upload sessions and failed-part marking for Telegram upload errors.
+- Added `cmd/smoke` for authenticated upload/download smoke tests with checksum comparison.
 - Added `.env.example`.
 
 Accepted MVP decisions:
@@ -600,9 +604,9 @@ teledrive-2/
 
 ## 13. Immediate Next Steps
 
-1. Add multipart checksum strategy that verifies whole-file integrity without retaining plaintext.
-2. Add cleanup/retry handling for failed Telegram part uploads and abandoned upload sessions.
-3. Add integration tests or a dev smoke-test command for upload/download.
+1. Add configurable upload part sizing and admin safety margin settings.
+2. Add best-effort Telegram message deletion for expired/failed upload artifacts.
+3. Add Telegram 2FA password handling for accounts that require it.
 4. Add Telegram 2FA password handling for accounts that require it.
 5. Add auth/files/uploads endpoint integration tests around challenge/session/policy persistence.
 6. Add dedicated rate limiting for Telegram auth endpoints.
