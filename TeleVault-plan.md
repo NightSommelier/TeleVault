@@ -606,12 +606,15 @@ teledrive-2/
 
 ## 13. Immediate Next Steps
 
-1. Add Telegram 2FA password handling for accounts that require it.
-2. Add auth/files/uploads endpoint integration tests around challenge/session/policy persistence.
-3. Add dedicated rate limiting for Telegram auth endpoints.
-4. Add admin settings/model for Telegram account limits and upload safety margins.
-5. Add dynamic Telegram limit adaptation per account/connection.
-6. Add QR-code login as an additional Telegram auth path.
+1. Add auth/files/uploads endpoint integration tests around challenge/session/policy persistence.
+2. Add dedicated rate limiting for Telegram auth endpoints.
+3. Add admin settings/model for Telegram account limits and upload safety margins.
+4. Add dynamic Telegram limit adaptation per account/connection.
+5. Add QR-code login as an additional Telegram auth path.
+
+## 13.1 Deferred Planned Auth Work
+
+- Add Telegram 2FA password handling for accounts that require it. This is planned, but it is not blocking the current MVP flow because the current test account does not have Telegram 2FA enabled yet.
 
 ## 14. Reference Files in Current Project
 
