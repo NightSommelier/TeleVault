@@ -60,6 +60,7 @@ Foundation started on 2026-05-15:
 - Added `.env.example`.
 - Added configurable upload part sizing with Telegram document cap and safety margin validation.
 - Added best-effort Telegram cleanup for encrypted parts that belong to expired uploads.
+- Added opt-in Postgres integration tests for auth/session, files owner isolation, and upload completion persistence.
 
 Accepted MVP decisions:
 
@@ -606,15 +607,18 @@ teledrive-2/
 
 ## 13. Immediate Next Steps
 
-1. Add auth/files/uploads endpoint integration tests around challenge/session/policy persistence.
-2. Add dedicated rate limiting for Telegram auth endpoints.
-3. Add admin settings/model for Telegram account limits and upload safety margins.
-4. Add dynamic Telegram limit adaptation per account/connection.
-5. Add QR-code login as an additional Telegram auth path.
+1. Add dedicated rate limiting for Telegram auth endpoints.
+2. Add admin settings/model for Telegram account limits and upload safety margins.
+3. Add dynamic Telegram limit adaptation per account/connection.
+4. Add QR-code login as an additional Telegram auth path.
 
 ## 13.1 Deferred Planned Auth Work
 
 - Add Telegram 2FA password handling for accounts that require it. This is planned, but it is not blocking the current MVP flow because the current test account does not have Telegram 2FA enabled yet.
+
+## 13.2 Deferred Portability Work
+
+- Add optional database backends beyond PostgreSQL, such as SQLite and MariaDB. This is intentionally deferred until the MVP schema and query patterns stabilize.
 
 ## 14. Reference Files in Current Project
 
