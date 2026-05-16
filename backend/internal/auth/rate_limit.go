@@ -71,6 +71,13 @@ func (l *RateLimiter) CheckLogin(r *http.Request, phoneHash []byte) RateLimitDec
 	return l.allow(r.Context(), "telegram_login_phone:"+hex.EncodeToString(phoneHash), l.settings.LoginPhoneLimitHour, time.Hour)
 }
 
+func (l *RateLimiter) CheckQRStart(r *http.Request) RateLimitDecision {
+	if l == nil {
+		return allowDecision()
+	}
+	return l.allow(r.Context(), "telegram_auth_ip:"+clientIP(r), l.settings.IPLimitPerMinute, time.Minute)
+}
+
 func (l *RateLimiter) allow(ctx context.Context, key string, limit int, window time.Duration) RateLimitDecision {
 	if limit <= 0 {
 		return allowDecision()

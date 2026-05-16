@@ -67,6 +67,7 @@ Foundation started on 2026-05-15:
 - Added a local admin bootstrap CLI for listing users and promoting or demoting trusted Telegram users without manual SQL.
 - Added an explicit admin CLI for Telegram upload-limit probing, with dry-run by default and immediate cleanup of successful probe messages.
 - Added Valkey-backed distributed auth rate limiting with in-memory test storage and fail-open logging on Valkey errors.
+- Added Telegram QR login API endpoints with start/poll flow using gotd QR auth.
 
 Accepted MVP decisions:
 
@@ -613,7 +614,7 @@ teledrive-2/
 
 ## 13. Immediate Next Steps
 
-1. Add QR-code login as an additional Telegram auth path.
+1. Build the first usable web UI for auth and owner-only file browsing/upload smoke flows.
 
 ## 13.1 Deferred Planned Auth Work
 

@@ -21,6 +21,7 @@ type Handler struct {
 	sessionCrypto TelegramSessionCrypto
 	telegram      TelegramAuthClient
 	rateLimiter   *RateLimiter
+	qrLogins      *qrLoginSessions
 }
 
 func NewHandler(cfg config.Config, logger *slog.Logger, database *sql.DB, sessionCrypto TelegramSessionCrypto, telegram TelegramAuthClient) *Handler {
@@ -44,6 +45,86 @@ func NewHandlerWithRateLimiter(cfg config.Config, logger *slog.Logger, database 
 		sessionCrypto: sessionCrypto,
 		telegram:      telegram,
 		rateLimiter:   rateLimiter,
+		qrLogins:      newQRLoginSessions(),
+	}
+}
+
+func (h *Handler) StartTelegramQRLogin(w http.ResponseWriter, r *http.Request) {
+	if h.telegram == nil {
+		writeError(w, http.StatusNotImplemented, "telegram_auth_not_connected")
+		return
+	}
+	if !h.allowRateLimited(w, h.rateLimiter.CheckQRStart(r)) {
+		return
+	}
+
+	attempt, err := h.telegram.StartQRLogin(r.Context())
+	if err != nil {
+		h.logger.Warn("telegram qr login start failed", "error", err)
+		h.store.RecordAuditEvent(r.Context(), "", AuditAuthCodeSendFailure, r)
+		writeError(w, http.StatusBadGateway, "telegram_qr_login_start_failed")
+		return
+	}
+
+	id, err := NewRefreshToken()
+	if err != nil {
+		if attempt.Cancel != nil {
+			attempt.Cancel()
+		}
+		writeError(w, http.StatusInternalServerError, "qr_login_id_generation_failed")
+		return
+	}
+	h.qrLogins.add(id, attempt)
+	h.store.RecordAuditEvent(r.Context(), "", AuditAuthCodeSendSuccess, r)
+	writeJSON(w, http.StatusCreated, qrLoginResponse(id, attempt.Token))
+}
+
+func (h *Handler) CompleteTelegramQRLogin(w http.ResponseWriter, r *http.Request) {
+	if h.telegram == nil {
+		writeError(w, http.StatusNotImplemented, "telegram_auth_not_connected")
+		return
+	}
+
+	var request telegramQRCompleteRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_json")
+		return
+	}
+	id := strings.TrimSpace(request.QRLoginID)
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "qr_login_id_required")
+		return
+	}
+
+	session, err := h.qrLogins.get(id)
+	if errors.Is(err, ErrQRLoginNotFound) {
+		writeError(w, http.StatusNotFound, "qr_login_not_found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "qr_login_lookup_failed")
+		return
+	}
+
+	select {
+	case result, ok := <-session.results:
+		h.qrLogins.remove(id)
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "telegram_qr_login_failed")
+			return
+		}
+		if result.Err != nil {
+			h.logger.Warn("telegram qr login failed", "error", result.Err)
+			h.store.RecordAuditEvent(r.Context(), "", AuditAuthLoginFailure, r)
+			writeError(w, http.StatusUnauthorized, "telegram_qr_login_failed")
+			return
+		}
+		h.completeTelegramLogin(w, r, result.Session, result.Profile)
+	default:
+		writeJSON(w, http.StatusAccepted, map[string]any{
+			"status":   "pending",
+			"qr_login": qrLoginResponse(id, session.token)["qr_login"],
+		})
 	}
 }
 
@@ -159,6 +240,23 @@ func (h *Handler) LoginWithTelegram(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.completeTelegramLogin(w, r, telegramSession, profile)
+}
+
+type telegramCodeRequest struct {
+	Phone string `json:"phone"`
+}
+
+type telegramLoginRequest struct {
+	Phone string `json:"phone"`
+	Code  string `json:"code"`
+}
+
+type telegramQRCompleteRequest struct {
+	QRLoginID string `json:"qr_login_id"`
+}
+
+func (h *Handler) completeTelegramLogin(w http.ResponseWriter, r *http.Request, telegramSession string, profile TelegramProfile) {
 	refreshToken, err := NewRefreshToken()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "refresh_token_generation_failed")
@@ -200,13 +298,14 @@ func (h *Handler) LoginWithTelegram(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-type telegramCodeRequest struct {
-	Phone string `json:"phone"`
-}
-
-type telegramLoginRequest struct {
-	Phone string `json:"phone"`
-	Code  string `json:"code"`
+func qrLoginResponse(id string, token TelegramQRLoginToken) map[string]any {
+	return map[string]any{
+		"qr_login": map[string]any{
+			"id":         id,
+			"login_url":  token.URL,
+			"expires_at": token.ExpiresAt,
+		},
+	}
 }
 
 func telegramSessionAADForProfile(profile TelegramProfile) string {

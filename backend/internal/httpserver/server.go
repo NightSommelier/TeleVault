@@ -63,6 +63,8 @@ func (s *Server) routes() {
 	authHandler := auth.NewHandlerWithRateLimiter(s.cfg, s.logger, s.db, telegramSessionCrypto, s.telegram, rateLimitStore)
 	s.mux.HandleFunc("POST /auth/telegram/send-code", authHandler.SendTelegramCode)
 	s.mux.HandleFunc("POST /auth/telegram/login", authHandler.LoginWithTelegram)
+	s.mux.HandleFunc("POST /auth/telegram/qr/start", authHandler.StartTelegramQRLogin)
+	s.mux.HandleFunc("POST /auth/telegram/qr/complete", authHandler.CompleteTelegramQRLogin)
 	s.mux.Handle("POST /auth/refresh", authHandler.RequireCSRF(http.HandlerFunc(authHandler.Refresh)))
 	s.mux.Handle("POST /auth/logout", authHandler.RequireCSRF(http.HandlerFunc(authHandler.Logout)))
 	s.mux.Handle("GET /me", authHandler.RequireAuth(http.HandlerFunc(authHandler.Me)))

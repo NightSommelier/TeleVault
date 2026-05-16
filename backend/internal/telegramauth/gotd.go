@@ -12,6 +12,7 @@ import (
 
 	"github.com/gotd/td/session"
 	"github.com/gotd/td/telegram"
+	"github.com/gotd/td/telegram/auth/qrlogin"
 	"github.com/gotd/td/telegram/downloader"
 	"github.com/gotd/td/telegram/uploader"
 	"github.com/gotd/td/tg"
@@ -134,6 +135,96 @@ func (c *Client) SignIn(ctx context.Context, phone string, code string, challeng
 	}
 
 	return base64.StdEncoding.EncodeToString(sessionBytes), profile, nil
+}
+
+func (c *Client) StartQRLogin(ctx context.Context) (auth.TelegramQRLoginAttempt, error) {
+	storage := &session.StorageMemory{}
+	dispatcher := tg.NewUpdateDispatcher()
+	loggedIn := qrlogin.OnLoginToken(dispatcher)
+	client := telegram.NewClient(c.appID, c.appHash, telegram.Options{
+		NoUpdates:         false,
+		SessionStorage:    storage,
+		UpdateHandler:     dispatcher,
+		Device:            telegram.DeviceConfig{AppVersion: "TeleDrive 2.0"},
+		CompressThreshold: -1,
+	})
+
+	runCtx, cancel := context.WithCancel(context.Background())
+	firstToken := make(chan auth.TelegramQRLoginToken, 1)
+	tokenUpdates := make(chan auth.TelegramQRLoginToken, 4)
+	results := make(chan auth.TelegramQRLoginResult, 1)
+	startErr := make(chan error, 1)
+
+	go func() {
+		defer close(tokenUpdates)
+		defer close(results)
+
+		err := client.Run(runCtx, func(ctx context.Context) error {
+			authorization, err := client.QR().Auth(ctx, loggedIn, func(ctx context.Context, token qrlogin.Token) error {
+				converted := auth.TelegramQRLoginToken{
+					URL:       token.URL(),
+					ExpiresAt: token.Expires(),
+				}
+				select {
+				case firstToken <- converted:
+				default:
+				}
+				select {
+				case tokenUpdates <- converted:
+				default:
+				}
+				return nil
+			})
+			if err != nil {
+				return err
+			}
+
+			user, ok := authorization.User.(*tg.User)
+			if !ok {
+				return fmt.Errorf("unexpected qr auth user %T", authorization.User)
+			}
+
+			sessionBytes, err := storage.Bytes(nil)
+			if err != nil {
+				return err
+			}
+			results <- auth.TelegramQRLoginResult{
+				Session: base64.StdEncoding.EncodeToString(sessionBytes),
+				Profile: auth.TelegramProfile{
+					TelegramID:  user.ID,
+					Username:    user.Username,
+					DisplayName: displayName(user.FirstName, user.LastName),
+				},
+			}
+			return nil
+		})
+		if err != nil {
+			select {
+			case startErr <- err:
+			default:
+			}
+			select {
+			case results <- auth.TelegramQRLoginResult{Err: err}:
+			default:
+			}
+		}
+	}()
+
+	select {
+	case <-ctx.Done():
+		cancel()
+		return auth.TelegramQRLoginAttempt{}, ctx.Err()
+	case err := <-startErr:
+		cancel()
+		return auth.TelegramQRLoginAttempt{}, err
+	case token := <-firstToken:
+		return auth.TelegramQRLoginAttempt{
+			Token:   token,
+			Tokens:  tokenUpdates,
+			Results: results,
+			Cancel:  cancel,
+		}, nil
+	}
 }
 
 func (c *Client) UploadEncryptedPart(ctx context.Context, encodedSession string, storagePeer string, name string, body io.Reader) (auth.TelegramUploadResult, error) {

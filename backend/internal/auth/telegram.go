@@ -37,6 +37,25 @@ type StoredAuthChallenge struct {
 type TelegramAuthClient interface {
 	SendCode(ctx context.Context, phone string) (TelegramCodeChallenge, error)
 	SignIn(ctx context.Context, phone string, code string, challenge TelegramCodeChallenge) (session string, profile TelegramProfile, err error)
+	StartQRLogin(ctx context.Context) (TelegramQRLoginAttempt, error)
+}
+
+type TelegramQRLoginToken struct {
+	URL       string
+	ExpiresAt time.Time
+}
+
+type TelegramQRLoginResult struct {
+	Session string
+	Profile TelegramProfile
+	Err     error
+}
+
+type TelegramQRLoginAttempt struct {
+	Token   TelegramQRLoginToken
+	Tokens  <-chan TelegramQRLoginToken
+	Results <-chan TelegramQRLoginResult
+	Cancel  func()
 }
 
 type TelegramUploadResult struct {
