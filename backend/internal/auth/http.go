@@ -24,13 +24,17 @@ type Handler struct {
 }
 
 func NewHandler(cfg config.Config, logger *slog.Logger, database *sql.DB, sessionCrypto TelegramSessionCrypto, telegram TelegramAuthClient) *Handler {
+	return NewHandlerWithRateLimiter(cfg, logger, database, sessionCrypto, telegram, nil)
+}
+
+func NewHandlerWithRateLimiter(cfg config.Config, logger *slog.Logger, database *sql.DB, sessionCrypto TelegramSessionCrypto, telegram TelegramAuthClient, rateLimitStore RateLimitStore) *Handler {
 	var rateLimiter *RateLimiter
 	if cfg.AuthRateLimitEnabled {
-		rateLimiter = NewRateLimiter(RateLimitSettings{
+		rateLimiter = NewRateLimiterWithStore(RateLimitSettings{
 			IPLimitPerMinute:       cfg.TelegramAuthIPLimitPerMinute,
 			SendCodePhoneLimitHour: cfg.TelegramSendCodePhoneLimitPerHour,
 			LoginPhoneLimitHour:    cfg.TelegramLoginPhoneLimitPerHour,
-		})
+		}, rateLimitStore)
 	}
 
 	return &Handler{
@@ -210,6 +214,9 @@ func telegramSessionAADForProfile(profile TelegramProfile) string {
 }
 
 func (h *Handler) allowRateLimited(w http.ResponseWriter, decision RateLimitDecision) bool {
+	if decision.Err != nil {
+		h.logger.Warn("auth rate limiter backend failed; allowing request", "error", decision.Err)
+	}
 	if decision.Allowed {
 		return true
 	}

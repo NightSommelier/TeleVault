@@ -15,6 +15,7 @@ import (
 	"github.com/televault/TeleVault/backend/internal/db"
 	"github.com/televault/TeleVault/backend/internal/files"
 	"github.com/televault/TeleVault/backend/internal/uploads"
+	"github.com/televault/TeleVault/backend/internal/valkey"
 )
 
 type Server struct {
@@ -55,7 +56,11 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /readyz", s.readyz)
 
 	telegramSessionCrypto := auth.NewTelegramSessionCrypto(s.secrets)
-	authHandler := auth.NewHandler(s.cfg, s.logger, s.db, telegramSessionCrypto, s.telegram)
+	var rateLimitStore auth.RateLimitStore
+	if s.cfg.AuthRateLimitEnabled && s.cfg.ValkeyAddr != "" {
+		rateLimitStore = auth.NewValkeyRateLimitStore(valkey.NewClient(s.cfg.ValkeyAddr), "t2d:auth_rate_limit")
+	}
+	authHandler := auth.NewHandlerWithRateLimiter(s.cfg, s.logger, s.db, telegramSessionCrypto, s.telegram, rateLimitStore)
 	s.mux.HandleFunc("POST /auth/telegram/send-code", authHandler.SendTelegramCode)
 	s.mux.HandleFunc("POST /auth/telegram/login", authHandler.LoginWithTelegram)
 	s.mux.Handle("POST /auth/refresh", authHandler.RequireCSRF(http.HandlerFunc(authHandler.Refresh)))
