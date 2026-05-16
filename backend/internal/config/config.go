@@ -17,6 +17,10 @@ const (
 	DefaultUploadPartSizeBytes        int64 = 64 * 1024 * 1024
 	DefaultTelegramDocumentLimitBytes int64 = 2 * 1024 * 1024 * 1024
 	DefaultUploadSafetyMarginBytes    int64 = 64 * 1024 * 1024
+
+	DefaultTelegramAuthIPLimitPerMinute      = 30
+	DefaultTelegramSendCodePhoneLimitPerHour = 5
+	DefaultTelegramLoginPhoneLimitPerHour    = 10
 )
 
 type Config struct {
@@ -38,6 +42,11 @@ type Config struct {
 	UploadPartSizeBytes        int64
 	TelegramDocumentLimitBytes int64
 	UploadSafetyMarginBytes    int64
+
+	AuthRateLimitEnabled              bool
+	TelegramAuthIPLimitPerMinute      int
+	TelegramSendCodePhoneLimitPerHour int
+	TelegramLoginPhoneLimitPerHour    int
 }
 
 type DatabaseConfig struct {
@@ -69,10 +78,20 @@ func Load() (Config, error) {
 	if cfg.UploadSafetyMarginBytes, err = parseInt64Default(os.Getenv("UPLOAD_SAFETY_MARGIN_BYTES"), DefaultUploadSafetyMarginBytes); err != nil {
 		return Config{}, fmt.Errorf("UPLOAD_SAFETY_MARGIN_BYTES must be an integer: %w", err)
 	}
+	if cfg.TelegramAuthIPLimitPerMinute, err = parseIntDefault(os.Getenv("TELEGRAM_AUTH_IP_LIMIT_PER_MINUTE"), DefaultTelegramAuthIPLimitPerMinute); err != nil {
+		return Config{}, fmt.Errorf("TELEGRAM_AUTH_IP_LIMIT_PER_MINUTE must be an integer: %w", err)
+	}
+	if cfg.TelegramSendCodePhoneLimitPerHour, err = parseIntDefault(os.Getenv("TELEGRAM_SEND_CODE_PHONE_LIMIT_PER_HOUR"), DefaultTelegramSendCodePhoneLimitPerHour); err != nil {
+		return Config{}, fmt.Errorf("TELEGRAM_SEND_CODE_PHONE_LIMIT_PER_HOUR must be an integer: %w", err)
+	}
+	if cfg.TelegramLoginPhoneLimitPerHour, err = parseIntDefault(os.Getenv("TELEGRAM_LOGIN_PHONE_LIMIT_PER_HOUR"), DefaultTelegramLoginPhoneLimitPerHour); err != nil {
+		return Config{}, fmt.Errorf("TELEGRAM_LOGIN_PHONE_LIMIT_PER_HOUR must be an integer: %w", err)
+	}
 
 	cfg.CORSAllowedOrigins = splitCSV(os.Getenv("CORS_ALLOWED_ORIGINS"))
 	cfg.SecureCookie = parseBoolDefault(os.Getenv("SECURE_COOKIE"), cfg.Env == EnvProduction)
 	cfg.CredentialsCORSMode = parseBoolDefault(os.Getenv("CORS_ALLOW_CREDENTIALS"), true)
+	cfg.AuthRateLimitEnabled = parseBoolDefault(os.Getenv("AUTH_RATE_LIMIT_ENABLED"), true)
 
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
@@ -159,6 +178,17 @@ func (cfg Config) Validate() error {
 			problems = append(problems, "UPLOAD_PART_SIZE_BYTES plus UPLOAD_SAFETY_MARGIN_BYTES must not exceed TELEGRAM_DOCUMENT_LIMIT_BYTES")
 		}
 	}
+	if cfg.AuthRateLimitEnabled {
+		if cfg.TelegramAuthIPLimitPerMinute <= 0 {
+			problems = append(problems, "TELEGRAM_AUTH_IP_LIMIT_PER_MINUTE must be greater than 0 when auth rate limiting is enabled")
+		}
+		if cfg.TelegramSendCodePhoneLimitPerHour <= 0 {
+			problems = append(problems, "TELEGRAM_SEND_CODE_PHONE_LIMIT_PER_HOUR must be greater than 0 when auth rate limiting is enabled")
+		}
+		if cfg.TelegramLoginPhoneLimitPerHour <= 0 {
+			problems = append(problems, "TELEGRAM_LOGIN_PHONE_LIMIT_PER_HOUR must be greater than 0 when auth rate limiting is enabled")
+		}
+	}
 
 	if cfg.Env == EnvProduction {
 		if !cfg.SecureCookie {
@@ -229,6 +259,18 @@ func parseInt64Default(value string, fallback int64) (int64, error) {
 		return fallback, nil
 	}
 	return strconv.ParseInt(value, 10, 64)
+}
+
+func parseIntDefault(value string, fallback int) (int, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return fallback, nil
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return 0, err
+	}
+	return parsed, nil
 }
 
 func requireSecret(problems *[]string, name string, value string, minLen int) {

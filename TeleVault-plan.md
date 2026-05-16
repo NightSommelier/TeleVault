@@ -61,6 +61,7 @@ Foundation started on 2026-05-15:
 - Added configurable upload part sizing with Telegram document cap and safety margin validation.
 - Added best-effort Telegram cleanup for encrypted parts that belong to expired uploads.
 - Added opt-in Postgres integration tests for auth/session, files owner isolation, and upload completion persistence.
+- Added in-memory rate limiting for Telegram auth endpoints by remote IP and phone hash.
 
 Accepted MVP decisions:
 
@@ -607,9 +608,9 @@ teledrive-2/
 
 ## 13. Immediate Next Steps
 
-1. Add dedicated rate limiting for Telegram auth endpoints.
-2. Add admin settings/model for Telegram account limits and upload safety margins.
-3. Add dynamic Telegram limit adaptation per account/connection.
+1. Add admin settings/model for Telegram account limits and upload safety margins.
+2. Add dynamic Telegram limit adaptation per account/connection.
+3. Add distributed Valkey-backed auth rate limiting for multi-instance deployments.
 4. Add QR-code login as an additional Telegram auth path.
 
 ## 13.1 Deferred Planned Auth Work

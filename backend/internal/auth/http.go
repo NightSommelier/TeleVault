@@ -20,15 +20,26 @@ type Handler struct {
 	store         *SessionStore
 	sessionCrypto TelegramSessionCrypto
 	telegram      TelegramAuthClient
+	rateLimiter   *RateLimiter
 }
 
 func NewHandler(cfg config.Config, logger *slog.Logger, database *sql.DB, sessionCrypto TelegramSessionCrypto, telegram TelegramAuthClient) *Handler {
+	var rateLimiter *RateLimiter
+	if cfg.AuthRateLimitEnabled {
+		rateLimiter = NewRateLimiter(RateLimitSettings{
+			IPLimitPerMinute:       cfg.TelegramAuthIPLimitPerMinute,
+			SendCodePhoneLimitHour: cfg.TelegramSendCodePhoneLimitPerHour,
+			LoginPhoneLimitHour:    cfg.TelegramLoginPhoneLimitPerHour,
+		})
+	}
+
 	return &Handler{
 		cfg:           cfg,
 		logger:        logger,
 		store:         NewSessionStore(database),
 		sessionCrypto: sessionCrypto,
 		telegram:      telegram,
+		rateLimiter:   rateLimiter,
 	}
 }
 
@@ -52,6 +63,9 @@ func (h *Handler) SendTelegramCode(w http.ResponseWriter, r *http.Request) {
 	phoneHash, err := HashPhone(request.Phone, h.cfg.RefreshTokenPepper)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "phone_hash_failed")
+		return
+	}
+	if !h.allowRateLimited(w, h.rateLimiter.CheckSendCode(r, phoneHash)) {
 		return
 	}
 
@@ -101,6 +115,9 @@ func (h *Handler) LoginWithTelegram(w http.ResponseWriter, r *http.Request) {
 	phoneHash, err := HashPhone(request.Phone, h.cfg.RefreshTokenPepper)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "phone_hash_failed")
+		return
+	}
+	if !h.allowRateLimited(w, h.rateLimiter.CheckLogin(r, phoneHash)) {
 		return
 	}
 
@@ -190,6 +207,15 @@ type telegramLoginRequest struct {
 
 func telegramSessionAADForProfile(profile TelegramProfile) string {
 	return telegramUserAAD(profile.TelegramID)
+}
+
+func (h *Handler) allowRateLimited(w http.ResponseWriter, decision RateLimitDecision) bool {
+	if decision.Allowed {
+		return true
+	}
+	w.Header().Set("Retry-After", retryAfterSeconds(decision.RetryAfter))
+	writeError(w, http.StatusTooManyRequests, "auth_rate_limited")
+	return false
 }
 
 func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request) {

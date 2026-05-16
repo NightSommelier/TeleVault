@@ -97,6 +97,23 @@ func TestValidateRejectsNonPositiveUploadLimits(t *testing.T) {
 	assertErrorContains(t, err, "UPLOAD_SAFETY_MARGIN_BYTES must be greater than or equal to 0")
 }
 
+func TestValidateRejectsInvalidEnabledRateLimits(t *testing.T) {
+	cfg := validConfig()
+	cfg.AuthRateLimitEnabled = true
+	cfg.TelegramAuthIPLimitPerMinute = 0
+	cfg.TelegramSendCodePhoneLimitPerHour = 0
+	cfg.TelegramLoginPhoneLimitPerHour = 0
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("Validate() error = nil, want auth rate limit errors")
+	}
+
+	assertErrorContains(t, err, "TELEGRAM_AUTH_IP_LIMIT_PER_MINUTE must be greater than 0 when auth rate limiting is enabled")
+	assertErrorContains(t, err, "TELEGRAM_SEND_CODE_PHONE_LIMIT_PER_HOUR must be greater than 0 when auth rate limiting is enabled")
+	assertErrorContains(t, err, "TELEGRAM_LOGIN_PHONE_LIMIT_PER_HOUR must be greater than 0 when auth rate limiting is enabled")
+}
+
 func TestValidateRejectsInvalidAgeIdentityShape(t *testing.T) {
 	cfg := validConfig()
 	cfg.AppAgeIdentity = "not-an-age-identity"
@@ -138,6 +155,11 @@ func validConfig() Config {
 		UploadPartSizeBytes:        DefaultUploadPartSizeBytes,
 		TelegramDocumentLimitBytes: DefaultTelegramDocumentLimitBytes,
 		UploadSafetyMarginBytes:    DefaultUploadSafetyMarginBytes,
+
+		AuthRateLimitEnabled:              true,
+		TelegramAuthIPLimitPerMinute:      DefaultTelegramAuthIPLimitPerMinute,
+		TelegramSendCodePhoneLimitPerHour: DefaultTelegramSendCodePhoneLimitPerHour,
+		TelegramLoginPhoneLimitPerHour:    DefaultTelegramLoginPhoneLimitPerHour,
 	}
 }
 
