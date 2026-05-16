@@ -23,8 +23,12 @@ const (
 )
 
 type Settings struct {
-	PartSize         int64
-	PartSizeProvider func(context.Context) (int64, error)
+	PartSize                  int64
+	EffectiveSettingsProvider func(context.Context, string) (EffectiveSettings, error)
+}
+
+type EffectiveSettings struct {
+	PartSize int64
 }
 
 type Handler struct {
@@ -89,7 +93,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	partSize, err := h.partSize(r.Context())
+	effectiveSettings, err := h.effectiveSettings(r.Context(), user.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "upload_settings_load_failed")
 		return
@@ -101,7 +105,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		Name:              name,
 		MimeType:          strings.TrimSpace(request.MimeType),
 		PlaintextSize:     request.PlaintextSize,
-		PartSize:          partSize,
+		PartSize:          effectiveSettings.PartSize,
 		IdempotencyKey:    idempotencyKey,
 		ChecksumAlgorithm: checksumAlgorithm,
 		Checksum:          checksum,
@@ -121,11 +125,11 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (h *Handler) partSize(ctx context.Context) (int64, error) {
-	if h.settings.PartSizeProvider != nil {
-		return h.settings.PartSizeProvider(ctx)
+func (h *Handler) effectiveSettings(ctx context.Context, userID string) (EffectiveSettings, error) {
+	if h.settings.EffectiveSettingsProvider != nil {
+		return h.settings.EffectiveSettingsProvider(ctx, userID)
 	}
-	return h.settings.PartSize, nil
+	return EffectiveSettings{PartSize: h.settings.PartSize}, nil
 }
 
 func (h *Handler) UploadPart(w http.ResponseWriter, r *http.Request) {

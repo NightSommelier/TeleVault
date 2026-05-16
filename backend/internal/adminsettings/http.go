@@ -144,7 +144,12 @@ func telegramAccountLimitResponse(limit TelegramAccountLimit) map[string]any {
 		"display_name":                  nullableStringValue(limit.DisplayName),
 		"telegram_document_limit_bytes": limit.TelegramDocumentLimitBytes,
 		"upload_safety_margin_bytes":    limit.UploadSafetyMarginBytes,
+		"detected_document_limit_bytes": nullableInt64Value(limit.DetectedDocumentLimitBytes),
 		"is_premium":                    limit.IsPremium,
+		"last_probe_status":             nullableStringValue(limit.LastProbeStatus),
+		"last_probe_error":              nullableStringValue(limit.LastProbeError),
+		"last_probed_at":                nullableTimeValue(limit.LastProbedAt),
+		"next_probe_at":                 nullableTimeValue(limit.NextProbeAt),
 		"updated_at":                    limit.UpdatedAt,
 	}
 }
@@ -152,6 +157,20 @@ func telegramAccountLimitResponse(limit TelegramAccountLimit) map[string]any {
 func nullableStringValue(value sql.NullString) any {
 	if value.Valid {
 		return value.String
+	}
+	return nil
+}
+
+func nullableInt64Value(value sql.NullInt64) any {
+	if value.Valid {
+		return value.Int64
+	}
+	return nil
+}
+
+func nullableTimeValue(value sql.NullTime) any {
+	if value.Valid {
+		return value.Time
 	}
 	return nil
 }

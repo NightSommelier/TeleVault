@@ -71,12 +71,12 @@ func (s *Server) routes() {
 	adminSettingsStore := adminsettings.NewStore(s.db, s.cfg)
 	uploadsHandler := uploads.NewHandler(s.db, s.ageRecipient, telegramSessionCrypto, s.telegram, uploads.Settings{
 		PartSize: s.cfg.UploadPartSizeBytes,
-		PartSizeProvider: func(ctx context.Context) (int64, error) {
-			settings, err := adminSettingsStore.UploadSettings(ctx)
+		EffectiveSettingsProvider: func(ctx context.Context, userID string) (uploads.EffectiveSettings, error) {
+			settings, err := adminSettingsStore.EffectiveUploadSettings(ctx, userID)
 			if err != nil {
-				return 0, err
+				return uploads.EffectiveSettings{}, err
 			}
-			return settings.UploadPartSizeBytes, nil
+			return uploads.EffectiveSettings{PartSize: settings.UploadPartSizeBytes}, nil
 		},
 	})
 	s.mux.Handle("POST /uploads", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(uploadsHandler.Create))))

@@ -221,6 +221,53 @@ func TestAdminUploadSettingsVaultUploadPartSize(t *testing.T) {
 	}
 }
 
+func TestEffectiveUploadSettingsUseAccountLimit(t *testing.T) {
+	database := openIntegrationDB(t)
+	sessionStore := auth.NewSessionStore(database)
+	settingsStore := adminsettings.NewStore(database, config.Config{
+		UploadPartSizeBytes:        512,
+		TelegramDocumentLimitBytes: 2048,
+		UploadSafetyMarginBytes:    64,
+	})
+	ctx := context.Background()
+
+	admin, cleanupAdmin := createUserThroughLogin(t, database, sessionStore, 950_000_000_000+time.Now().UnixNano()%1_000_000_000)
+	defer cleanupAdmin()
+
+	if _, err := settingsStore.UpdateUploadSettings(ctx, adminsettings.UploadSettings{
+		UploadPartSizeBytes:        512,
+		TelegramDocumentLimitBytes: 2048,
+		UploadSafetyMarginBytes:    64,
+	}, admin.ID); err != nil {
+		t.Fatalf("UpdateUploadSettings() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = settingsStore.UpdateUploadSettings(context.Background(), adminsettings.UploadSettings{
+			UploadPartSizeBytes:        config.DefaultUploadPartSizeBytes,
+			TelegramDocumentLimitBytes: config.DefaultTelegramDocumentLimitBytes,
+			UploadSafetyMarginBytes:    config.DefaultUploadSafetyMarginBytes,
+		}, "")
+	})
+
+	if _, err := settingsStore.UpsertTelegramAccountLimit(ctx, admin.ID, adminsettings.TelegramAccountLimit{
+		TelegramDocumentLimitBytes: 256,
+		UploadSafetyMarginBytes:    32,
+	}, admin.ID); err != nil {
+		t.Fatalf("UpsertTelegramAccountLimit() error = %v", err)
+	}
+
+	effective, err := settingsStore.EffectiveUploadSettings(ctx, admin.ID)
+	if err != nil {
+		t.Fatalf("EffectiveUploadSettings() error = %v", err)
+	}
+	if effective.UploadPartSizeBytes != 224 {
+		t.Fatalf("UploadPartSizeBytes = %d, want account cap minus margin 224", effective.UploadPartSizeBytes)
+	}
+	if effective.Source != "account_manual" {
+		t.Fatalf("Source = %q, want account_manual", effective.Source)
+	}
+}
+
 func openIntegrationDB(t *testing.T) *sql.DB {
 	t.Helper()
 
@@ -252,13 +299,13 @@ func ensureLatestMigration(t *testing.T, database *sql.DB) {
 SELECT EXISTS (
     SELECT 1
     FROM schema_migrations
-    WHERE version = '000008'
+    WHERE version = '000009'
 )`).Scan(&exists)
 	if err != nil {
 		t.Fatalf("schema migration check failed: %v", err)
 	}
 	if !exists {
-		t.Fatalf("TEST_DATABASE_URL database is not migrated through 000008; run go run ./cmd/migrate up first")
+		t.Fatalf("TEST_DATABASE_URL database is not migrated through 000009; run go run ./cmd/migrate up first")
 	}
 }
 

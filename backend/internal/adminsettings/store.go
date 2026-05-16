@@ -25,8 +25,20 @@ type TelegramAccountLimit struct {
 	DisplayName                sql.NullString
 	TelegramDocumentLimitBytes int64
 	UploadSafetyMarginBytes    int64
+	DetectedDocumentLimitBytes sql.NullInt64
 	IsPremium                  bool
+	LastProbeStatus            sql.NullString
+	LastProbeError             sql.NullString
+	LastProbedAt               sql.NullTime
+	NextProbeAt                sql.NullTime
 	UpdatedAt                  time.Time
+}
+
+type EffectiveUploadSettings struct {
+	UploadPartSizeBytes        int64
+	TelegramDocumentLimitBytes int64
+	UploadSafetyMarginBytes    int64
+	Source                     string
 }
 
 type Store struct {
@@ -66,6 +78,56 @@ WHERE id = TRUE`,
 	return settings, nil
 }
 
+func (s *Store) EffectiveUploadSettings(ctx context.Context, userID string) (EffectiveUploadSettings, error) {
+	settings, err := s.UploadSettings(ctx)
+	if err != nil {
+		return EffectiveUploadSettings{}, err
+	}
+
+	effective := EffectiveUploadSettings{
+		UploadPartSizeBytes:        settings.UploadPartSizeBytes,
+		TelegramDocumentLimitBytes: settings.TelegramDocumentLimitBytes,
+		UploadSafetyMarginBytes:    settings.UploadSafetyMarginBytes,
+		Source:                     "global",
+	}
+	if userID == "" {
+		return effective, nil
+	}
+
+	var manualLimit int64
+	var margin int64
+	var detectedLimit sql.NullInt64
+	err = s.db.QueryRowContext(ctx, `
+SELECT telegram_document_limit_bytes, upload_safety_margin_bytes, detected_document_limit_bytes
+FROM telegram_account_limits
+WHERE user_id = $1`,
+		userID,
+	).Scan(&manualLimit, &margin, &detectedLimit)
+	if errors.Is(err, sql.ErrNoRows) {
+		return effective, nil
+	}
+	if err != nil {
+		return EffectiveUploadSettings{}, err
+	}
+
+	documentLimit := manualLimit
+	source := "account_manual"
+	if detectedLimit.Valid && detectedLimit.Int64 < documentLimit {
+		documentLimit = detectedLimit.Int64
+		source = "account_detected"
+	}
+
+	effective.TelegramDocumentLimitBytes = documentLimit
+	effective.UploadSafetyMarginBytes = margin
+	effective.Source = source
+	effective.UploadPartSizeBytes = minInt64(settings.UploadPartSizeBytes, documentLimit-margin)
+	if effective.UploadPartSizeBytes <= 0 {
+		return EffectiveUploadSettings{}, ErrInvalidSettings
+	}
+
+	return effective, nil
+}
+
 func (s *Store) UpdateUploadSettings(ctx context.Context, settings UploadSettings, updatedBy string) (UploadSettings, error) {
 	if err := validateUploadSettings(settings); err != nil {
 		return UploadSettings{}, err
@@ -99,7 +161,8 @@ RETURNING upload_part_size_bytes, telegram_document_limit_bytes, upload_safety_m
 func (s *Store) ListTelegramAccountLimits(ctx context.Context) ([]TelegramAccountLimit, error) {
 	rows, err := s.db.QueryContext(ctx, `
 SELECT u.id, u.telegram_id, u.username, u.display_name,
-       l.telegram_document_limit_bytes, l.upload_safety_margin_bytes, l.is_premium, l.updated_at
+       l.telegram_document_limit_bytes, l.upload_safety_margin_bytes, l.detected_document_limit_bytes,
+       l.is_premium, l.last_probe_status, l.last_probe_error, l.last_probed_at, l.next_probe_at, l.updated_at
 FROM telegram_account_limits l
 JOIN users u ON u.id = l.user_id
 ORDER BY l.updated_at DESC, u.telegram_id ASC
@@ -119,7 +182,12 @@ LIMIT 100`)
 			&limit.DisplayName,
 			&limit.TelegramDocumentLimitBytes,
 			&limit.UploadSafetyMarginBytes,
+			&limit.DetectedDocumentLimitBytes,
 			&limit.IsPremium,
+			&limit.LastProbeStatus,
+			&limit.LastProbeError,
+			&limit.LastProbedAt,
+			&limit.NextProbeAt,
 			&limit.UpdatedAt,
 		); err != nil {
 			return nil, err
@@ -166,7 +234,8 @@ WITH upserted AS (
     RETURNING user_id, telegram_document_limit_bytes, upload_safety_margin_bytes, is_premium, updated_at
 )
 SELECT u.id, u.telegram_id, u.username, u.display_name,
-       upserted.telegram_document_limit_bytes, upserted.upload_safety_margin_bytes, upserted.is_premium, upserted.updated_at
+       upserted.telegram_document_limit_bytes, upserted.upload_safety_margin_bytes, NULL::BIGINT,
+       upserted.is_premium, NULL::TEXT, NULL::TEXT, NULL::TIMESTAMPTZ, NULL::TIMESTAMPTZ, upserted.updated_at
 FROM upserted
 JOIN users u ON u.id = upserted.user_id`,
 		userID,
@@ -185,6 +254,13 @@ func validateUploadSettings(settings UploadSettings) error {
 		return ErrInvalidSettings
 	}
 	return nil
+}
+
+func minInt64(a int64, b int64) int64 {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 type rowScanner interface {
@@ -214,7 +290,12 @@ func scanTelegramAccountLimitWithUser(row rowScanner) (TelegramAccountLimit, err
 		&limit.DisplayName,
 		&limit.TelegramDocumentLimitBytes,
 		&limit.UploadSafetyMarginBytes,
+		&limit.DetectedDocumentLimitBytes,
 		&limit.IsPremium,
+		&limit.LastProbeStatus,
+		&limit.LastProbeError,
+		&limit.LastProbedAt,
+		&limit.NextProbeAt,
 		&limit.UpdatedAt,
 	)
 	if err != nil {
