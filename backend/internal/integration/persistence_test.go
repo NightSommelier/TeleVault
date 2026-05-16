@@ -16,6 +16,7 @@ import (
 	"github.com/televault/TeleVault/backend/internal/config"
 	"github.com/televault/TeleVault/backend/internal/db"
 	"github.com/televault/TeleVault/backend/internal/files"
+	"github.com/televault/TeleVault/backend/internal/telegramprobe"
 	"github.com/televault/TeleVault/backend/internal/uploads"
 )
 
@@ -296,6 +297,51 @@ func TestAdminUsersPromoteAndDemoteByTelegramID(t *testing.T) {
 
 	if _, err := adminUserStore.PromoteByTelegramID(ctx, 999_999_999_999_999); !errors.Is(err, adminusers.ErrUserNotFound) {
 		t.Fatalf("missing user error = %v, want adminusers.ErrUserNotFound", err)
+	}
+}
+
+func TestTelegramProbeStatePersistence(t *testing.T) {
+	database := openIntegrationDB(t)
+	sessionStore := auth.NewSessionStore(database)
+	probeStore := telegramprobe.NewStore(database)
+	ctx := context.Background()
+
+	user, cleanupUser := createUserThroughLogin(t, database, sessionStore, 970_000_000_000+time.Now().UnixNano()%1_000_000_000)
+	defer cleanupUser()
+
+	account, err := probeStore.AccountByTelegramID(ctx, user.TelegramID)
+	if err != nil {
+		t.Fatalf("AccountByTelegramID() error = %v", err)
+	}
+	if account.UserID != user.ID || account.TelegramID != user.TelegramID {
+		t.Fatalf("AccountByTelegramID() = %+v, want user %s", account, user.ID)
+	}
+
+	nextProbeAt := time.Now().Add(time.Hour)
+	if err := probeStore.MarkPending(ctx, user.ID, nextProbeAt); err != nil {
+		t.Fatalf("MarkPending() error = %v", err)
+	}
+	if err := probeStore.MarkFailed(ctx, user.ID, errors.New("temporary probe failure"), nextProbeAt); err != nil {
+		t.Fatalf("MarkFailed() error = %v", err)
+	}
+	if err := probeStore.MarkSuccess(ctx, user.ID, 128, nextProbeAt); err != nil {
+		t.Fatalf("MarkSuccess() error = %v", err)
+	}
+
+	var detected int64
+	var status string
+	var probeError sql.NullString
+	err = database.QueryRowContext(ctx, `
+SELECT detected_document_limit_bytes, last_probe_status, last_probe_error
+FROM telegram_account_limits
+WHERE user_id = $1`,
+		user.ID,
+	).Scan(&detected, &status, &probeError)
+	if err != nil {
+		t.Fatalf("probe state query error = %v", err)
+	}
+	if detected != 128 || status != "success" || probeError.Valid {
+		t.Fatalf("probe state detected=%d status=%q error=%q, want success without error", detected, status, probeError.String)
 	}
 }
 
