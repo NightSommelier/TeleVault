@@ -59,6 +59,7 @@ Foundation started on 2026-05-15:
 - Added `cmd/smoke` for authenticated upload/download smoke tests with checksum comparison.
 - Added `.env.example`.
 - Added configurable upload part sizing with Telegram document cap and safety margin validation.
+- Added best-effort Telegram cleanup for encrypted parts that belong to expired uploads.
 
 Accepted MVP decisions:
 
@@ -605,13 +606,12 @@ teledrive-2/
 
 ## 13. Immediate Next Steps
 
-1. Add best-effort Telegram message deletion for expired/failed upload artifacts.
-2. Add Telegram 2FA password handling for accounts that require it.
-3. Add auth/files/uploads endpoint integration tests around challenge/session/policy persistence.
-4. Add dedicated rate limiting for Telegram auth endpoints.
-5. Add admin settings/model for Telegram account limits and upload safety margins.
-6. Add dynamic Telegram limit adaptation per account/connection.
-7. Add QR-code login as an additional Telegram auth path.
+1. Add Telegram 2FA password handling for accounts that require it.
+2. Add auth/files/uploads endpoint integration tests around challenge/session/policy persistence.
+3. Add dedicated rate limiting for Telegram auth endpoints.
+4. Add admin settings/model for Telegram account limits and upload safety margins.
+5. Add dynamic Telegram limit adaptation per account/connection.
+6. Add QR-code login as an additional Telegram auth path.
 
 ## 14. Reference Files in Current Project
 

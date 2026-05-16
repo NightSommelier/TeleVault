@@ -247,6 +247,45 @@ func (c *Client) DownloadEncryptedPart(ctx context.Context, encodedSession strin
 	})
 }
 
+func (c *Client) DeleteEncryptedPart(ctx context.Context, encodedSession string, storagePeer string, messageID int64) error {
+	sessionBytes, err := base64.StdEncoding.DecodeString(encodedSession)
+	if err != nil {
+		return err
+	}
+
+	storage := &session.StorageMemory{}
+	if err := storage.StoreSession(ctx, sessionBytes); err != nil {
+		return err
+	}
+
+	client := telegram.NewClient(c.appID, c.appHash, telegram.Options{
+		NoUpdates:         true,
+		SessionStorage:    storage,
+		UpdateHandler:     nil,
+		Device:            telegram.DeviceConfig{AppVersion: "TeleDrive 2.0"},
+		CompressThreshold: -1,
+	})
+
+	peer := storagePeer
+	if peer == "" {
+		peer = "self"
+	}
+	if peer != "self" {
+		return fmt.Errorf("unsupported telegram storage peer %q", peer)
+	}
+	if messageID <= 0 || messageID > int64(math.MaxInt) {
+		return fmt.Errorf("invalid telegram message id %d", messageID)
+	}
+
+	return client.Run(ctx, func(ctx context.Context) error {
+		_, err := client.API().MessagesDeleteMessages(ctx, &tg.MessagesDeleteMessagesRequest{
+			ID:     []int{int(messageID)},
+			Revoke: true,
+		})
+		return err
+	})
+}
+
 func randomInt64() (int64, error) {
 	n, err := rand.Int(rand.Reader, big.NewInt(math.MaxInt64))
 	if err != nil {

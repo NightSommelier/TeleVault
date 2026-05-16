@@ -57,6 +57,17 @@ type UploadPart struct {
 	CreatedAt      time.Time
 }
 
+type TelegramCleanupArtifact struct {
+	PartID           string
+	UploadID         string
+	OwnerID          string
+	OwnerTelegramID  int64
+	EncryptedSession []byte
+	StoragePeer      sql.NullString
+	TelegramPeer     sql.NullString
+	MessageID        int64
+}
+
 type TelegramSession struct {
 	EncryptedSession []byte
 	StoragePeer      sql.NullString
@@ -110,7 +121,9 @@ type CompleteUploadParams struct {
 }
 
 type CleanupResult struct {
-	ExpiredUploads int64
+	ExpiredUploads           int64
+	TelegramArtifactsDeleted int64
+	TelegramArtifactsFailed  int64
 }
 
 type Store struct {
@@ -290,6 +303,83 @@ WHERE status IN ('pending', 'uploading')
 	}
 
 	return CleanupResult{ExpiredUploads: rows}, nil
+}
+
+func (s *Store) PendingTelegramCleanupArtifacts(ctx context.Context, limit int) ([]TelegramCleanupArtifact, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+SELECT p.id, p.upload_id, u.owner_id, users.telegram_id, ts.encrypted_session, ts.storage_peer, p.telegram_peer, p.telegram_message_id
+FROM upload_parts p
+JOIN uploads u ON u.id = p.upload_id
+JOIN users ON users.id = u.owner_id
+JOIN telegram_sessions ts ON ts.user_id = u.owner_id
+WHERE u.status = 'expired'
+  AND p.telegram_message_id IS NOT NULL
+  AND p.telegram_deleted_at IS NULL
+ORDER BY p.created_at ASC
+LIMIT $1`,
+		limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var artifacts []TelegramCleanupArtifact
+	for rows.Next() {
+		var artifact TelegramCleanupArtifact
+		if err := rows.Scan(
+			&artifact.PartID,
+			&artifact.UploadID,
+			&artifact.OwnerID,
+			&artifact.OwnerTelegramID,
+			&artifact.EncryptedSession,
+			&artifact.StoragePeer,
+			&artifact.TelegramPeer,
+			&artifact.MessageID,
+		); err != nil {
+			return nil, err
+		}
+		artifacts = append(artifacts, artifact)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return artifacts, nil
+}
+
+func (s *Store) MarkTelegramArtifactDeleted(ctx context.Context, partID string, now time.Time) error {
+	_, err := s.db.ExecContext(ctx, `
+UPDATE upload_parts
+SET telegram_deleted_at = $2,
+    telegram_delete_error = NULL
+WHERE id = $1`,
+		partID,
+		now,
+	)
+	return err
+}
+
+func (s *Store) MarkTelegramArtifactDeleteFailed(ctx context.Context, partID string, deleteErr error) error {
+	message := ""
+	if deleteErr != nil {
+		message = deleteErr.Error()
+	}
+	if len(message) > 1000 {
+		message = message[:1000]
+	}
+
+	_, err := s.db.ExecContext(ctx, `
+UPDATE upload_parts
+SET telegram_delete_error = NULLIF($2, '')
+WHERE id = $1`,
+		partID,
+		message,
+	)
+	return err
 }
 
 func (s *Store) CompleteUpload(ctx context.Context, params CompleteUploadParams) (File, error) {
