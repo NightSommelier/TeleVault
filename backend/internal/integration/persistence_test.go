@@ -309,6 +309,56 @@ func TestUploadPartQueueLeaseRetryAndFail(t *testing.T) {
 	}
 }
 
+func TestLocalStagingCleanupArtifacts(t *testing.T) {
+	database := openIntegrationDB(t)
+	sessionStore := auth.NewSessionStore(database)
+	uploadStore := uploads.NewStore(database)
+	ctx := context.Background()
+
+	owner, cleanupOwner := createUserThroughLogin(t, database, sessionStore, 938_000_000_000+time.Now().UnixNano()%1_000_000_000)
+	defer cleanupOwner()
+
+	now := time.Now().UTC()
+	upload, err := uploadStore.Create(ctx, uploads.CreateUploadParams{
+		OwnerID:       owner.ID,
+		Name:          "cleanup.bin",
+		PlaintextSize: 5,
+		PartSize:      5,
+		ExpiresAt:     now.Add(-time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("Create upload error = %v", err)
+	}
+	if _, err := database.ExecContext(ctx, `
+INSERT INTO upload_parts (upload_id, part_number, plaintext_size, ciphertext_size, status, storage_backend, storage_key)
+VALUES ($1, 1, 5, 10, 'pending', 'local', 'cleanup.bin.part-1')`,
+		upload.ID,
+	); err != nil {
+		t.Fatalf("insert staged part error = %v", err)
+	}
+	if _, err := uploadStore.ExpireAbandoned(ctx, now); err != nil {
+		t.Fatalf("ExpireAbandoned() error = %v", err)
+	}
+
+	artifacts, err := uploadStore.PendingLocalStagingCleanupArtifacts(ctx, 10)
+	if err != nil {
+		t.Fatalf("PendingLocalStagingCleanupArtifacts() error = %v", err)
+	}
+	if len(artifacts) != 1 || artifacts[0].UploadID != upload.ID || artifacts[0].StorageKey != "cleanup.bin.part-1" {
+		t.Fatalf("PendingLocalStagingCleanupArtifacts() = %+v, want staged cleanup artifact", artifacts)
+	}
+	if err := uploadStore.MarkLocalStagingDeleted(ctx, artifacts[0].PartID); err != nil {
+		t.Fatalf("MarkLocalStagingDeleted() error = %v", err)
+	}
+	artifacts, err = uploadStore.PendingLocalStagingCleanupArtifacts(ctx, 10)
+	if err != nil {
+		t.Fatalf("PendingLocalStagingCleanupArtifacts() after mark error = %v", err)
+	}
+	if len(artifacts) != 0 {
+		t.Fatalf("PendingLocalStagingCleanupArtifacts() after mark = %+v, want empty", artifacts)
+	}
+}
+
 func TestAdminUploadSettingsVaultUploadPartSize(t *testing.T) {
 	database := openIntegrationDB(t)
 	sessionStore := auth.NewSessionStore(database)

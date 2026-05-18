@@ -77,6 +77,12 @@ type TelegramCleanupArtifact struct {
 	MessageID        int64
 }
 
+type LocalStagingCleanupArtifact struct {
+	PartID     string
+	UploadID   string
+	StorageKey string
+}
+
 type TelegramSession struct {
 	EncryptedSession []byte
 	StoragePeer      sql.NullString
@@ -175,6 +181,8 @@ type CleanupResult struct {
 	ExpiredUploads           int64
 	TelegramArtifactsDeleted int64
 	TelegramArtifactsFailed  int64
+	LocalStagingDeleted      int64
+	LocalStagingFailed       int64
 }
 
 type Store struct {
@@ -750,6 +758,43 @@ LIMIT $1`,
 	return artifacts, nil
 }
 
+func (s *Store) PendingLocalStagingCleanupArtifacts(ctx context.Context, limit int) ([]LocalStagingCleanupArtifact, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+SELECT p.id, p.upload_id, p.storage_key
+FROM upload_parts p
+JOIN uploads u ON u.id = p.upload_id
+WHERE p.storage_backend = $1
+  AND p.storage_key IS NOT NULL
+  AND p.status != 'complete'
+  AND (u.status IN ('expired', 'failed') OR p.status = 'failed')
+ORDER BY p.created_at ASC
+LIMIT $2`,
+		LocalStagingBackend,
+		limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var artifacts []LocalStagingCleanupArtifact
+	for rows.Next() {
+		var artifact LocalStagingCleanupArtifact
+		if err := rows.Scan(&artifact.PartID, &artifact.UploadID, &artifact.StorageKey); err != nil {
+			return nil, err
+		}
+		artifacts = append(artifacts, artifact)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return artifacts, nil
+}
+
 func (s *Store) MarkTelegramArtifactDeleted(ctx context.Context, partID string, now time.Time) error {
 	_, err := s.db.ExecContext(ctx, `
 UPDATE upload_parts
@@ -758,6 +803,37 @@ SET telegram_deleted_at = $2,
 WHERE id = $1`,
 		partID,
 		now,
+	)
+	return err
+}
+
+func (s *Store) MarkLocalStagingDeleted(ctx context.Context, partID string) error {
+	_, err := s.db.ExecContext(ctx, `
+UPDATE upload_parts
+SET storage_backend = NULL,
+    storage_key = NULL,
+    last_error = NULL,
+    updated_at = now()
+WHERE id = $1`,
+		partID,
+	)
+	return err
+}
+
+func (s *Store) MarkLocalStagingDeleteFailed(ctx context.Context, partID string, deleteErr error) error {
+	message := ""
+	if deleteErr != nil {
+		message = deleteErr.Error()
+	}
+	message = truncateError(message)
+
+	_, err := s.db.ExecContext(ctx, `
+UPDATE upload_parts
+SET last_error = NULLIF($2, ''),
+    updated_at = now()
+WHERE id = $1`,
+		partID,
+		message,
 	)
 	return err
 }

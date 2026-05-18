@@ -59,6 +59,34 @@ func main() {
 		os.Exit(1)
 	}
 
+	spool, err := uploads.NewLocalSpool(cfg.UploadStagingDir)
+	if err != nil {
+		logger.Error("upload staging initialization failed", "error", err)
+		os.Exit(1)
+	}
+
+	localArtifacts, err := store.PendingLocalStagingCleanupArtifacts(context.Background(), cleanupArtifactLimit)
+	if err != nil {
+		logger.Error("local staging cleanup artifact lookup failed", "error", err)
+		os.Exit(1)
+	}
+	for _, artifact := range localArtifacts {
+		if err := spool.Delete(artifact.StorageKey); err != nil {
+			result.LocalStagingFailed++
+			if markErr := store.MarkLocalStagingDeleteFailed(context.Background(), artifact.PartID, err); markErr != nil {
+				logger.Warn("failed to record local staging cleanup error", "part_id", artifact.PartID, "error", markErr)
+			}
+			logger.Warn("local staging cleanup failed", "upload_id", artifact.UploadID, "part_id", artifact.PartID, "storage_key", artifact.StorageKey, "error", err)
+			continue
+		}
+		if err := store.MarkLocalStagingDeleted(context.Background(), artifact.PartID); err != nil {
+			result.LocalStagingFailed++
+			logger.Warn("failed to mark local staging deleted", "upload_id", artifact.UploadID, "part_id", artifact.PartID, "storage_key", artifact.StorageKey, "error", err)
+			continue
+		}
+		result.LocalStagingDeleted++
+	}
+
 	sessionCrypto := auth.NewTelegramSessionCrypto(secretsBox)
 	telegramClient := telegramauth.NewClient(telegramAppID, cfg.TelegramAPIHash)
 
@@ -102,6 +130,8 @@ func main() {
 	logger.Info(
 		"cleanup complete",
 		"expired_uploads", result.ExpiredUploads,
+		"local_staging_deleted", result.LocalStagingDeleted,
+		"local_staging_failed", result.LocalStagingFailed,
 		"telegram_artifacts_deleted", result.TelegramArtifactsDeleted,
 		"telegram_artifacts_failed", result.TelegramArtifactsFailed,
 	)
