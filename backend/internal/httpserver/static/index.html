@@ -43,6 +43,13 @@
       background: var(--primary);
       color: var(--primary-ink);
     }
+    button.link {
+      border: 0;
+      background: transparent;
+      color: var(--primary);
+      min-height: 28px;
+      padding: 0 2px;
+    }
     button:disabled { opacity: .55; cursor: not-allowed; }
     input[type="file"] { max-width: 100%; }
     .shell {
@@ -112,6 +119,59 @@
     }
     .actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
     .stack { display: grid; gap: 12px; }
+    .field { display: grid; gap: 6px; }
+    .field label {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 650;
+    }
+    .field input[type="text"] {
+      width: 100%;
+      min-height: 36px;
+      padding: 0 10px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--panel);
+      color: var(--ink);
+    }
+    .crumbs {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      min-width: 0;
+      color: var(--muted);
+      flex-wrap: wrap;
+    }
+    .crumbs span {
+      color: var(--muted);
+    }
+    .folder-name {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
+    .folder-mark {
+      width: 24px;
+      height: 18px;
+      border: 1px solid #c59d2f;
+      border-radius: 3px;
+      background: #f3cf66;
+      position: relative;
+      flex: 0 0 auto;
+    }
+    .folder-mark::before {
+      content: "";
+      position: absolute;
+      left: 2px;
+      top: -5px;
+      width: 10px;
+      height: 5px;
+      border: 1px solid #c59d2f;
+      border-bottom: 0;
+      border-radius: 3px 3px 0 0;
+      background: #f3cf66;
+    }
     .status {
       min-height: 20px;
       color: var(--muted);
@@ -215,6 +275,13 @@
             <div class="panel-title">Upload</div>
           </div>
           <div class="panel-body stack">
+            <div class="field">
+              <label for="folderNameInput">Folder</label>
+              <div class="actions">
+                <input id="folderNameInput" type="text" maxlength="255" placeholder="New folder">
+                <button id="createFolderBtn">Create</button>
+              </div>
+            </div>
             <input id="fileInput" type="file">
             <button id="uploadBtn" class="primary">Upload</button>
             <div id="uploadStatus" class="status"></div>
@@ -226,8 +293,14 @@
       <section>
         <div class="panel">
           <div class="panel-head">
-            <div class="panel-title">Files</div>
-            <button id="refreshBtn">Refresh</button>
+            <div class="stack">
+              <div class="panel-title">Files</div>
+              <div id="breadcrumbs" class="crumbs"></div>
+            </div>
+            <div class="actions">
+              <button id="upBtn">Up</button>
+              <button id="refreshBtn">Refresh</button>
+            </div>
           </div>
           <div class="panel-body">
             <table class="table">
@@ -255,6 +328,8 @@
       qrLoginId: null,
       qrTimer: null,
       uploadTimer: null,
+      currentFolderId: '',
+      folderStack: [],
     };
 
     const el = {
@@ -267,7 +342,11 @@
       loginStatus: document.getElementById('loginStatus'),
       logoutBtn: document.getElementById('logoutBtn'),
       refreshBtn: document.getElementById('refreshBtn'),
+      upBtn: document.getElementById('upBtn'),
+      breadcrumbs: document.getElementById('breadcrumbs'),
       filesBody: document.getElementById('filesBody'),
+      folderNameInput: document.getElementById('folderNameInput'),
+      createFolderBtn: document.getElementById('createFolderBtn'),
       fileInput: document.getElementById('fileInput'),
       uploadBtn: document.getElementById('uploadBtn'),
       uploadStatus: document.getElementById('uploadStatus'),
@@ -308,11 +387,14 @@
       el.appView.classList.remove('hidden');
       el.userbar.classList.remove('hidden');
       el.userName.textContent = user.displayName || user.username || `Telegram ${user.telegram_id}`;
+      renderBreadcrumbs();
       refreshFiles();
     }
 
     function showLogin(message) {
       state.user = null;
+      state.currentFolderId = '';
+      state.folderStack = [];
       el.loginView.classList.remove('hidden');
       el.appView.classList.add('hidden');
       el.userbar.classList.add('hidden');
@@ -382,8 +464,10 @@
 
     async function refreshFiles() {
       el.filesBody.innerHTML = `<tr><td colspan="4" class="muted">Loading...</td></tr>`;
+      renderBreadcrumbs();
       try {
-        const data = await api('/files');
+        const query = state.currentFolderId ? `?parent_id=${encodeURIComponent(state.currentFolderId)}` : '';
+        const data = await api(`/files${query}`);
         renderFiles(data.files || []);
       } catch (err) {
         el.filesBody.innerHTML = `<tr><td colspan="4" class="muted">${escapeHTML(err.message)}</td></tr>`;
@@ -392,22 +476,94 @@
 
     function renderFiles(files) {
       if (!files.length) {
-        el.filesBody.innerHTML = `<tr><td colspan="4" class="muted">No files.</td></tr>`;
+        el.filesBody.innerHTML = `<tr><td colspan="4" class="muted">No files in this folder.</td></tr>`;
         return;
       }
       el.filesBody.innerHTML = files.map((file) => `
         <tr>
-          <td>${escapeHTML(file.name || 'Untitled')}</td>
+          <td>${renderFileName(file)}</td>
           <td><span class="badge ${file.status === 'ready' ? 'ok' : 'warn'}">${escapeHTML(file.status)}</span></td>
-          <td>${formatBytes(file.plaintext_size || 0)}</td>
-          <td><button data-download="${file.id}">Download</button></td>
+          <td>${file.type === 'folder' ? '-' : formatBytes(file.plaintext_size || 0)}</td>
+          <td>${file.type === 'folder' ? `<button data-open-folder="${file.id}">Open</button>` : `<button data-download="${file.id}">Download</button>`}</td>
         </tr>
       `).join('');
+      el.filesBody.querySelectorAll('[data-open-folder]').forEach((button) => {
+        button.addEventListener('click', () => {
+          const folder = files.find((file) => file.id === button.dataset.openFolder);
+          openFolder(folder);
+        });
+      });
       el.filesBody.querySelectorAll('[data-download]').forEach((button) => {
         button.addEventListener('click', () => {
           window.location.href = `/files/${button.dataset.download}/download`;
         });
       });
+    }
+
+    function renderFileName(file) {
+      const name = escapeHTML(file.name || 'Untitled');
+      if (file.type !== 'folder') return name;
+      return `<span class="folder-name"><span class="folder-mark" aria-hidden="true"></span>${name}</span>`;
+    }
+
+    function renderBreadcrumbs() {
+      const root = `<button class="link" data-crumb-index="-1">Root</button>`;
+      const crumbs = state.folderStack.map((folder, index) => (
+        `<span>/</span><button class="link" data-crumb-index="${index}">${escapeHTML(folder.name || 'Untitled')}</button>`
+      )).join('');
+      el.breadcrumbs.innerHTML = root + crumbs;
+      el.upBtn.disabled = !state.currentFolderId;
+      el.breadcrumbs.querySelectorAll('[data-crumb-index]').forEach((button) => {
+        button.addEventListener('click', () => jumpToCrumb(Number(button.dataset.crumbIndex)));
+      });
+    }
+
+    function openFolder(folder) {
+      if (!folder || folder.type !== 'folder') return;
+      state.currentFolderId = folder.id;
+      state.folderStack.push({ id: folder.id, name: folder.name || 'Untitled' });
+      refreshFiles();
+    }
+
+    function goUp() {
+      if (!state.currentFolderId) return;
+      state.folderStack.pop();
+      const parent = state.folderStack[state.folderStack.length - 1];
+      state.currentFolderId = parent ? parent.id : '';
+      refreshFiles();
+    }
+
+    function jumpToCrumb(index) {
+      if (index < 0) {
+        state.folderStack = [];
+        state.currentFolderId = '';
+      } else {
+        state.folderStack = state.folderStack.slice(0, index + 1);
+        state.currentFolderId = state.folderStack[index].id;
+      }
+      refreshFiles();
+    }
+
+    async function createFolder() {
+      const name = el.folderNameInput.value.trim();
+      if (!name) return;
+      el.createFolderBtn.disabled = true;
+      try {
+        await api('/folders', {
+          method: 'POST',
+          csrf: true,
+          body: JSON.stringify({
+            name,
+            parent_id: state.currentFolderId || undefined,
+          }),
+        });
+        el.folderNameInput.value = '';
+        await refreshFiles();
+      } catch (err) {
+        setUploadStatus(err.message, true);
+      } finally {
+        el.createFolderBtn.disabled = false;
+      }
     }
 
     async function uploadSelected() {
@@ -423,6 +579,7 @@
           csrf: true,
           body: JSON.stringify({
             name: file.name,
+            parent_id: state.currentFolderId || undefined,
             mime_type: file.type || 'application/octet-stream',
             plaintext_size: file.size,
             checksum,
@@ -517,6 +674,11 @@
     el.startQrBtn.addEventListener('click', startQR);
     el.logoutBtn.addEventListener('click', logout);
     el.refreshBtn.addEventListener('click', refreshFiles);
+    el.upBtn.addEventListener('click', goUp);
+    el.createFolderBtn.addEventListener('click', createFolder);
+    el.folderNameInput.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') createFolder();
+    });
     el.uploadBtn.addEventListener('click', uploadSelected);
     loadMe();
   </script>
