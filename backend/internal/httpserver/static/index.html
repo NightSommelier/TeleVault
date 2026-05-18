@@ -52,6 +52,13 @@
     }
     button:disabled { opacity: .55; cursor: not-allowed; }
     input[type="file"] { max-width: 100%; }
+    input[type="file"].hidden-input {
+      width: 1px;
+      height: 1px;
+      opacity: 0;
+      position: absolute;
+      pointer-events: none;
+    }
     .shell {
       min-height: 100vh;
       display: grid;
@@ -119,6 +126,22 @@
     }
     .actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
     .row-actions { justify-content: flex-end; }
+    .segmented {
+      display: inline-flex;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      overflow: hidden;
+      background: var(--panel);
+    }
+    .segmented button {
+      border: 0;
+      border-radius: 0;
+      min-height: 34px;
+    }
+    .segmented button.active {
+      background: var(--primary);
+      color: var(--primary-ink);
+    }
     .stack { display: grid; gap: 12px; }
     .field { display: grid; gap: 6px; }
     .field label {
@@ -179,6 +202,23 @@
       overflow-wrap: anywhere;
     }
     .status.error { color: var(--danger); }
+    .dropzone {
+      display: grid;
+      place-items: center;
+      min-height: 120px;
+      padding: 18px;
+      border: 1px dashed #9aa6b2;
+      border-radius: 8px;
+      background: #fbfcfe;
+      color: var(--muted);
+      text-align: center;
+      cursor: pointer;
+    }
+    .dropzone.dragging {
+      border-color: var(--primary);
+      background: var(--soft);
+      color: var(--primary);
+    }
     .table {
       width: 100%;
       border-collapse: collapse;
@@ -283,7 +323,8 @@
                 <button id="createFolderBtn">Create</button>
               </div>
             </div>
-            <input id="fileInput" type="file">
+            <div id="dropZone" class="dropzone" tabindex="0">Drop file here or click to choose</div>
+            <input id="fileInput" class="hidden-input" type="file">
             <button id="uploadBtn" class="primary">Upload</button>
             <div id="uploadStatus" class="status"></div>
             <progress id="uploadProgress" value="0" max="100"></progress>
@@ -299,6 +340,10 @@
               <div id="breadcrumbs" class="crumbs"></div>
             </div>
             <div class="actions">
+              <div class="segmented" role="group" aria-label="File view">
+                <button id="ownFilesBtn" class="active">Own</button>
+                <button id="sharedFilesBtn">Shared</button>
+              </div>
               <button id="upBtn">Up</button>
               <button id="refreshBtn">Refresh</button>
             </div>
@@ -331,6 +376,8 @@
       uploadTimer: null,
       currentFolderId: '',
       folderStack: [],
+      view: 'own',
+      droppedFile: null,
     };
 
     const el = {
@@ -343,11 +390,14 @@
       loginStatus: document.getElementById('loginStatus'),
       logoutBtn: document.getElementById('logoutBtn'),
       refreshBtn: document.getElementById('refreshBtn'),
+      ownFilesBtn: document.getElementById('ownFilesBtn'),
+      sharedFilesBtn: document.getElementById('sharedFilesBtn'),
       upBtn: document.getElementById('upBtn'),
       breadcrumbs: document.getElementById('breadcrumbs'),
       filesBody: document.getElementById('filesBody'),
       folderNameInput: document.getElementById('folderNameInput'),
       createFolderBtn: document.getElementById('createFolderBtn'),
+      dropZone: document.getElementById('dropZone'),
       fileInput: document.getElementById('fileInput'),
       uploadBtn: document.getElementById('uploadBtn'),
       uploadStatus: document.getElementById('uploadStatus'),
@@ -388,6 +438,7 @@
       el.appView.classList.remove('hidden');
       el.userbar.classList.remove('hidden');
       el.userName.textContent = user.displayName || user.username || `Telegram ${user.telegram_id}`;
+      restoreFolderState();
       renderBreadcrumbs();
       refreshFiles();
     }
@@ -396,6 +447,8 @@
       state.user = null;
       state.currentFolderId = '';
       state.folderStack = [];
+      state.view = 'own';
+      state.droppedFile = null;
       el.loginView.classList.remove('hidden');
       el.appView.classList.add('hidden');
       el.userbar.classList.add('hidden');
@@ -467,8 +520,9 @@
       el.filesBody.innerHTML = `<tr><td colspan="4" class="muted">Loading...</td></tr>`;
       renderBreadcrumbs();
       try {
-        const query = state.currentFolderId ? `?parent_id=${encodeURIComponent(state.currentFolderId)}` : '';
-        const data = await api(`/files${query}`);
+        const data = state.view === 'shared'
+          ? await api('/shared')
+          : await api(`/files${state.currentFolderId ? `?parent_id=${encodeURIComponent(state.currentFolderId)}` : ''}`);
         renderFiles(data.files || []);
       } catch (err) {
         el.filesBody.innerHTML = `<tr><td colspan="4" class="muted">${escapeHTML(err.message)}</td></tr>`;
@@ -477,7 +531,8 @@
 
     function renderFiles(files) {
       if (!files.length) {
-        el.filesBody.innerHTML = `<tr><td colspan="4" class="muted">No files in this folder.</td></tr>`;
+        const message = state.view === 'shared' ? 'No shared files.' : 'No files in this folder.';
+        el.filesBody.innerHTML = `<tr><td colspan="4" class="muted">${message}</td></tr>`;
         return;
       }
       el.filesBody.innerHTML = files.map((file) => `
@@ -502,14 +557,20 @@
       el.filesBody.querySelectorAll('[data-delete]').forEach((button) => {
         button.addEventListener('click', () => deleteFile(button.dataset.delete));
       });
+      el.filesBody.querySelectorAll('[data-share]').forEach((button) => {
+        button.addEventListener('click', () => shareFile(button.dataset.share));
+      });
     }
 
     function renderFileActions(file) {
+      if (state.view === 'shared') {
+        return `<button data-download="${file.id}">Download</button>`;
+      }
       const deleteButton = `<button data-delete="${file.id}">Delete</button>`;
       if (file.type === 'folder') {
         return `<button data-open-folder="${file.id}">Open</button>${deleteButton}`;
       }
-      return `<button data-download="${file.id}">Download</button>${deleteButton}`;
+      return `<button data-download="${file.id}">Download</button><button data-share="${file.id}">Share</button>${deleteButton}`;
     }
 
     function renderFileName(file) {
@@ -523,8 +584,10 @@
       const crumbs = state.folderStack.map((folder, index) => (
         `<span>/</span><button class="link" data-crumb-index="${index}">${escapeHTML(folder.name || 'Untitled')}</button>`
       )).join('');
-      el.breadcrumbs.innerHTML = root + crumbs;
-      el.upBtn.disabled = !state.currentFolderId;
+      el.breadcrumbs.innerHTML = state.view === 'shared' ? '<span>Shared with me</span>' : root + crumbs;
+      el.upBtn.disabled = state.view === 'shared' || !state.currentFolderId;
+      el.ownFilesBtn.classList.toggle('active', state.view === 'own');
+      el.sharedFilesBtn.classList.toggle('active', state.view === 'shared');
       el.breadcrumbs.querySelectorAll('[data-crumb-index]').forEach((button) => {
         button.addEventListener('click', () => jumpToCrumb(Number(button.dataset.crumbIndex)));
       });
@@ -534,6 +597,7 @@
       if (!folder || folder.type !== 'folder') return;
       state.currentFolderId = folder.id;
       state.folderStack.push({ id: folder.id, name: folder.name || 'Untitled' });
+      saveFolderState();
       refreshFiles();
     }
 
@@ -542,6 +606,7 @@
       state.folderStack.pop();
       const parent = state.folderStack[state.folderStack.length - 1];
       state.currentFolderId = parent ? parent.id : '';
+      saveFolderState();
       refreshFiles();
     }
 
@@ -553,6 +618,14 @@
         state.folderStack = state.folderStack.slice(0, index + 1);
         state.currentFolderId = state.folderStack[index].id;
       }
+      saveFolderState();
+      refreshFiles();
+    }
+
+    function setView(view) {
+      state.view = view;
+      state.droppedFile = null;
+      renderBreadcrumbs();
       refreshFiles();
     }
 
@@ -588,9 +661,32 @@
       }
     }
 
+    async function shareFile(id) {
+      const telegramID = window.prompt('Telegram ID to share with');
+      if (!telegramID) return;
+      const expiresAt = window.prompt('Expires at RFC3339, optional');
+      try {
+        await api(`/files/${id}/shares`, {
+          method: 'POST',
+          csrf: true,
+          body: JSON.stringify({
+            telegram_id: Number(telegramID),
+            expires_at: expiresAt || undefined,
+          }),
+        });
+        setUploadStatus('Share created.');
+      } catch (err) {
+        setUploadStatus(err.message, true);
+      }
+    }
+
     async function uploadSelected() {
-      const file = el.fileInput.files[0];
+      const file = state.droppedFile || el.fileInput.files[0];
       if (!file) return;
+      if (state.view !== 'own') {
+        setUploadStatus('Switch to Own files to upload.', true);
+        return;
+      }
       el.uploadBtn.disabled = true;
       el.uploadProgress.value = 0;
       setUploadStatus('Hashing file...');
@@ -613,11 +709,38 @@
         setUploadStatus('Upload complete.');
         el.uploadProgress.value = 100;
         el.fileInput.value = '';
+        state.droppedFile = null;
+        updateDropZone();
         await refreshFiles();
       } catch (err) {
         setUploadStatus(err.message, true);
       } finally {
         el.uploadBtn.disabled = false;
+      }
+    }
+
+    function updateDropZone() {
+      const file = state.droppedFile || el.fileInput.files[0];
+      el.dropZone.textContent = file ? file.name : 'Drop file here or click to choose';
+    }
+
+    function saveFolderState() {
+      localStorage.setItem('tdv.folderState', JSON.stringify({
+        currentFolderId: state.currentFolderId,
+        folderStack: state.folderStack,
+      }));
+    }
+
+    function restoreFolderState() {
+      try {
+        const saved = JSON.parse(localStorage.getItem('tdv.folderState') || '{}');
+        state.currentFolderId = typeof saved.currentFolderId === 'string' ? saved.currentFolderId : '';
+        state.folderStack = Array.isArray(saved.folderStack) ? saved.folderStack.filter((folder) => (
+          folder && typeof folder.id === 'string' && typeof folder.name === 'string'
+        )) : [];
+      } catch (_) {
+        state.currentFolderId = '';
+        state.folderStack = [];
       }
     }
 
@@ -696,10 +819,34 @@
     el.startQrBtn.addEventListener('click', startQR);
     el.logoutBtn.addEventListener('click', logout);
     el.refreshBtn.addEventListener('click', refreshFiles);
+    el.ownFilesBtn.addEventListener('click', () => setView('own'));
+    el.sharedFilesBtn.addEventListener('click', () => setView('shared'));
     el.upBtn.addEventListener('click', goUp);
     el.createFolderBtn.addEventListener('click', createFolder);
     el.folderNameInput.addEventListener('keydown', (event) => {
       if (event.key === 'Enter') createFolder();
+    });
+    el.dropZone.addEventListener('click', () => el.fileInput.click());
+    el.dropZone.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') el.fileInput.click();
+    });
+    el.fileInput.addEventListener('change', () => {
+      state.droppedFile = null;
+      updateDropZone();
+    });
+    el.dropZone.addEventListener('dragover', (event) => {
+      event.preventDefault();
+      el.dropZone.classList.add('dragging');
+    });
+    el.dropZone.addEventListener('dragleave', () => {
+      el.dropZone.classList.remove('dragging');
+    });
+    el.dropZone.addEventListener('drop', (event) => {
+      event.preventDefault();
+      el.dropZone.classList.remove('dragging');
+      state.droppedFile = event.dataTransfer.files[0] || null;
+      el.fileInput.value = '';
+      updateDropZone();
     });
     el.uploadBtn.addEventListener('click', uploadSelected);
     loadMe();

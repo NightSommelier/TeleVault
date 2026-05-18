@@ -173,6 +173,33 @@ func TestFilesUploadsPersistenceOwnerIsolationAndCompletion(t *testing.T) {
 	if _, _, _, err := fileStore.DownloadData(ctx, other.ID, file.ID); !errors.Is(err, files.ErrNotFound) {
 		t.Fatalf("cross-owner download error = %v, want files.ErrNotFound", err)
 	}
+	share, err := fileStore.CreateShare(ctx, owner.ID, file.ID, other.TelegramID, sql.NullTime{})
+	if err != nil {
+		t.Fatalf("CreateShare() error = %v", err)
+	}
+	if share.GranteeUserID != other.ID || share.FileID != file.ID {
+		t.Fatalf("CreateShare() = %+v, want grantee %s file %s", share, other.ID, file.ID)
+	}
+	shared, err := fileStore.ListSharedWithMe(ctx, other.ID)
+	if err != nil {
+		t.Fatalf("ListSharedWithMe() error = %v", err)
+	}
+	if len(shared) != 1 || shared[0].ID != file.ID {
+		t.Fatalf("ListSharedWithMe() = %+v, want shared file %s", shared, file.ID)
+	}
+	sharedDownload, sharedParts, _, err := fileStore.DownloadData(ctx, other.ID, file.ID)
+	if err != nil {
+		t.Fatalf("shared DownloadData() error = %v", err)
+	}
+	if sharedDownload.OwnerID != owner.ID || len(sharedParts) != 2 {
+		t.Fatalf("shared DownloadData() owner=%s parts=%d, want owner %s parts 2", sharedDownload.OwnerID, len(sharedParts), owner.ID)
+	}
+	if err := fileStore.RevokeShare(ctx, owner.ID, file.ID, share.ID, time.Now()); err != nil {
+		t.Fatalf("RevokeShare() error = %v", err)
+	}
+	if _, _, _, err := fileStore.DownloadData(ctx, other.ID, file.ID); !errors.Is(err, files.ErrNotFound) {
+		t.Fatalf("revoked shared download error = %v, want files.ErrNotFound", err)
+	}
 	if err := fileStore.SoftDelete(ctx, other.ID, file.ID, time.Now()); !errors.Is(err, files.ErrNotFound) {
 		t.Fatalf("cross-owner delete error = %v, want files.ErrNotFound", err)
 	}
@@ -582,13 +609,13 @@ func ensureLatestMigration(t *testing.T, database *sql.DB) {
 SELECT EXISTS (
     SELECT 1
     FROM schema_migrations
-    WHERE version = '000010'
+			WHERE version = '000011'
 )`).Scan(&exists)
 	if err != nil {
 		t.Fatalf("schema migration check failed: %v", err)
 	}
 	if !exists {
-		t.Fatalf("TEST_DATABASE_URL database is not migrated through 000010; run go run ./cmd/migrate up first")
+		t.Fatalf("TEST_DATABASE_URL database is not migrated through 000011; run go run ./cmd/migrate up first")
 	}
 }
 

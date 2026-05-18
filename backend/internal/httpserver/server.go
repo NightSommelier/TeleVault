@@ -78,10 +78,14 @@ func (s *Server) routes() {
 
 	filesHandler := files.NewHandler(s.db, telegramSessionCrypto, s.ageIdentity, s.telegram)
 	s.mux.Handle("GET /files", authHandler.RequireAuth(http.HandlerFunc(filesHandler.List)))
+	s.mux.Handle("GET /shared", authHandler.RequireAuth(http.HandlerFunc(filesHandler.ListSharedWithMe)))
 	s.mux.Handle("POST /folders", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(filesHandler.CreateFolder))))
 	s.mux.Handle("GET /files/{id}", authHandler.RequireAuth(http.HandlerFunc(filesHandler.Get)))
 	s.mux.Handle("DELETE /files/{id}", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(filesHandler.Delete))))
 	s.mux.Handle("GET /files/{id}/download", authHandler.RequireAuth(http.HandlerFunc(filesHandler.Download)))
+	s.mux.Handle("GET /files/{id}/shares", authHandler.RequireAuth(http.HandlerFunc(filesHandler.ListShares)))
+	s.mux.Handle("POST /files/{id}/shares", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(filesHandler.CreateShare))))
+	s.mux.Handle("DELETE /files/{id}/shares/{share_id}", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(filesHandler.RevokeShare))))
 
 	adminSettingsStore := adminsettings.NewStore(s.db, s.cfg)
 	uploadsHandler := uploads.NewHandler(s.db, s.ageRecipient, telegramSessionCrypto, s.telegram, uploads.Settings{

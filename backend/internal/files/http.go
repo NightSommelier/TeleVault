@@ -51,6 +51,24 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (h *Handler) ListSharedWithMe(w http.ResponseWriter, r *http.Request) {
+	user, ok := auth.UserFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "missing_authenticated_user")
+		return
+	}
+
+	items, err := h.store.ListSharedWithMe(r.Context(), user.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "shared_file_list_failed")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"files": filesResponse(items),
+	})
+}
+
 func (h *Handler) CreateFolder(w http.ResponseWriter, r *http.Request) {
 	user, ok := auth.UserFromContext(r.Context())
 	if !ok {
@@ -103,7 +121,7 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	file, err := h.store.GetByID(r.Context(), user.ID, id)
+	file, err := h.store.GetAccessibleByID(r.Context(), user.ID, id)
 	if errors.Is(err, ErrNotFound) {
 		writeError(w, http.StatusNotFound, "file_not_found")
 		return
@@ -138,6 +156,105 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "file_delete_failed")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) ListShares(w http.ResponseWriter, r *http.Request) {
+	user, ok := auth.UserFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "missing_authenticated_user")
+		return
+	}
+
+	fileID := strings.TrimSpace(r.PathValue("id"))
+	if fileID == "" {
+		writeError(w, http.StatusBadRequest, "file_id_required")
+		return
+	}
+
+	shares, err := h.store.ListShares(r.Context(), user.ID, fileID)
+	if errors.Is(err, ErrNotFound) {
+		writeError(w, http.StatusNotFound, "file_not_found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "share_list_failed")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"shares": sharesResponse(shares),
+	})
+}
+
+func (h *Handler) CreateShare(w http.ResponseWriter, r *http.Request) {
+	user, ok := auth.UserFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "missing_authenticated_user")
+		return
+	}
+
+	fileID := strings.TrimSpace(r.PathValue("id"))
+	if fileID == "" {
+		writeError(w, http.StatusBadRequest, "file_id_required")
+		return
+	}
+
+	var request createShareRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_json")
+		return
+	}
+	if request.TelegramID <= 0 {
+		writeError(w, http.StatusBadRequest, "telegram_id_required")
+		return
+	}
+
+	expiresAt, ok := parseOptionalExpiry(request.ExpiresAt)
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid_expires_at")
+		return
+	}
+
+	share, err := h.store.CreateShare(r.Context(), user.ID, fileID, request.TelegramID, expiresAt)
+	if errors.Is(err, ErrNotFound) {
+		writeError(w, http.StatusNotFound, "file_or_user_not_found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "share_create_failed")
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"share": shareResponse(share),
+	})
+}
+
+func (h *Handler) RevokeShare(w http.ResponseWriter, r *http.Request) {
+	user, ok := auth.UserFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "missing_authenticated_user")
+		return
+	}
+
+	fileID := strings.TrimSpace(r.PathValue("id"))
+	shareID := strings.TrimSpace(r.PathValue("share_id"))
+	if fileID == "" || shareID == "" {
+		writeError(w, http.StatusBadRequest, "share_id_required")
+		return
+	}
+
+	err := h.store.RevokeShare(r.Context(), user.ID, fileID, shareID, time.Now().UTC())
+	if errors.Is(err, ErrNotFound) {
+		writeError(w, http.StatusNotFound, "share_not_found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "share_revoke_failed")
 		return
 	}
 
@@ -210,6 +327,11 @@ type createFolderRequest struct {
 	ParentID string `json:"parent_id"`
 }
 
+type createShareRequest struct {
+	TelegramID int64  `json:"telegram_id"`
+	ExpiresAt  string `json:"expires_at"`
+}
+
 func normalizeName(name string) string {
 	return strings.TrimSpace(strings.ReplaceAll(name, "/", ""))
 }
@@ -225,6 +347,7 @@ func filesResponse(files []File) []map[string]any {
 func fileResponse(file File) map[string]any {
 	return map[string]any{
 		"id":              file.ID,
+		"owner_id":        file.OwnerID,
 		"parent_id":       nullableStringValue(file.ParentID),
 		"name":            nullableStringValue(file.NamePlain),
 		"mime_type":       nullableStringValue(file.MimeType),
@@ -234,6 +357,31 @@ func fileResponse(file File) map[string]any {
 		"status":          file.Status,
 		"created_at":      file.CreatedAt,
 		"updated_at":      file.UpdatedAt,
+	}
+}
+
+func sharesResponse(shares []Share) []map[string]any {
+	out := make([]map[string]any, 0, len(shares))
+	for _, share := range shares {
+		out = append(out, shareResponse(share))
+	}
+	return out
+}
+
+func shareResponse(share Share) map[string]any {
+	return map[string]any{
+		"id":                  share.ID,
+		"file_id":             share.FileID,
+		"owner_id":            share.OwnerID,
+		"grantee_user_id":     share.GranteeUserID,
+		"grantee_telegram_id": share.GranteeTelegramID,
+		"grantee_username":    nullableStringValue(share.GranteeUsername),
+		"grantee_name":        nullableStringValue(share.GranteeName),
+		"permission":          share.Permission,
+		"expires_at":          nullableTimeValue(share.ExpiresAt),
+		"revoked_at":          nullableTimeValue(share.RevokedAt),
+		"created_at":          share.CreatedAt,
+		"updated_at":          share.UpdatedAt,
 	}
 }
 
@@ -256,6 +404,25 @@ func nullableInt64Value(value sql.NullInt64) any {
 		return nil
 	}
 	return value.Int64
+}
+
+func nullableTimeValue(value sql.NullTime) any {
+	if !value.Valid {
+		return nil
+	}
+	return value.Time
+}
+
+func parseOptionalExpiry(value string) (sql.NullTime, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return sql.NullTime{}, true
+	}
+	parsed, err := time.Parse(time.RFC3339, value)
+	if err != nil || !parsed.After(time.Now()) {
+		return sql.NullTime{}, false
+	}
+	return sql.NullTime{Time: parsed.UTC(), Valid: true}, true
 }
 
 func writeError(w http.ResponseWriter, status int, code string) {
