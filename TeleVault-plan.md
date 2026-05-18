@@ -644,14 +644,12 @@ teledrive-2/
 
 ## 13. Immediate Next Steps
 
-1. Lock in the adaptive Telegram limit policy and durable queue/staging model:
-   - probe-driven per-account caps,
-   - rolling safety margins,
-   - bounded concurrent uploads,
-   - backoff/retry rules for `FLOOD_WAIT` and temporary Telegram slowdown,
-   - local spool or object storage staging before Telegram drain,
-   - portable SQL queue semantics across PostgreSQL, MariaDB, and SQLite3.
-2. Build the first usable web UI for auth and owner-only file browsing/upload smoke flows.
+1. Finish upload worker hardening:
+   - run the staged-upload smoke flow against real Telegram,
+   - add bounded worker concurrency,
+   - expose queue/upload progress states for the frontend,
+   - tune retry/backoff and adaptive per-account caps from real failures.
+2. Build the first usable web UI for auth and owner-only file browsing/upload/download smoke flows.
 
 ## 13.1 Deferred Planned Auth Work
 

@@ -10,7 +10,7 @@ Date: 2026-05-15
 - File storage: Telegram stores ciphertext only.
 - Metadata: filenames are plaintext for MVP; schema keeps room for encrypted names later.
 - Sharing: no public links or user-to-user sharing in MVP.
-- Upload path: API streams encrypted file parts to Telegram synchronously for MVP.
+- Upload path: API encrypts and stages file parts locally, then a leased worker queue drains ciphertext to Telegram.
 - Frontend: current React UI may be adapted after the owner-only encrypted backend flow works.
 
 ## Assets
@@ -20,6 +20,7 @@ Date: 2026-05-15
 - Application session and refresh tokens.
 - Server age identity.
 - User file plaintext while in transit through the API process.
+- Local staged ciphertext waiting for Telegram drain.
 - Encrypted file ciphertext stored in Telegram.
 - PostgreSQL metadata, key envelopes, audit events, and file part mappings.
 
@@ -28,7 +29,9 @@ Date: 2026-05-15
 - Browser/client to API over HTTPS.
 - API to PostgreSQL.
 - API to Valkey using the Redis-compatible protocol.
-- API/worker to Telegram.
+- API to local upload staging.
+- Worker to local upload staging.
+- Worker to Telegram.
 - Operator-controlled secrets mounted into the backend runtime.
 
 ## In Scope Threats
@@ -37,6 +40,7 @@ Date: 2026-05-15
 - Client-visible tokens containing sensitive backend credentials.
 - Cross-user file, folder, upload, or download access.
 - Plaintext file persistence outside the request stream.
+- Unbounded staged ciphertext growth if Telegram slows down or rejects uploads.
 - Uploading plaintext to Telegram.
 - Weak cookie/CORS/session handling.
 - Missing authorization before metadata or stream access.
@@ -64,6 +68,10 @@ Date: 2026-05-15
 - Rotate refresh tokens and store only hashes.
 - Authorize before returning file metadata, key metadata, Telegram part references, or streams.
 - Store only ciphertext in Telegram.
+- Store only ciphertext in upload staging.
+- Protect `UPLOAD_STAGING_DIR` with owner-only filesystem permissions and exclude it from Git/backups unless intentionally backed up with the database and age identity.
+- Use durable queue leases, bounded worker concurrency, and retry/backoff for transient Telegram failures.
+- Respect Telegram `FLOOD_WAIT` delays before retrying staged parts.
 - Expire and clean abandoned uploads.
 - Emit audit events for login, logout, refresh rotation, upload start, upload complete, download, and delete.
 
@@ -71,9 +79,9 @@ Date: 2026-05-15
 
 The server age identity and PostgreSQL metadata must be backed up together. Losing either can make encrypted files unrecoverable even if Telegram ciphertext still exists.
 
-## Open Decisions Before Upload Implementation
+## Open Decisions Before Upload Hardening
 
 - Maximum MVP file size.
-- Per-request upload timeout and retry behavior.
-- Exact Telegram part size.
+- Adaptive per-account worker concurrency.
+- Production staging backend beyond local spool, such as S3 or Garage.
 - Whether a local bootstrap admin flow is required for first setup.

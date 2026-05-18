@@ -258,12 +258,16 @@ func TestUploadPartQueueLeaseRetryAndFail(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("RetryQueuedPart() error = %v", err)
 	}
-	if _, err := uploadStore.ClaimQueuedPart(ctx, uploads.ClaimQueuedPartParams{
+	work, err := uploadStore.ClaimQueuedPartWork(ctx, uploads.ClaimQueuedPartParams{
 		WorkerID:      "worker-b",
 		Now:           now.Add(31 * time.Second),
 		LeaseDuration: time.Minute,
-	}); err != nil {
-		t.Fatalf("ClaimQueuedPart() after retry error = %v", err)
+	})
+	if err != nil {
+		t.Fatalf("ClaimQueuedPartWork() after retry error = %v", err)
+	}
+	if work.Part.ID != staged.ID || work.OwnerID != owner.ID || work.OwnerTelegramID != owner.TelegramID || !bytes.Equal(work.EncryptedSession, []byte("encrypted-telegram-session")) || work.UploadName != "queue.bin" {
+		t.Fatalf("ClaimQueuedPartWork() = %+v, want staged part with owner telegram session context", work)
 	}
 
 	if err := uploadStore.FailQueuedPart(ctx, staged.ID, errors.New("permanent failure")); err != nil {

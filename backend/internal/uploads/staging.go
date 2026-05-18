@@ -88,6 +88,17 @@ func (s *LocalSpool) Delete(key string) error {
 	return err
 }
 
+func (s *LocalSpool) Open(key string) (io.ReadCloser, error) {
+	if s == nil {
+		return nil, errors.New("local spool is nil")
+	}
+	key, err := cleanStorageKey(key)
+	if err != nil {
+		return nil, err
+	}
+	return os.Open(filepath.Join(s.root, key))
+}
+
 func cleanStorageKey(key string) (string, error) {
 	key = strings.TrimSpace(key)
 	if key == "" {

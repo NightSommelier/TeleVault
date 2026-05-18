@@ -82,6 +82,15 @@ type TelegramSession struct {
 	StoragePeer      sql.NullString
 }
 
+type QueuedPartWork struct {
+	Part             UploadPart
+	OwnerID          string
+	OwnerTelegramID  int64
+	EncryptedSession []byte
+	StoragePeer      sql.NullString
+	UploadName       string
+}
+
 type File struct {
 	ID             string
 	OwnerID        string
@@ -530,6 +539,90 @@ RETURNING p.id, p.upload_id, p.part_number, p.plaintext_size, p.ciphertext_size,
 		return UploadPart{}, err
 	}
 	return part, nil
+}
+
+func (s *Store) ClaimQueuedPartWork(ctx context.Context, params ClaimQueuedPartParams) (QueuedPartWork, error) {
+	if params.WorkerID == "" {
+		return QueuedPartWork{}, errors.New("worker id is required")
+	}
+	if params.LeaseDuration <= 0 {
+		return QueuedPartWork{}, errors.New("lease duration must be positive")
+	}
+
+	var work QueuedPartWork
+	err := s.db.QueryRowContext(ctx, `
+WITH next_part AS (
+    SELECT p.id
+    FROM upload_parts p
+    JOIN uploads u ON u.id = p.upload_id
+    WHERE p.status = 'pending'
+      AND p.storage_backend IS NOT NULL
+      AND p.storage_key IS NOT NULL
+      AND p.available_at <= $1
+      AND (p.leased_until IS NULL OR p.leased_until <= $1)
+      AND u.status IN ('pending', 'uploading')
+      AND u.expires_at > $1
+    ORDER BY p.available_at ASC, p.created_at ASC
+    FOR UPDATE SKIP LOCKED
+    LIMIT 1
+),
+claimed AS (
+    UPDATE upload_parts p
+    SET leased_until = $2,
+        attempts = p.attempts + 1,
+        last_error = NULL,
+        worker_id = $3,
+        updated_at = now()
+    FROM next_part
+    WHERE p.id = next_part.id
+    RETURNING p.id, p.upload_id, p.part_number, p.plaintext_size, p.ciphertext_size, p.checksum,
+              p.telegram_peer, p.telegram_message_id, p.status, p.storage_backend, p.storage_key,
+              p.available_at, p.leased_until, p.attempts, p.last_error, p.worker_id, p.created_at, p.updated_at
+)
+SELECT claimed.id, claimed.upload_id, claimed.part_number, claimed.plaintext_size, claimed.ciphertext_size,
+       claimed.checksum, claimed.telegram_peer, claimed.telegram_message_id, claimed.status,
+       claimed.storage_backend, claimed.storage_key, claimed.available_at, claimed.leased_until,
+       claimed.attempts, claimed.last_error, claimed.worker_id, claimed.created_at, claimed.updated_at,
+       u.owner_id, users.telegram_id, ts.encrypted_session, ts.storage_peer, u.name_plain
+FROM claimed
+JOIN uploads u ON u.id = claimed.upload_id
+JOIN users ON users.id = u.owner_id
+LEFT JOIN telegram_sessions ts ON ts.user_id = u.owner_id`,
+		params.Now,
+		params.Now.Add(params.LeaseDuration),
+		params.WorkerID,
+	).Scan(
+		&work.Part.ID,
+		&work.Part.UploadID,
+		&work.Part.PartNumber,
+		&work.Part.PlaintextSize,
+		&work.Part.CiphertextSize,
+		&work.Part.Checksum,
+		&work.Part.TelegramPeer,
+		&work.Part.MessageID,
+		&work.Part.Status,
+		&work.Part.StorageBackend,
+		&work.Part.StorageKey,
+		&work.Part.AvailableAt,
+		&work.Part.LeasedUntil,
+		&work.Part.Attempts,
+		&work.Part.LastError,
+		&work.Part.WorkerID,
+		&work.Part.CreatedAt,
+		&work.Part.UpdatedAt,
+		&work.OwnerID,
+		&work.OwnerTelegramID,
+		&work.EncryptedSession,
+		&work.StoragePeer,
+		&work.UploadName,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return QueuedPartWork{}, ErrUploadPartNotFound
+	}
+	if err != nil {
+		return QueuedPartWork{}, err
+	}
+	return work, nil
 }
 
 func (s *Store) RetryQueuedPart(ctx context.Context, params RetryPartParams) error {
