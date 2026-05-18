@@ -173,6 +173,28 @@ func TestFilesUploadsPersistenceOwnerIsolationAndCompletion(t *testing.T) {
 	if _, _, _, err := fileStore.DownloadData(ctx, other.ID, file.ID); !errors.Is(err, files.ErrNotFound) {
 		t.Fatalf("cross-owner download error = %v, want files.ErrNotFound", err)
 	}
+	if err := fileStore.SoftDelete(ctx, other.ID, file.ID, time.Now()); !errors.Is(err, files.ErrNotFound) {
+		t.Fatalf("cross-owner delete error = %v, want files.ErrNotFound", err)
+	}
+	if _, err := fileStore.GetByID(ctx, owner.ID, file.ID); err != nil {
+		t.Fatalf("owner file after cross-owner delete error = %v", err)
+	}
+	if err := fileStore.SoftDelete(ctx, owner.ID, folder.ID, time.Now()); err != nil {
+		t.Fatalf("SoftDelete(folder) error = %v", err)
+	}
+	if _, err := fileStore.GetByID(ctx, owner.ID, folder.ID); !errors.Is(err, files.ErrNotFound) {
+		t.Fatalf("deleted folder get error = %v, want files.ErrNotFound", err)
+	}
+	if _, _, _, err := fileStore.DownloadData(ctx, owner.ID, file.ID); !errors.Is(err, files.ErrNotFound) {
+		t.Fatalf("deleted child download error = %v, want files.ErrNotFound", err)
+	}
+	children, err := fileStore.ListChildren(ctx, owner.ID, folder.ID)
+	if err != nil {
+		t.Fatalf("ListChildren(deleted folder) error = %v", err)
+	}
+	if len(children) != 0 {
+		t.Fatalf("ListChildren(deleted folder) returned %d children, want 0", len(children))
+	}
 }
 
 func TestUploadPartQueueLeaseRetryAndFail(t *testing.T) {

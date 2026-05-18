@@ -115,6 +115,45 @@ WHERE owner_id = $1
 	return file, nil
 }
 
+func (s *Store) SoftDelete(ctx context.Context, ownerID string, id string, now time.Time) error {
+	var count int
+	err := s.db.QueryRowContext(ctx, `
+WITH RECURSIVE target AS (
+    SELECT id
+    FROM files
+    WHERE owner_id = $1
+      AND id = $2
+      AND deleted_at IS NULL
+    UNION ALL
+    SELECT child.id
+    FROM files child
+    INNER JOIN target parent ON child.parent_id = parent.id
+    WHERE child.owner_id = $1
+      AND child.deleted_at IS NULL
+),
+updated AS (
+    UPDATE files
+    SET status = 'deleted',
+        deleted_at = $3,
+        updated_at = $3
+    WHERE id IN (SELECT id FROM target)
+    RETURNING id
+)
+SELECT COUNT(*) FROM updated`,
+		ownerID,
+		id,
+		now,
+	).Scan(&count)
+	if err != nil {
+		return err
+	}
+	if count == 0 {
+		return ErrNotFound
+	}
+
+	return nil
+}
+
 func (s *Store) DownloadData(ctx context.Context, ownerID string, id string) (File, []FilePart, TelegramSession, error) {
 	file, err := s.GetByID(ctx, ownerID, id)
 	if err != nil {

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"filippo.io/age"
 
@@ -115,6 +116,32 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"file": fileResponse(file),
 	})
+}
+
+func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
+	user, ok := auth.UserFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "missing_authenticated_user")
+		return
+	}
+
+	id := strings.TrimSpace(r.PathValue("id"))
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "file_id_required")
+		return
+	}
+
+	err := h.store.SoftDelete(r.Context(), user.ID, id, time.Now().UTC())
+	if errors.Is(err, ErrNotFound) {
+		writeError(w, http.StatusNotFound, "file_not_found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "file_delete_failed")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *Handler) Download(w http.ResponseWriter, r *http.Request) {

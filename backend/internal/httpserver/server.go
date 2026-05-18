@@ -80,6 +80,7 @@ func (s *Server) routes() {
 	s.mux.Handle("GET /files", authHandler.RequireAuth(http.HandlerFunc(filesHandler.List)))
 	s.mux.Handle("POST /folders", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(filesHandler.CreateFolder))))
 	s.mux.Handle("GET /files/{id}", authHandler.RequireAuth(http.HandlerFunc(filesHandler.Get)))
+	s.mux.Handle("DELETE /files/{id}", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(filesHandler.Delete))))
 	s.mux.Handle("GET /files/{id}/download", authHandler.RequireAuth(http.HandlerFunc(filesHandler.Download)))
 
 	adminSettingsStore := adminsettings.NewStore(s.db, s.cfg)

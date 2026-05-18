@@ -118,6 +118,7 @@
       background: white;
     }
     .actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .row-actions { justify-content: flex-end; }
     .stack { display: grid; gap: 12px; }
     .field { display: grid; gap: 6px; }
     .field label {
@@ -484,7 +485,7 @@
           <td>${renderFileName(file)}</td>
           <td><span class="badge ${file.status === 'ready' ? 'ok' : 'warn'}">${escapeHTML(file.status)}</span></td>
           <td>${file.type === 'folder' ? '-' : formatBytes(file.plaintext_size || 0)}</td>
-          <td>${file.type === 'folder' ? `<button data-open-folder="${file.id}">Open</button>` : `<button data-download="${file.id}">Download</button>`}</td>
+          <td><div class="actions row-actions">${renderFileActions(file)}</div></td>
         </tr>
       `).join('');
       el.filesBody.querySelectorAll('[data-open-folder]').forEach((button) => {
@@ -498,6 +499,17 @@
           window.location.href = `/files/${button.dataset.download}/download`;
         });
       });
+      el.filesBody.querySelectorAll('[data-delete]').forEach((button) => {
+        button.addEventListener('click', () => deleteFile(button.dataset.delete));
+      });
+    }
+
+    function renderFileActions(file) {
+      const deleteButton = `<button data-delete="${file.id}">Delete</button>`;
+      if (file.type === 'folder') {
+        return `<button data-open-folder="${file.id}">Open</button>${deleteButton}`;
+      }
+      return `<button data-download="${file.id}">Download</button>${deleteButton}`;
     }
 
     function renderFileName(file) {
@@ -563,6 +575,16 @@
         setUploadStatus(err.message, true);
       } finally {
         el.createFolderBtn.disabled = false;
+      }
+    }
+
+    async function deleteFile(id) {
+      if (!id || !window.confirm('Delete this item?')) return;
+      try {
+        await api(`/files/${id}`, { method: 'DELETE', csrf: true });
+        await refreshFiles();
+      } catch (err) {
+        setUploadStatus(err.message, true);
       }
     }
 
