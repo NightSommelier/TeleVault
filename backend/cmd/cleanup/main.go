@@ -103,7 +103,7 @@ func main() {
 			if markErr := store.MarkTelegramArtifactDeleteFailed(context.Background(), artifact.PartID, err); markErr != nil {
 				logger.Warn("failed to record telegram cleanup error", "part_id", artifact.PartID, "error", markErr)
 			}
-			logger.Warn("telegram cleanup session decrypt failed", "upload_id", artifact.UploadID, "part_id", artifact.PartID, "error", err)
+			logger.Warn("telegram cleanup session decrypt failed", "source", artifact.Source, "resource_id", artifact.ResourceID, "part_id", artifact.PartID, "error", err)
 			continue
 		}
 
@@ -115,13 +115,13 @@ func main() {
 			if markErr := store.MarkTelegramArtifactDeleteFailed(context.Background(), artifact.PartID, err); markErr != nil {
 				logger.Warn("failed to record telegram cleanup error", "part_id", artifact.PartID, "error", markErr)
 			}
-			logger.Warn("telegram artifact deletion failed", "upload_id", artifact.UploadID, "part_id", artifact.PartID, "message_id", artifact.MessageID, "error", err)
+			logger.Warn("telegram artifact deletion failed", "source", artifact.Source, "resource_id", artifact.ResourceID, "part_id", artifact.PartID, "message_id", artifact.MessageID, "error", err)
 			continue
 		}
 
 		if err := store.MarkTelegramArtifactDeleted(context.Background(), artifact.PartID, time.Now()); err != nil {
 			result.TelegramArtifactsFailed++
-			logger.Warn("failed to mark telegram artifact deleted", "upload_id", artifact.UploadID, "part_id", artifact.PartID, "message_id", artifact.MessageID, "error", err)
+			logger.Warn("failed to mark telegram artifact deleted", "source", artifact.Source, "resource_id", artifact.ResourceID, "part_id", artifact.PartID, "message_id", artifact.MessageID, "error", err)
 			continue
 		}
 		result.TelegramArtifactsDeleted++

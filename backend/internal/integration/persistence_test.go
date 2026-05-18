@@ -222,6 +222,37 @@ func TestFilesUploadsPersistenceOwnerIsolationAndCompletion(t *testing.T) {
 	if len(children) != 0 {
 		t.Fatalf("ListChildren(deleted folder) returned %d children, want 0", len(children))
 	}
+	cleanupArtifacts, err := uploadStore.PendingTelegramCleanupArtifacts(ctx, 1000)
+	if err != nil {
+		t.Fatalf("PendingTelegramCleanupArtifacts() error = %v", err)
+	}
+	var foundDeletedFileParts int
+	for _, artifact := range cleanupArtifacts {
+		if artifact.Source == "file_part" && artifact.ResourceID == file.ID {
+			foundDeletedFileParts++
+		}
+	}
+	if foundDeletedFileParts != 1 {
+		t.Fatalf("immediately available deleted file cleanup artifacts = %d, want 1", foundDeletedFileParts)
+	}
+	var queuedParts int
+	var minAvailable, maxAvailable time.Time
+	err = database.QueryRowContext(ctx, `
+SELECT COUNT(*), MIN(telegram_delete_available_at), MAX(telegram_delete_available_at)
+FROM file_parts
+WHERE file_id = $1
+  AND telegram_deleted_at IS NULL`,
+		file.ID,
+	).Scan(&queuedParts, &minAvailable, &maxAvailable)
+	if err != nil {
+		t.Fatalf("deleted file cleanup queue query error = %v", err)
+	}
+	if queuedParts != 2 {
+		t.Fatalf("deleted file queued parts = %d, want 2", queuedParts)
+	}
+	if maxAvailable.Sub(minAvailable) < 15*time.Second {
+		t.Fatalf("deleted file cleanup delay = %s, want at least 15s", maxAvailable.Sub(minAvailable))
+	}
 }
 
 func TestUploadPartQueueLeaseRetryAndFail(t *testing.T) {
@@ -609,13 +640,13 @@ func ensureLatestMigration(t *testing.T, database *sql.DB) {
 SELECT EXISTS (
     SELECT 1
     FROM schema_migrations
-			WHERE version = '000011'
+			WHERE version = '000012'
 )`).Scan(&exists)
 	if err != nil {
 		t.Fatalf("schema migration check failed: %v", err)
 	}
 	if !exists {
-		t.Fatalf("TEST_DATABASE_URL database is not migrated through 000011; run go run ./cmd/migrate up first")
+		t.Fatalf("TEST_DATABASE_URL database is not migrated through 000012; run go run ./cmd/migrate up first")
 	}
 }
 

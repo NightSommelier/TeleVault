@@ -183,6 +183,20 @@ updated AS (
         updated_at = $3
     WHERE id IN (SELECT id FROM target)
     RETURNING id
+),
+queued_file_parts AS (
+    SELECT p.id, row_number() OVER (ORDER BY p.created_at ASC, p.part_number ASC) AS queue_position
+    FROM file_parts p
+    JOIN updated f ON f.id = p.file_id
+    WHERE p.telegram_deleted_at IS NULL
+),
+queued_cleanup AS (
+    UPDATE file_parts p
+    SET telegram_delete_available_at = $3 + ((q.queue_position - 1) * interval '15 seconds'),
+        telegram_delete_error = NULL
+    FROM queued_file_parts q
+    WHERE p.id = q.id
+    RETURNING p.id
 )
 SELECT COUNT(*) FROM updated`,
 		ownerID,

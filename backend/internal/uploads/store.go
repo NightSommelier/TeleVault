@@ -67,8 +67,9 @@ type UploadPart struct {
 }
 
 type TelegramCleanupArtifact struct {
+	Source           string
 	PartID           string
-	UploadID         string
+	ResourceID       string
 	OwnerID          string
 	OwnerTelegramID  int64
 	EncryptedSession []byte
@@ -718,15 +719,31 @@ func (s *Store) PendingTelegramCleanupArtifacts(ctx context.Context, limit int) 
 	}
 
 	rows, err := s.db.QueryContext(ctx, `
-SELECT p.id, p.upload_id, u.owner_id, users.telegram_id, ts.encrypted_session, ts.storage_peer, p.telegram_peer, p.telegram_message_id
-FROM upload_parts p
-JOIN uploads u ON u.id = p.upload_id
-JOIN users ON users.id = u.owner_id
-JOIN telegram_sessions ts ON ts.user_id = u.owner_id
-WHERE u.status = 'expired'
-  AND p.telegram_message_id IS NOT NULL
-  AND p.telegram_deleted_at IS NULL
-ORDER BY p.created_at ASC
+SELECT cleanup_source, part_id, resource_id, owner_id, telegram_id, encrypted_session, storage_peer, telegram_peer, telegram_message_id
+FROM (
+    SELECT 'upload_part' AS cleanup_source, p.id AS part_id, p.upload_id AS resource_id,
+           u.owner_id, users.telegram_id, ts.encrypted_session, ts.storage_peer,
+           p.telegram_peer, p.telegram_message_id, p.created_at
+    FROM upload_parts p
+    JOIN uploads u ON u.id = p.upload_id
+    JOIN users ON users.id = u.owner_id
+    JOIN telegram_sessions ts ON ts.user_id = u.owner_id
+    WHERE u.status = 'expired'
+      AND p.telegram_message_id IS NOT NULL
+      AND p.telegram_deleted_at IS NULL
+    UNION ALL
+    SELECT 'file_part' AS cleanup_source, p.id AS part_id, p.file_id AS resource_id,
+           f.owner_id, users.telegram_id, ts.encrypted_session, ts.storage_peer,
+           p.telegram_peer, p.telegram_message_id, p.created_at
+    FROM file_parts p
+    JOIN files f ON f.id = p.file_id
+    JOIN users ON users.id = f.owner_id
+    JOIN telegram_sessions ts ON ts.user_id = f.owner_id
+    WHERE f.deleted_at IS NOT NULL
+      AND p.telegram_deleted_at IS NULL
+      AND p.telegram_delete_available_at <= now()
+) cleanup
+ORDER BY created_at ASC
 LIMIT $1`,
 		limit,
 	)
@@ -739,8 +756,9 @@ LIMIT $1`,
 	for rows.Next() {
 		var artifact TelegramCleanupArtifact
 		if err := rows.Scan(
+			&artifact.Source,
 			&artifact.PartID,
-			&artifact.UploadID,
+			&artifact.ResourceID,
 			&artifact.OwnerID,
 			&artifact.OwnerTelegramID,
 			&artifact.EncryptedSession,
@@ -796,8 +814,27 @@ LIMIT $2`,
 }
 
 func (s *Store) MarkTelegramArtifactDeleted(ctx context.Context, partID string, now time.Time) error {
-	_, err := s.db.ExecContext(ctx, `
+	result, err := s.db.ExecContext(ctx, `
 UPDATE upload_parts
+SET telegram_deleted_at = $2,
+    telegram_delete_error = NULL
+WHERE id = $1`,
+		partID,
+		now,
+	)
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows > 0 {
+		return nil
+	}
+
+	_, err = s.db.ExecContext(ctx, `
+UPDATE file_parts
 SET telegram_deleted_at = $2,
     telegram_delete_error = NULL
 WHERE id = $1`,
@@ -847,9 +884,28 @@ func (s *Store) MarkTelegramArtifactDeleteFailed(ctx context.Context, partID str
 		message = message[:1000]
 	}
 
-	_, err := s.db.ExecContext(ctx, `
+	result, err := s.db.ExecContext(ctx, `
 UPDATE upload_parts
 SET telegram_delete_error = NULLIF($2, '')
+WHERE id = $1`,
+		partID,
+		message,
+	)
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows > 0 {
+		return nil
+	}
+
+	_, err = s.db.ExecContext(ctx, `
+UPDATE file_parts
+SET telegram_delete_error = NULLIF($2, ''),
+    telegram_delete_available_at = now() + interval '5 minutes'
 WHERE id = $1`,
 		partID,
 		message,
