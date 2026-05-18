@@ -16,6 +16,20 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/televault/TeleVault/backend/internal/auth"
+	appconfig "github.com/televault/TeleVault/backend/internal/config"
+	"github.com/televault/TeleVault/backend/internal/crypto/secrets"
+	"github.com/televault/TeleVault/backend/internal/db"
+	"github.com/televault/TeleVault/backend/internal/telegramauth"
+	"github.com/televault/TeleVault/backend/internal/uploads"
+)
+
+const smokeWorkerID = "smoke-worker"
+
+var (
+	errPartStaged       = errors.New("upload part staged")
+	errUploadIncomplete = errors.New("upload incomplete")
 )
 
 func main() {
@@ -90,7 +104,12 @@ func run(ctx context.Context, cfg config, logger *slog.Logger) error {
 	logger.Info("smoke upload created", "upload_id", uploadID)
 
 	if err := uploadPart(ctx, client, cfg, cookies, uploadID, input); err != nil {
-		return err
+		if !errors.Is(err, errPartStaged) {
+			return err
+		}
+		if err := drainStagedPart(ctx, logger); err != nil {
+			return err
+		}
 	}
 	logger.Info("smoke part uploaded", "upload_id", uploadID)
 
@@ -164,6 +183,9 @@ func uploadPart(ctx context.Context, client *http.Client, cfg config, cookies co
 		return err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusAccepted {
+		return errPartStaged
+	}
 	if resp.StatusCode != http.StatusCreated {
 		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("upload part returned %s: %s", resp.Status, strings.TrimSpace(string(body)))
@@ -178,12 +200,69 @@ func completeUpload(ctx context.Context, client *http.Client, cfg config, cookie
 		} `json:"file"`
 	}
 	if err := postJSON(ctx, client, cfg.BaseURL+"/uploads/"+uploadID+"/complete", cookies, nil, &response); err != nil {
+		if strings.Contains(err.Error(), "upload_incomplete") {
+			return "", errUploadIncomplete
+		}
 		return "", err
 	}
 	if response.File.ID == "" {
 		return "", errors.New("complete response missing file id")
 	}
 	return response.File.ID, nil
+}
+
+func drainStagedPart(ctx context.Context, logger *slog.Logger) error {
+	cfg, err := appconfig.Load()
+	if err != nil {
+		return fmt.Errorf("load app config for smoke worker: %w", err)
+	}
+	telegramSessionKey, err := secrets.ParseBase64Key(cfg.TelegramSessionKey)
+	if err != nil {
+		return fmt.Errorf("parse telegram session key: %w", err)
+	}
+	secretsBox, err := secrets.NewBox(telegramSessionKey)
+	if err != nil {
+		return fmt.Errorf("initialize telegram session crypto: %w", err)
+	}
+	telegramAppID, err := cfg.TelegramAppID()
+	if err != nil {
+		return fmt.Errorf("parse telegram api id: %w", err)
+	}
+
+	database, err := db.Open(cfg.DatabaseURL)
+	if err != nil {
+		return fmt.Errorf("open database for smoke worker: %w", err)
+	}
+	defer database.Close()
+
+	spool, err := uploads.NewLocalSpool(cfg.UploadStagingDir)
+	if err != nil {
+		return fmt.Errorf("open upload staging for smoke worker: %w", err)
+	}
+	worker, err := uploads.NewDrainWorker(
+		uploads.NewStore(database),
+		spool,
+		auth.NewTelegramSessionCrypto(secretsBox),
+		telegramauth.NewClient(telegramAppID, cfg.TelegramAPIHash),
+		uploads.WorkerSettings{
+			WorkerID:      smokeWorkerID,
+			LeaseDuration: 5 * time.Minute,
+			UploadTimeout: 30 * time.Minute,
+		},
+	)
+	if err != nil {
+		return fmt.Errorf("initialize smoke worker: %w", err)
+	}
+
+	worked, err := worker.DrainOne(ctx)
+	if err != nil {
+		return fmt.Errorf("drain staged part: %w", err)
+	}
+	if !worked {
+		return errUploadIncomplete
+	}
+	logger.Info("smoke staged part drained")
+	return nil
 }
 
 func downloadFile(ctx context.Context, client *http.Client, cfg config, cookies cookies, fileID string) ([]byte, error) {
