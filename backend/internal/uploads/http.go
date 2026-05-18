@@ -364,7 +364,15 @@ func uploadPartResponse(part UploadPart) map[string]any {
 		"telegram_peer":       nullableStringValue(part.TelegramPeer),
 		"telegram_message_id": nullableInt64Value(part.MessageID),
 		"status":              part.Status,
+		"storage_backend":     nullableStringValue(part.StorageBackend),
+		"storage_key":         nullableStringValue(part.StorageKey),
+		"available_at":        part.AvailableAt,
+		"leased_until":        nullableTimeValue(part.LeasedUntil),
+		"attempts":            part.Attempts,
+		"last_error":          nullableStringValue(part.LastError),
+		"worker_id":           nullableStringValue(part.WorkerID),
 		"created_at":          part.CreatedAt,
+		"updated_at":          part.UpdatedAt,
 	}
 }
 
@@ -406,6 +414,13 @@ func nullableInt64Value(value sql.NullInt64) any {
 		return nil
 	}
 	return value.Int64
+}
+
+func nullableTimeValue(value sql.NullTime) any {
+	if !value.Valid {
+		return nil
+	}
+	return value.Time
 }
 
 func writeError(w http.ResponseWriter, status int, code string) {

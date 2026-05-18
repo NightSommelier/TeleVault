@@ -17,6 +17,7 @@ var ErrUploadIncomplete = errors.New("upload incomplete")
 var ErrUploadSizeMismatch = errors.New("upload size mismatch")
 var ErrUploadChecksumMismatch = errors.New("upload checksum mismatch")
 var ErrUploadPartOutOfOrder = errors.New("upload part out of order")
+var ErrUploadPartNotFound = errors.New("upload part not found")
 
 const (
 	StatusPending   = "pending"
@@ -54,7 +55,15 @@ type UploadPart struct {
 	TelegramPeer   sql.NullString
 	MessageID      sql.NullInt64
 	Status         string
+	StorageBackend sql.NullString
+	StorageKey     sql.NullString
+	AvailableAt    time.Time
+	LeasedUntil    sql.NullTime
+	Attempts       int
+	LastError      sql.NullString
+	WorkerID       sql.NullString
 	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
 type TelegramCleanupArtifact struct {
@@ -112,6 +121,31 @@ type CompletePartParams struct {
 	TelegramPeer   string
 	MessageID      int64
 	Now            time.Time
+}
+
+type StagePartParams struct {
+	OwnerID        string
+	UploadID       string
+	PartNumber     int
+	PlaintextSize  int64
+	CiphertextSize int64
+	Checksum       []byte
+	StorageBackend string
+	StorageKey     string
+	AvailableAt    time.Time
+	Now            time.Time
+}
+
+type ClaimQueuedPartParams struct {
+	WorkerID      string
+	Now           time.Time
+	LeaseDuration time.Duration
+}
+
+type RetryPartParams struct {
+	PartID      string
+	LastError   string
+	AvailableAt time.Time
 }
 
 type CompleteUploadParams struct {
@@ -207,7 +241,6 @@ WHERE id = $1
 	if nextPartNumber != params.PartNumber {
 		return UploadPart{}, ErrUploadPartOutOfOrder
 	}
-
 	part, err := scanUploadPart(tx.QueryRowContext(ctx, `
 INSERT INTO upload_parts (upload_id, part_number, plaintext_size, ciphertext_size, checksum, telegram_peer, telegram_message_id, status)
 VALUES ($1, $2, $3, $4, $5, NULLIF($6, ''), $7, 'complete')
@@ -218,8 +251,14 @@ DO UPDATE SET
     checksum = EXCLUDED.checksum,
     telegram_peer = EXCLUDED.telegram_peer,
     telegram_message_id = EXCLUDED.telegram_message_id,
-    status = 'complete'
-RETURNING id, upload_id, part_number, plaintext_size, ciphertext_size, checksum, telegram_peer, telegram_message_id, status, created_at`,
+    status = 'complete',
+    leased_until = NULL,
+    last_error = NULL,
+    worker_id = NULL,
+    updated_at = now()
+WHERE upload_parts.status != 'complete'
+RETURNING id, upload_id, part_number, plaintext_size, ciphertext_size, checksum, telegram_peer, telegram_message_id,
+          status, storage_backend, storage_key, available_at, leased_until, attempts, last_error, worker_id, created_at, updated_at`,
 		params.UploadID,
 		params.PartNumber,
 		params.PlaintextSize,
@@ -268,6 +307,213 @@ WHERE id = $1
 	return part, nil
 }
 
+func (s *Store) StagePart(ctx context.Context, params StagePartParams) (UploadPart, error) {
+	if params.StorageBackend == "" || params.StorageKey == "" {
+		return UploadPart{}, errors.New("storage backend and key are required")
+	}
+	if params.AvailableAt.IsZero() {
+		params.AvailableAt = params.Now
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return UploadPart{}, err
+	}
+	defer tx.Rollback()
+
+	var expiresAt time.Time
+	err = tx.QueryRowContext(ctx, `
+SELECT expires_at
+FROM uploads
+WHERE id = $1
+  AND owner_id = $2
+  AND status IN ('pending', 'uploading')`,
+		params.UploadID,
+		params.OwnerID,
+	).Scan(&expiresAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return UploadPart{}, ErrUploadNotFound
+	}
+	if err != nil {
+		return UploadPart{}, err
+	}
+	if !expiresAt.After(params.Now) {
+		if _, err := tx.ExecContext(ctx, `
+UPDATE uploads
+SET status = 'expired', updated_at = now()
+WHERE id = $1
+  AND owner_id = $2
+  AND status IN ('pending', 'uploading')`,
+			params.UploadID,
+			params.OwnerID,
+		); err != nil {
+			return UploadPart{}, err
+		}
+		return UploadPart{}, ErrUploadExpired
+	}
+	part, err := scanUploadPart(tx.QueryRowContext(ctx, `
+INSERT INTO upload_parts (
+    upload_id, part_number, plaintext_size, ciphertext_size, checksum, status,
+    storage_backend, storage_key, available_at
+)
+VALUES ($1, $2, $3, $4, $5, 'pending', $6, $7, $8)
+ON CONFLICT (upload_id, part_number)
+DO UPDATE SET
+    plaintext_size = EXCLUDED.plaintext_size,
+    ciphertext_size = EXCLUDED.ciphertext_size,
+    checksum = EXCLUDED.checksum,
+    status = 'pending',
+    storage_backend = EXCLUDED.storage_backend,
+    storage_key = EXCLUDED.storage_key,
+    available_at = EXCLUDED.available_at,
+    leased_until = NULL,
+    last_error = NULL,
+    worker_id = NULL,
+    updated_at = now()
+WHERE upload_parts.status != 'complete'
+RETURNING id, upload_id, part_number, plaintext_size, ciphertext_size, checksum, telegram_peer, telegram_message_id,
+          status, storage_backend, storage_key, available_at, leased_until, attempts, last_error, worker_id, created_at, updated_at`,
+		params.UploadID,
+		params.PartNumber,
+		params.PlaintextSize,
+		params.CiphertextSize,
+		nullableBytes(params.Checksum),
+		params.StorageBackend,
+		params.StorageKey,
+		params.AvailableAt,
+	))
+	if errors.Is(err, sql.ErrNoRows) {
+		return UploadPart{}, ErrUploadPartOutOfOrder
+	}
+	if err != nil {
+		return UploadPart{}, err
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+UPDATE uploads
+SET status = 'uploading', updated_at = now()
+WHERE id = $1
+  AND owner_id = $2
+  AND status IN ('pending', 'uploading')`,
+		params.UploadID,
+		params.OwnerID,
+	); err != nil {
+		return UploadPart{}, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return UploadPart{}, err
+	}
+
+	return part, nil
+}
+
+func (s *Store) ClaimQueuedPart(ctx context.Context, params ClaimQueuedPartParams) (UploadPart, error) {
+	if params.WorkerID == "" {
+		return UploadPart{}, errors.New("worker id is required")
+	}
+	if params.LeaseDuration <= 0 {
+		return UploadPart{}, errors.New("lease duration must be positive")
+	}
+
+	part := UploadPart{}
+	err := s.db.QueryRowContext(ctx, `
+WITH next_part AS (
+    SELECT p.id
+    FROM upload_parts p
+    JOIN uploads u ON u.id = p.upload_id
+    WHERE p.status = 'pending'
+      AND p.storage_backend IS NOT NULL
+      AND p.storage_key IS NOT NULL
+      AND p.available_at <= $1
+      AND (p.leased_until IS NULL OR p.leased_until <= $1)
+      AND u.status IN ('pending', 'uploading')
+      AND u.expires_at > $1
+    ORDER BY p.available_at ASC, p.created_at ASC
+    FOR UPDATE SKIP LOCKED
+    LIMIT 1
+)
+UPDATE upload_parts p
+SET leased_until = $2,
+    attempts = p.attempts + 1,
+    last_error = NULL,
+    worker_id = $3,
+    updated_at = now()
+FROM next_part
+WHERE p.id = next_part.id
+RETURNING p.id, p.upload_id, p.part_number, p.plaintext_size, p.ciphertext_size, p.checksum,
+          p.telegram_peer, p.telegram_message_id, p.status, p.storage_backend, p.storage_key,
+          p.available_at, p.leased_until, p.attempts, p.last_error, p.worker_id, p.created_at, p.updated_at`,
+		params.Now,
+		params.Now.Add(params.LeaseDuration),
+		params.WorkerID,
+	).Scan(
+		&part.ID,
+		&part.UploadID,
+		&part.PartNumber,
+		&part.PlaintextSize,
+		&part.CiphertextSize,
+		&part.Checksum,
+		&part.TelegramPeer,
+		&part.MessageID,
+		&part.Status,
+		&part.StorageBackend,
+		&part.StorageKey,
+		&part.AvailableAt,
+		&part.LeasedUntil,
+		&part.Attempts,
+		&part.LastError,
+		&part.WorkerID,
+		&part.CreatedAt,
+		&part.UpdatedAt,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return UploadPart{}, ErrUploadPartNotFound
+	}
+	if err != nil {
+		return UploadPart{}, err
+	}
+	return part, nil
+}
+
+func (s *Store) RetryQueuedPart(ctx context.Context, params RetryPartParams) error {
+	message := truncateError(params.LastError)
+	_, err := s.db.ExecContext(ctx, `
+UPDATE upload_parts
+SET available_at = $2,
+    leased_until = NULL,
+    last_error = NULLIF($3, ''),
+    worker_id = NULL,
+    updated_at = now()
+WHERE id = $1
+  AND status = 'pending'`,
+		params.PartID,
+		params.AvailableAt,
+		message,
+	)
+	return err
+}
+
+func (s *Store) FailQueuedPart(ctx context.Context, partID string, failure error) error {
+	message := ""
+	if failure != nil {
+		message = failure.Error()
+	}
+	message = truncateError(message)
+	_, err := s.db.ExecContext(ctx, `
+UPDATE upload_parts
+SET status = 'failed',
+    leased_until = NULL,
+    last_error = NULLIF($2, ''),
+    worker_id = NULL,
+    updated_at = now()
+WHERE id = $1`,
+		partID,
+		message,
+	)
+	return err
+}
+
 func (s *Store) MarkPartFailed(ctx context.Context, ownerID string, uploadID string, partNumber int) error {
 	_, err := s.db.ExecContext(ctx, `
 INSERT INTO upload_parts (upload_id, part_number, status)
@@ -277,7 +523,11 @@ WHERE id = $1
   AND owner_id = $2
   AND status IN ('pending', 'uploading')
 ON CONFLICT (upload_id, part_number)
-DO UPDATE SET status = 'failed'`,
+DO UPDATE SET
+    status = 'failed',
+    leased_until = NULL,
+    worker_id = NULL,
+    updated_at = now()`,
 		uploadID,
 		ownerID,
 		partNumber,
@@ -670,7 +920,15 @@ func scanUploadPart(row rowScanner) (UploadPart, error) {
 		&part.TelegramPeer,
 		&part.MessageID,
 		&part.Status,
+		&part.StorageBackend,
+		&part.StorageKey,
+		&part.AvailableAt,
+		&part.LeasedUntil,
+		&part.Attempts,
+		&part.LastError,
+		&part.WorkerID,
 		&part.CreatedAt,
+		&part.UpdatedAt,
 	)
 	if err != nil {
 		return UploadPart{}, err
@@ -680,7 +938,8 @@ func scanUploadPart(row rowScanner) (UploadPart, error) {
 
 func completeParts(ctx context.Context, q queryer, uploadID string) ([]UploadPart, error) {
 	rows, err := q.QueryContext(ctx, `
-SELECT id, upload_id, part_number, plaintext_size, ciphertext_size, checksum, telegram_peer, telegram_message_id, status, created_at
+SELECT id, upload_id, part_number, plaintext_size, ciphertext_size, checksum, telegram_peer, telegram_message_id,
+       status, storage_backend, storage_key, available_at, leased_until, attempts, last_error, worker_id, created_at, updated_at
 FROM upload_parts
 WHERE upload_id = $1
   AND status = 'complete'
@@ -764,6 +1023,13 @@ func bytesEqual(a []byte, b []byte) bool {
 		result |= a[i] ^ b[i]
 	}
 	return result == 0
+}
+
+func truncateError(message string) string {
+	if len(message) > 1000 {
+		return message[:1000]
+	}
+	return message
 }
 
 func checksumFromState(state []byte) ([]byte, error) {

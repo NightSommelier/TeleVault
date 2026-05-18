@@ -175,6 +175,111 @@ func TestFilesUploadsPersistenceOwnerIsolationAndCompletion(t *testing.T) {
 	}
 }
 
+func TestUploadPartQueueLeaseRetryAndFail(t *testing.T) {
+	database := openIntegrationDB(t)
+	sessionStore := auth.NewSessionStore(database)
+	uploadStore := uploads.NewStore(database)
+	ctx := context.Background()
+
+	owner, cleanupOwner := createUserThroughLogin(t, database, sessionStore, 935_000_000_000+time.Now().UnixNano()%1_000_000_000)
+	defer cleanupOwner()
+
+	now := time.Now().UTC()
+	upload, err := uploadStore.Create(ctx, uploads.CreateUploadParams{
+		OwnerID:       owner.ID,
+		Name:          "queue.bin",
+		PlaintextSize: 10,
+		PartSize:      5,
+		ExpiresAt:     now.Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("Create upload error = %v", err)
+	}
+
+	if _, err := uploadStore.StagePart(ctx, uploads.StagePartParams{
+		OwnerID:        owner.ID,
+		UploadID:       upload.ID,
+		PartNumber:     2,
+		PlaintextSize:  5,
+		CiphertextSize: 10,
+		Checksum:       []byte("part-2"),
+		StorageBackend: "local",
+		StorageKey:     "queue.bin.part-2",
+		AvailableAt:    now.Add(time.Minute),
+		Now:            now,
+	}); err != nil {
+		t.Fatalf("StagePart(2) error = %v", err)
+	}
+	staged, err := uploadStore.StagePart(ctx, uploads.StagePartParams{
+		OwnerID:        owner.ID,
+		UploadID:       upload.ID,
+		PartNumber:     1,
+		PlaintextSize:  5,
+		CiphertextSize: 9,
+		Checksum:       []byte("part-1"),
+		StorageBackend: "local",
+		StorageKey:     "queue.bin.part-1",
+		AvailableAt:    now,
+		Now:            now,
+	})
+	if err != nil {
+		t.Fatalf("StagePart(1) error = %v", err)
+	}
+	if staged.StorageBackend.String != "local" || staged.StorageKey.String != "queue.bin.part-1" {
+		t.Fatalf("StagePart() storage = %q/%q, want local/queue.bin.part-1", staged.StorageBackend.String, staged.StorageKey.String)
+	}
+
+	claimed, err := uploadStore.ClaimQueuedPart(ctx, uploads.ClaimQueuedPartParams{
+		WorkerID:      "worker-a",
+		Now:           now,
+		LeaseDuration: time.Minute,
+	})
+	if err != nil {
+		t.Fatalf("ClaimQueuedPart() error = %v", err)
+	}
+	if claimed.ID != staged.ID || claimed.Attempts != 1 || claimed.WorkerID.String != "worker-a" || !claimed.LeasedUntil.Valid {
+		t.Fatalf("ClaimQueuedPart() = %+v, want staged part leased by worker-a with attempts=1", claimed)
+	}
+
+	if _, err := uploadStore.ClaimQueuedPart(ctx, uploads.ClaimQueuedPartParams{
+		WorkerID:      "worker-b",
+		Now:           now,
+		LeaseDuration: time.Minute,
+	}); !errors.Is(err, uploads.ErrUploadPartNotFound) {
+		t.Fatalf("second ClaimQueuedPart() error = %v, want ErrUploadPartNotFound", err)
+	}
+
+	if err := uploadStore.RetryQueuedPart(ctx, uploads.RetryPartParams{
+		PartID:      claimed.ID,
+		LastError:   "FLOOD_WAIT_30",
+		AvailableAt: now.Add(30 * time.Second),
+	}); err != nil {
+		t.Fatalf("RetryQueuedPart() error = %v", err)
+	}
+	if _, err := uploadStore.ClaimQueuedPart(ctx, uploads.ClaimQueuedPartParams{
+		WorkerID:      "worker-b",
+		Now:           now.Add(31 * time.Second),
+		LeaseDuration: time.Minute,
+	}); err != nil {
+		t.Fatalf("ClaimQueuedPart() after retry error = %v", err)
+	}
+
+	if err := uploadStore.FailQueuedPart(ctx, staged.ID, errors.New("permanent failure")); err != nil {
+		t.Fatalf("FailQueuedPart() error = %v", err)
+	}
+	next, err := uploadStore.ClaimQueuedPart(ctx, uploads.ClaimQueuedPartParams{
+		WorkerID:      "worker-c",
+		Now:           now.Add(2 * time.Minute),
+		LeaseDuration: time.Minute,
+	})
+	if err != nil {
+		t.Fatalf("ClaimQueuedPart() after fail error = %v", err)
+	}
+	if next.PartNumber != 2 {
+		t.Fatalf("ClaimQueuedPart() after fail part number = %d, want next queued part 2", next.PartNumber)
+	}
+}
+
 func TestAdminUploadSettingsVaultUploadPartSize(t *testing.T) {
 	database := openIntegrationDB(t)
 	sessionStore := auth.NewSessionStore(database)
@@ -376,13 +481,13 @@ func ensureLatestMigration(t *testing.T, database *sql.DB) {
 SELECT EXISTS (
     SELECT 1
     FROM schema_migrations
-    WHERE version = '000009'
+    WHERE version = '000010'
 )`).Scan(&exists)
 	if err != nil {
 		t.Fatalf("schema migration check failed: %v", err)
 	}
 	if !exists {
-		t.Fatalf("TEST_DATABASE_URL database is not migrated through 000009; run go run ./cmd/migrate up first")
+		t.Fatalf("TEST_DATABASE_URL database is not migrated through 000010; run go run ./cmd/migrate up first")
 	}
 }
 
