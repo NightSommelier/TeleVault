@@ -11,8 +11,8 @@ import (
 
 	"filippo.io/age"
 
-	"github.com/televault/TeleVault/backend/internal/auth"
-	"github.com/televault/TeleVault/backend/internal/crypto/agefile"
+	"gitrepo.pp.ua/Sommelier/TeleDriveVault/backend/internal/auth"
+	"gitrepo.pp.ua/Sommelier/TeleDriveVault/backend/internal/crypto/agefile"
 )
 
 type Handler struct {

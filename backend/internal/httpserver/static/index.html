@@ -1,0 +1,524 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TeleDrive Vault</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f7f8fa;
+      --panel: #ffffff;
+      --ink: #1b1f24;
+      --muted: #68707c;
+      --line: #d9dee7;
+      --primary: #0f766e;
+      --primary-ink: #ffffff;
+      --danger: #b42318;
+      --warn: #a15c07;
+      --ok: #167f3b;
+      --soft: #eef6f5;
+      --shadow: 0 1px 2px rgba(16, 24, 40, .06);
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font: 14px/1.45 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--ink);
+      background: var(--bg);
+    }
+    button, input { font: inherit; }
+    button {
+      border: 1px solid var(--line);
+      background: var(--panel);
+      color: var(--ink);
+      min-height: 36px;
+      padding: 0 12px;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+    button.primary {
+      border-color: var(--primary);
+      background: var(--primary);
+      color: var(--primary-ink);
+    }
+    button:disabled { opacity: .55; cursor: not-allowed; }
+    input[type="file"] { max-width: 100%; }
+    .shell {
+      min-height: 100vh;
+      display: grid;
+      grid-template-rows: auto 1fr;
+    }
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 14px 18px;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel);
+    }
+    .brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
+    .mark {
+      width: 30px;
+      height: 30px;
+      border-radius: 7px;
+      background: var(--primary);
+      display: grid;
+      place-items: center;
+      color: white;
+      font-weight: 700;
+    }
+    h1 { font-size: 17px; margin: 0; font-weight: 650; }
+    .userbar { display: flex; align-items: center; gap: 10px; color: var(--muted); min-width: 0; }
+    main {
+      display: grid;
+      grid-template-columns: 280px minmax(0, 1fr);
+      min-height: 0;
+    }
+    aside {
+      border-right: 1px solid var(--line);
+      background: #fbfcfe;
+      padding: 16px;
+    }
+    section { padding: 18px; min-width: 0; }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+    }
+    .panel + .panel { margin-top: 14px; }
+    .panel-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+    }
+    .panel-title { font-weight: 650; }
+    .panel-body { padding: 14px; }
+    .muted { color: var(--muted); }
+    .hidden { display: none !important; }
+    .qr {
+      width: min(260px, 100%);
+      aspect-ratio: 1;
+      image-rendering: pixelated;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: white;
+    }
+    .actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .stack { display: grid; gap: 12px; }
+    .status {
+      min-height: 20px;
+      color: var(--muted);
+      overflow-wrap: anywhere;
+    }
+    .status.error { color: var(--danger); }
+    .table {
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+    }
+    .table th, .table td {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: middle;
+      overflow-wrap: anywhere;
+    }
+    .table th {
+      font-size: 12px;
+      color: var(--muted);
+      font-weight: 650;
+      background: #fbfcfe;
+    }
+    .table tr:last-child td { border-bottom: 0; }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      min-height: 24px;
+      padding: 0 8px;
+      border-radius: 999px;
+      background: #eef2f6;
+      color: #3d4652;
+      font-size: 12px;
+      white-space: nowrap;
+    }
+    .badge.ok { background: #e7f6ed; color: var(--ok); }
+    .badge.warn { background: #fff3df; color: var(--warn); }
+    .badge.error { background: #ffe9e7; color: var(--danger); }
+    progress {
+      width: 100%;
+      height: 10px;
+      accent-color: var(--primary);
+    }
+    .upload-row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+      align-items: center;
+    }
+    .login-view {
+      display: grid;
+      place-items: center;
+      min-height: calc(100vh - 60px);
+      padding: 20px;
+    }
+    .login-box {
+      width: min(420px, 100%);
+      padding: 18px;
+    }
+    @media (max-width: 760px) {
+      main { grid-template-columns: 1fr; }
+      aside { border-right: 0; border-bottom: 1px solid var(--line); }
+      header { align-items: flex-start; }
+      .userbar { flex-direction: column; align-items: flex-end; }
+      .table th:nth-child(3), .table td:nth-child(3) { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header>
+      <div class="brand">
+        <div class="mark">TV</div>
+        <h1>TeleDrive Vault</h1>
+      </div>
+      <div id="userbar" class="userbar hidden">
+        <span id="userName"></span>
+        <button id="logoutBtn">Log out</button>
+      </div>
+    </header>
+
+    <div id="loginView" class="login-view">
+      <div class="panel login-box">
+        <div class="panel-head">
+          <div class="panel-title">Telegram sign in</div>
+          <button id="startQrBtn" class="primary">Start QR</button>
+        </div>
+        <div class="panel-body stack">
+          <img id="qrImage" class="qr hidden" alt="Telegram login QR code">
+          <div id="loginStatus" class="status">Not signed in.</div>
+        </div>
+      </div>
+    </div>
+
+    <main id="appView" class="hidden">
+      <aside>
+        <div class="panel">
+          <div class="panel-head">
+            <div class="panel-title">Upload</div>
+          </div>
+          <div class="panel-body stack">
+            <input id="fileInput" type="file">
+            <button id="uploadBtn" class="primary">Upload</button>
+            <div id="uploadStatus" class="status"></div>
+            <progress id="uploadProgress" value="0" max="100"></progress>
+          </div>
+        </div>
+      </aside>
+
+      <section>
+        <div class="panel">
+          <div class="panel-head">
+            <div class="panel-title">Files</div>
+            <button id="refreshBtn">Refresh</button>
+          </div>
+          <div class="panel-body">
+            <table class="table">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Status</th>
+                  <th>Size</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="filesBody">
+                <tr><td colspan="4" class="muted">No files loaded.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const state = {
+      user: null,
+      qrLoginId: null,
+      qrTimer: null,
+      uploadTimer: null,
+    };
+
+    const el = {
+      loginView: document.getElementById('loginView'),
+      appView: document.getElementById('appView'),
+      userbar: document.getElementById('userbar'),
+      userName: document.getElementById('userName'),
+      startQrBtn: document.getElementById('startQrBtn'),
+      qrImage: document.getElementById('qrImage'),
+      loginStatus: document.getElementById('loginStatus'),
+      logoutBtn: document.getElementById('logoutBtn'),
+      refreshBtn: document.getElementById('refreshBtn'),
+      filesBody: document.getElementById('filesBody'),
+      fileInput: document.getElementById('fileInput'),
+      uploadBtn: document.getElementById('uploadBtn'),
+      uploadStatus: document.getElementById('uploadStatus'),
+      uploadProgress: document.getElementById('uploadProgress'),
+    };
+
+    function csrfToken() {
+      const found = document.cookie.split('; ').find((entry) => entry.startsWith('td_csrf='));
+      return found ? decodeURIComponent(found.slice('td_csrf='.length)) : '';
+    }
+
+    async function api(path, options = {}) {
+      const headers = new Headers(options.headers || {});
+      if (options.body && !(options.body instanceof Blob) && !headers.has('Content-Type')) {
+        headers.set('Content-Type', 'application/json');
+      }
+      if (options.csrf) headers.set('X-CSRF-Token', csrfToken());
+      const response = await fetch(path, {
+        ...options,
+        headers,
+        credentials: 'same-origin',
+      });
+      if (!response.ok) {
+        let message = response.statusText;
+        try {
+          const body = await response.json();
+          message = body.error || message;
+        } catch (_) {}
+        throw new Error(message);
+      }
+      if (response.status === 204) return null;
+      return response.json();
+    }
+
+    function showApp(user) {
+      state.user = user;
+      el.loginView.classList.add('hidden');
+      el.appView.classList.remove('hidden');
+      el.userbar.classList.remove('hidden');
+      el.userName.textContent = user.displayName || user.username || `Telegram ${user.telegram_id}`;
+      refreshFiles();
+    }
+
+    function showLogin(message) {
+      state.user = null;
+      el.loginView.classList.remove('hidden');
+      el.appView.classList.add('hidden');
+      el.userbar.classList.add('hidden');
+      el.loginStatus.textContent = message || 'Not signed in.';
+    }
+
+    async function loadMe() {
+      try {
+        const data = await api('/me');
+        showApp(data.user);
+      } catch (_) {
+        showLogin();
+      }
+    }
+
+    async function startQR() {
+      clearInterval(state.qrTimer);
+      el.startQrBtn.disabled = true;
+      el.loginStatus.classList.remove('error');
+      el.loginStatus.textContent = 'Starting...';
+      try {
+        const data = await api('/auth/telegram/qr/start', { method: 'POST' });
+        updateQR(data.qr_login);
+        state.qrTimer = setInterval(pollQR, 2000);
+      } catch (err) {
+        el.loginStatus.classList.add('error');
+        el.loginStatus.textContent = err.message;
+      } finally {
+        el.startQrBtn.disabled = false;
+      }
+    }
+
+    function updateQR(qr) {
+      state.qrLoginId = qr.id;
+      if (qr.qr_image_url) {
+        el.qrImage.src = qr.qr_image_url;
+        el.qrImage.classList.remove('hidden');
+      }
+      el.loginStatus.textContent = `Expires ${new Date(qr.expires_at).toLocaleTimeString()}`;
+    }
+
+    async function pollQR() {
+      if (!state.qrLoginId) return;
+      try {
+        const data = await api('/auth/telegram/qr/complete', {
+          method: 'POST',
+          body: JSON.stringify({ qr_login_id: state.qrLoginId }),
+        });
+        if (data.status === 'pending') {
+          updateQR(data.qr_login);
+          return;
+        }
+        clearInterval(state.qrTimer);
+        el.qrImage.classList.add('hidden');
+        showApp(data.user);
+      } catch (err) {
+        clearInterval(state.qrTimer);
+        el.loginStatus.classList.add('error');
+        el.loginStatus.textContent = err.message;
+      }
+    }
+
+    async function logout() {
+      await api('/auth/logout', { method: 'POST', csrf: true });
+      showLogin('Signed out.');
+    }
+
+    async function refreshFiles() {
+      el.filesBody.innerHTML = `<tr><td colspan="4" class="muted">Loading...</td></tr>`;
+      try {
+        const data = await api('/files');
+        renderFiles(data.files || []);
+      } catch (err) {
+        el.filesBody.innerHTML = `<tr><td colspan="4" class="muted">${escapeHTML(err.message)}</td></tr>`;
+      }
+    }
+
+    function renderFiles(files) {
+      if (!files.length) {
+        el.filesBody.innerHTML = `<tr><td colspan="4" class="muted">No files.</td></tr>`;
+        return;
+      }
+      el.filesBody.innerHTML = files.map((file) => `
+        <tr>
+          <td>${escapeHTML(file.name || 'Untitled')}</td>
+          <td><span class="badge ${file.status === 'ready' ? 'ok' : 'warn'}">${escapeHTML(file.status)}</span></td>
+          <td>${formatBytes(file.plaintext_size || 0)}</td>
+          <td><button data-download="${file.id}">Download</button></td>
+        </tr>
+      `).join('');
+      el.filesBody.querySelectorAll('[data-download]').forEach((button) => {
+        button.addEventListener('click', () => {
+          window.location.href = `/files/${button.dataset.download}/download`;
+        });
+      });
+    }
+
+    async function uploadSelected() {
+      const file = el.fileInput.files[0];
+      if (!file) return;
+      el.uploadBtn.disabled = true;
+      el.uploadProgress.value = 0;
+      setUploadStatus('Hashing file...');
+      try {
+        const checksum = await sha256Hex(file);
+        const created = await api('/uploads', {
+          method: 'POST',
+          csrf: true,
+          body: JSON.stringify({
+            name: file.name,
+            mime_type: file.type || 'application/octet-stream',
+            plaintext_size: file.size,
+            checksum,
+          }),
+        });
+        await uploadParts(created.upload, file);
+        await waitUntilReady(created.upload.id);
+        await api(`/uploads/${created.upload.id}/complete`, { method: 'POST', csrf: true });
+        setUploadStatus('Upload complete.');
+        el.uploadProgress.value = 100;
+        el.fileInput.value = '';
+        await refreshFiles();
+      } catch (err) {
+        setUploadStatus(err.message, true);
+      } finally {
+        el.uploadBtn.disabled = false;
+      }
+    }
+
+    async function uploadParts(upload, file) {
+      const partSize = upload.part_size;
+      const count = upload.part_count;
+      for (let part = 1; part <= count; part++) {
+        const start = (part - 1) * partSize;
+        const end = Math.min(start + partSize, file.size);
+        setUploadStatus(`Staging part ${part} of ${count}...`);
+        const response = await fetch(`/uploads/${upload.id}/parts/${part}`, {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: {
+            'Content-Type': 'application/octet-stream',
+            'X-CSRF-Token': csrfToken(),
+          },
+          body: file.slice(start, end),
+        });
+        if (!response.ok && response.status !== 202) {
+          let message = response.statusText;
+          try {
+            const body = await response.json();
+            message = body.error || message;
+          } catch (_) {}
+          throw new Error(message);
+        }
+        el.uploadProgress.value = Math.round((part / count) * 50);
+      }
+    }
+
+    async function waitUntilReady(uploadID) {
+      clearInterval(state.uploadTimer);
+      while (true) {
+        const data = await api(`/uploads/${uploadID}`);
+        const progress = data.progress;
+        const done = progress.complete_parts;
+        const total = progress.expected_parts;
+        const queued = progress.queued_parts;
+        const leased = progress.leased_parts;
+        if (progress.failed_parts > 0) throw new Error('upload_part_failed');
+        if (progress.ready_to_complete) return;
+        setUploadStatus(`Telegram drain: ${done}/${total} complete, ${leased} active, ${queued} queued`);
+        el.uploadProgress.value = 50 + Math.round((done / Math.max(total, 1)) * 45);
+        await delay(2000);
+      }
+    }
+
+    function setUploadStatus(message, error = false) {
+      el.uploadStatus.textContent = message;
+      el.uploadStatus.classList.toggle('error', error);
+    }
+
+    async function sha256Hex(file) {
+      const digest = await crypto.subtle.digest('SHA-256', await file.arrayBuffer());
+      return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, '0')).join('');
+    }
+
+    function formatBytes(bytes) {
+      if (!bytes) return '0 B';
+      const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+      const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+      return `${(bytes / Math.pow(1024, index)).toFixed(index ? 1 : 0)} ${units[index]}`;
+    }
+
+    function escapeHTML(value) {
+      return String(value).replace(/[&<>"']/g, (char) => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+      }[char]));
+    }
+
+    function delay(ms) {
+      return new Promise((resolve) => setTimeout(resolve, ms));
+    }
+
+    el.startQrBtn.addEventListener('click', startQR);
+    el.logoutBtn.addEventListener('click', logout);
+    el.refreshBtn.addEventListener('click', refreshFiles);
+    el.uploadBtn.addEventListener('click', uploadSelected);
+    loadMe();
+  </script>
+</body>
+</html>

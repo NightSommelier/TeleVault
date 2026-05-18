@@ -10,12 +10,12 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/televault/TeleVault/backend/internal/config"
-	"github.com/televault/TeleVault/backend/internal/crypto/agefile"
-	"github.com/televault/TeleVault/backend/internal/crypto/secrets"
-	"github.com/televault/TeleVault/backend/internal/db"
-	"github.com/televault/TeleVault/backend/internal/httpserver"
-	"github.com/televault/TeleVault/backend/internal/telegramauth"
+	"gitrepo.pp.ua/Sommelier/TeleDriveVault/backend/internal/config"
+	"gitrepo.pp.ua/Sommelier/TeleDriveVault/backend/internal/crypto/agefile"
+	"gitrepo.pp.ua/Sommelier/TeleDriveVault/backend/internal/crypto/secrets"
+	"gitrepo.pp.ua/Sommelier/TeleDriveVault/backend/internal/db"
+	"gitrepo.pp.ua/Sommelier/TeleDriveVault/backend/internal/httpserver"
+	"gitrepo.pp.ua/Sommelier/TeleDriveVault/backend/internal/telegramauth"
 )
 
 func main() {

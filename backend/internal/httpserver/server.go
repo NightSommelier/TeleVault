@@ -3,20 +3,25 @@ package httpserver
 import (
 	"context"
 	"database/sql"
+	"embed"
 	"encoding/json"
+	"io/fs"
 	"log/slog"
 	"net/http"
 
 	"filippo.io/age"
-	"github.com/televault/TeleVault/backend/internal/adminsettings"
-	"github.com/televault/TeleVault/backend/internal/auth"
-	"github.com/televault/TeleVault/backend/internal/config"
-	"github.com/televault/TeleVault/backend/internal/crypto/secrets"
-	"github.com/televault/TeleVault/backend/internal/db"
-	"github.com/televault/TeleVault/backend/internal/files"
-	"github.com/televault/TeleVault/backend/internal/uploads"
-	"github.com/televault/TeleVault/backend/internal/valkey"
+	"gitrepo.pp.ua/Sommelier/TeleDriveVault/backend/internal/adminsettings"
+	"gitrepo.pp.ua/Sommelier/TeleDriveVault/backend/internal/auth"
+	"gitrepo.pp.ua/Sommelier/TeleDriveVault/backend/internal/config"
+	"gitrepo.pp.ua/Sommelier/TeleDriveVault/backend/internal/crypto/secrets"
+	"gitrepo.pp.ua/Sommelier/TeleDriveVault/backend/internal/db"
+	"gitrepo.pp.ua/Sommelier/TeleDriveVault/backend/internal/files"
+	"gitrepo.pp.ua/Sommelier/TeleDriveVault/backend/internal/uploads"
+	"gitrepo.pp.ua/Sommelier/TeleDriveVault/backend/internal/valkey"
 )
+
+//go:embed static/*
+var staticFiles embed.FS
 
 type Server struct {
 	cfg          config.Config
@@ -52,6 +57,8 @@ func New(cfg config.Config, logger *slog.Logger, database *sql.DB, secretsBox *s
 }
 
 func (s *Server) routes() {
+	s.mountStatic()
+
 	s.mux.HandleFunc("GET /healthz", s.healthz)
 	s.mux.HandleFunc("GET /readyz", s.readyz)
 
@@ -96,6 +103,23 @@ func (s *Server) routes() {
 	s.mux.Handle("GET /admin/settings", authHandler.RequireAuth(authHandler.RequireAdmin(http.HandlerFunc(adminHandler.GetSettings))))
 	s.mux.Handle("PATCH /admin/settings/upload", authHandler.RequireAuth(authHandler.RequireAdmin(authHandler.RequireCSRF(http.HandlerFunc(adminHandler.PatchUploadSettings)))))
 	s.mux.Handle("PATCH /admin/telegram-accounts/{user_id}/limits", authHandler.RequireAuth(authHandler.RequireAdmin(authHandler.RequireCSRF(http.HandlerFunc(adminHandler.PatchTelegramAccountLimit)))))
+}
+
+func (s *Server) mountStatic() {
+	staticRoot, err := fs.Sub(staticFiles, "static")
+	if err != nil {
+		panic(err)
+	}
+	fileServer := http.FileServer(http.FS(staticRoot))
+	s.mux.Handle("GET /assets/", http.StripPrefix("/assets/", fileServer))
+	s.mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		http.ServeFileFS(w, r, staticRoot, "index.html")
+	})
 }
 
 func (s *Server) healthz(w http.ResponseWriter, r *http.Request) {

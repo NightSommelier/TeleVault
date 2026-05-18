@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/televault/TeleVault/backend/internal/crypto/secrets"
+	"gitrepo.pp.ua/Sommelier/TeleDriveVault/backend/internal/crypto/secrets"
 )
 
 const telegramChallengeTTL = 10 * time.Minute

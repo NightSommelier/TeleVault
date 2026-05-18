@@ -1,4 +1,4 @@
-module github.com/televault/TeleVault/backend
+module gitrepo.pp.ua/Sommelier/TeleDriveVault/backend
 
 go 1.26.2
 

@@ -7,7 +7,7 @@ import (
 	"io"
 	"time"
 
-	"github.com/televault/TeleVault/backend/internal/auth"
+	"gitrepo.pp.ua/Sommelier/TeleDriveVault/backend/internal/auth"
 )
 
 const (

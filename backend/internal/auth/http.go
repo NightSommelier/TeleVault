@@ -2,6 +2,7 @@ package auth
 
 import (
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -9,7 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/televault/TeleVault/backend/internal/config"
+	"gitrepo.pp.ua/Sommelier/TeleDriveVault/backend/internal/config"
+	"rsc.io/qr"
 )
 
 const refreshTokenTTL = 30 * 24 * time.Hour
@@ -299,11 +301,16 @@ func (h *Handler) completeTelegramLogin(w http.ResponseWriter, r *http.Request, 
 }
 
 func qrLoginResponse(id string, token TelegramQRLoginToken) map[string]any {
+	qrImage := ""
+	if code, err := qr.Encode(token.URL, qr.M); err == nil {
+		qrImage = "data:image/png;base64," + base64.StdEncoding.EncodeToString(code.PNG())
+	}
 	return map[string]any{
 		"qr_login": map[string]any{
-			"id":         id,
-			"login_url":  token.URL,
-			"expires_at": token.ExpiresAt,
+			"id":           id,
+			"login_url":    token.URL,
+			"qr_image_url": qrImage,
+			"expires_at":   token.ExpiresAt,
 		},
 	}
 }

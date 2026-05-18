@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/televault/TeleVault/backend/internal/config"
-	"github.com/televault/TeleVault/backend/internal/db"
+	"gitrepo.pp.ua/Sommelier/TeleDriveVault/backend/internal/config"
+	"gitrepo.pp.ua/Sommelier/TeleDriveVault/backend/internal/db"
 )
 
 func main() {

@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/televault/TeleVault/backend/internal/crypto/secrets"
+	"gitrepo.pp.ua/Sommelier/TeleDriveVault/backend/internal/crypto/secrets"
 )
 
 func TestTelegramSessionCryptoRoundTrip(t *testing.T) {

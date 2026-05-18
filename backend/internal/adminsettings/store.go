@@ -6,7 +6,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/televault/TeleVault/backend/internal/config"
+	"gitrepo.pp.ua/Sommelier/TeleDriveVault/backend/internal/config"
 )
 
 var ErrInvalidSettings = errors.New("invalid admin settings")

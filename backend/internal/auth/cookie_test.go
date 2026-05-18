@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/televault/TeleVault/backend/internal/config"
+	"gitrepo.pp.ua/Sommelier/TeleDriveVault/backend/internal/config"
 )
 
 func TestSetRefreshCookieUsesSecureDefaults(t *testing.T) {

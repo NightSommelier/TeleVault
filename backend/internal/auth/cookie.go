@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/televault/TeleVault/backend/internal/config"
+	"gitrepo.pp.ua/Sommelier/TeleDriveVault/backend/internal/config"
 )
 
 const RefreshCookieName = "td_refresh"

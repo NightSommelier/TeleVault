@@ -9,12 +9,12 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/televault/TeleVault/backend/internal/auth"
-	"github.com/televault/TeleVault/backend/internal/config"
-	"github.com/televault/TeleVault/backend/internal/crypto/secrets"
-	"github.com/televault/TeleVault/backend/internal/db"
-	"github.com/televault/TeleVault/backend/internal/telegramauth"
-	"github.com/televault/TeleVault/backend/internal/uploads"
+	"gitrepo.pp.ua/Sommelier/TeleDriveVault/backend/internal/auth"
+	"gitrepo.pp.ua/Sommelier/TeleDriveVault/backend/internal/config"
+	"gitrepo.pp.ua/Sommelier/TeleDriveVault/backend/internal/crypto/secrets"
+	"gitrepo.pp.ua/Sommelier/TeleDriveVault/backend/internal/db"
+	"gitrepo.pp.ua/Sommelier/TeleDriveVault/backend/internal/telegramauth"
+	"gitrepo.pp.ua/Sommelier/TeleDriveVault/backend/internal/uploads"
 )
 
 func main() {

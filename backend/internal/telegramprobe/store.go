@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/televault/TeleVault/backend/internal/config"
+	"gitrepo.pp.ua/Sommelier/TeleDriveVault/backend/internal/config"
 )
 
 var ErrAccountNotFound = errors.New("telegram account not found")
