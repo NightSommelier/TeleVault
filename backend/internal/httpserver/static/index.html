@@ -465,6 +465,7 @@
       view: 'own',
       droppedFile: null,
       shareFile: null,
+      applyingRoute: false,
     };
 
     const el = {
@@ -534,8 +535,8 @@
       el.userbar.classList.remove('hidden');
       el.userName.textContent = user.displayName || user.username || `Telegram ${user.telegram_id}`;
       restoreFolderState();
-      renderBreadcrumbs();
-      refreshFiles();
+      if (!window.location.hash) window.location.hash = state.currentFolderId ? folderRoute(state.currentFolderId) : '#/';
+      applyRoute();
     }
 
     function showLogin(message) {
@@ -642,7 +643,7 @@
       el.filesBody.querySelectorAll('[data-open-folder]').forEach((button) => {
         button.addEventListener('click', () => {
           const folder = files.find((file) => file.id === button.dataset.openFolder);
-          openFolder(folder);
+          navigateToFolder(folder);
         });
       });
       el.filesBody.querySelectorAll('[data-download]').forEach((button) => {
@@ -675,7 +676,7 @@
     function renderFileName(file) {
       const name = escapeHTML(file.name || 'Untitled');
       if (file.type !== 'folder') return name;
-      return `<span class="folder-name"><span class="folder-mark" aria-hidden="true"></span>${name}</span>`;
+      return `<button class="link folder-name" data-open-folder="${file.id}"><span class="folder-mark" aria-hidden="true"></span>${name}</button>`;
     }
 
     function renderBreadcrumbs() {
@@ -692,6 +693,14 @@
       });
     }
 
+    function navigateToFolder(folder) {
+      if (!folder || folder.type !== 'folder') return;
+      state.currentFolderId = folder.id;
+      state.folderStack.push({ id: folder.id, name: folder.name || 'Untitled' });
+      saveFolderState();
+      setHashRoute(folderRoute(folder.id));
+    }
+
     function openFolder(folder) {
       if (!folder || folder.type !== 'folder') return;
       state.currentFolderId = folder.id;
@@ -706,7 +715,7 @@
       const parent = state.folderStack[state.folderStack.length - 1];
       state.currentFolderId = parent ? parent.id : '';
       saveFolderState();
-      refreshFiles();
+      setHashRoute(parent ? folderRoute(parent.id) : '#/');
     }
 
     function jumpToCrumb(index) {
@@ -718,14 +727,94 @@
         state.currentFolderId = state.folderStack[index].id;
       }
       saveFolderState();
-      refreshFiles();
+      setHashRoute(state.currentFolderId ? folderRoute(state.currentFolderId) : '#/');
     }
 
     function setView(view) {
       state.view = view;
       state.droppedFile = null;
-      renderBreadcrumbs();
-      refreshFiles();
+      setHashRoute(view === 'shared' ? '#/shared' : (state.currentFolderId ? folderRoute(state.currentFolderId) : '#/'));
+    }
+
+    function setHashRoute(hash) {
+      if (window.location.hash === hash) {
+        applyRoute();
+        return;
+      }
+      window.location.hash = hash;
+    }
+
+    function folderRoute(id) {
+      return `#/folder/${encodeURIComponent(id)}`;
+    }
+
+    async function applyRoute() {
+      if (!state.user || state.applyingRoute) return;
+      state.applyingRoute = true;
+      try {
+        const route = parseHashRoute();
+        if (route.view === 'shared') {
+          state.view = 'shared';
+          state.droppedFile = null;
+          renderBreadcrumbs();
+          await refreshFiles();
+          return;
+        }
+
+        state.view = 'own';
+        state.droppedFile = null;
+        if (!route.folderId) {
+          state.currentFolderId = '';
+          state.folderStack = [];
+          saveFolderState();
+          renderBreadcrumbs();
+          await refreshFiles();
+          return;
+        }
+
+        try {
+          await loadFolderRoute(route.folderId);
+        } catch (err) {
+          state.currentFolderId = '';
+          state.folderStack = [];
+          saveFolderState();
+          if (window.location.hash !== '#/') {
+            window.location.hash = '#/';
+            return;
+          }
+          setUploadStatus(err.message, true);
+        }
+        saveFolderState();
+        renderBreadcrumbs();
+        await refreshFiles();
+      } finally {
+        state.applyingRoute = false;
+      }
+    }
+
+    function parseHashRoute() {
+      const hash = window.location.hash || '#/';
+      if (hash === '#/shared') return { view: 'shared' };
+      const match = hash.match(/^#\/folder\/([^/]+)$/);
+      if (match) return { view: 'own', folderId: decodeURIComponent(match[1]) };
+      return { view: 'own', folderId: '' };
+    }
+
+    async function loadFolderRoute(folderId) {
+      const stack = [];
+      let currentID = folderId;
+      const seen = new Set();
+      while (currentID) {
+        if (seen.has(currentID)) throw new Error('folder_cycle');
+        seen.add(currentID);
+        const data = await api(`/files/${encodeURIComponent(currentID)}`);
+        const folder = data.file;
+        if (!folder || folder.type !== 'folder') throw new Error('folder_not_found');
+        stack.unshift({ id: folder.id, name: folder.name || 'Untitled' });
+        currentID = folder.parent_id || '';
+      }
+      state.currentFolderId = folderId;
+      state.folderStack = stack;
     }
 
     async function createFolder() {
@@ -1036,6 +1125,7 @@
     document.addEventListener('keydown', (event) => {
       if (event.key === 'Escape' && !el.shareModal.classList.contains('hidden')) closeShareDialog();
     });
+    window.addEventListener('hashchange', applyRoute);
     loadMe();
   </script>
 </body>
