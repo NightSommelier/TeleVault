@@ -130,6 +130,8 @@ type StagePartParams struct {
 	PlaintextSize  int64
 	CiphertextSize int64
 	Checksum       []byte
+	ChecksumState  []byte
+	UploadedSize   int64
 	StorageBackend string
 	StorageKey     string
 	AvailableAt    time.Time
@@ -146,6 +148,12 @@ type RetryPartParams struct {
 	PartID      string
 	LastError   string
 	AvailableAt time.Time
+}
+
+type MarkStagedPartUploadedParams struct {
+	PartID       string
+	TelegramPeer string
+	MessageID    int64
 }
 
 type CompleteUploadParams struct {
@@ -322,15 +330,16 @@ func (s *Store) StagePart(ctx context.Context, params StagePartParams) (UploadPa
 	defer tx.Rollback()
 
 	var expiresAt time.Time
+	var nextPartNumber int
 	err = tx.QueryRowContext(ctx, `
-SELECT expires_at
+SELECT expires_at, next_part_number
 FROM uploads
 WHERE id = $1
   AND owner_id = $2
   AND status IN ('pending', 'uploading')`,
 		params.UploadID,
 		params.OwnerID,
-	).Scan(&expiresAt)
+	).Scan(&expiresAt, &nextPartNumber)
 	if errors.Is(err, sql.ErrNoRows) {
 		return UploadPart{}, ErrUploadNotFound
 	}
@@ -350,6 +359,9 @@ WHERE id = $1
 			return UploadPart{}, err
 		}
 		return UploadPart{}, ErrUploadExpired
+	}
+	if nextPartNumber != params.PartNumber {
+		return UploadPart{}, ErrUploadPartOutOfOrder
 	}
 	part, err := scanUploadPart(tx.QueryRowContext(ctx, `
 INSERT INTO upload_parts (
@@ -389,22 +401,66 @@ RETURNING id, upload_id, part_number, plaintext_size, ciphertext_size, checksum,
 		return UploadPart{}, err
 	}
 
-	if _, err := tx.ExecContext(ctx, `
+	result, err := tx.ExecContext(ctx, `
 UPDATE uploads
-SET status = 'uploading', updated_at = now()
+SET status = 'uploading',
+    checksum_state = $3,
+    plaintext_uploaded_size = $4,
+    next_part_number = $5,
+    updated_at = now()
 WHERE id = $1
   AND owner_id = $2
-  AND status IN ('pending', 'uploading')`,
+  AND status IN ('pending', 'uploading')
+  AND next_part_number = $6`,
 		params.UploadID,
 		params.OwnerID,
-	); err != nil {
+		nullableBytes(params.ChecksumState),
+		params.UploadedSize,
+		params.PartNumber+1,
+		params.PartNumber,
+	)
+	if err != nil {
 		return UploadPart{}, err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return UploadPart{}, err
+	}
+	if rows == 0 {
+		return UploadPart{}, ErrUploadPartOutOfOrder
 	}
 
 	if err := tx.Commit(); err != nil {
 		return UploadPart{}, err
 	}
 
+	return part, nil
+}
+
+func (s *Store) MarkStagedPartUploaded(ctx context.Context, params MarkStagedPartUploadedParams) (UploadPart, error) {
+	part, err := scanUploadPart(s.db.QueryRowContext(ctx, `
+UPDATE upload_parts
+SET status = 'complete',
+    telegram_peer = NULLIF($2, ''),
+    telegram_message_id = $3,
+    leased_until = NULL,
+    last_error = NULL,
+    worker_id = NULL,
+    updated_at = now()
+WHERE id = $1
+  AND status = 'pending'
+RETURNING id, upload_id, part_number, plaintext_size, ciphertext_size, checksum, telegram_peer, telegram_message_id,
+          status, storage_backend, storage_key, available_at, leased_until, attempts, last_error, worker_id, created_at, updated_at`,
+		params.PartID,
+		params.TelegramPeer,
+		nullableInt64Param(params.MessageID),
+	))
+	if errors.Is(err, sql.ErrNoRows) {
+		return UploadPart{}, ErrUploadPartNotFound
+	}
+	if err != nil {
+		return UploadPart{}, err
+	}
 	return part, nil
 }
 

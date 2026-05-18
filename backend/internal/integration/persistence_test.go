@@ -196,20 +196,6 @@ func TestUploadPartQueueLeaseRetryAndFail(t *testing.T) {
 		t.Fatalf("Create upload error = %v", err)
 	}
 
-	if _, err := uploadStore.StagePart(ctx, uploads.StagePartParams{
-		OwnerID:        owner.ID,
-		UploadID:       upload.ID,
-		PartNumber:     2,
-		PlaintextSize:  5,
-		CiphertextSize: 10,
-		Checksum:       []byte("part-2"),
-		StorageBackend: "local",
-		StorageKey:     "queue.bin.part-2",
-		AvailableAt:    now.Add(time.Minute),
-		Now:            now,
-	}); err != nil {
-		t.Fatalf("StagePart(2) error = %v", err)
-	}
 	staged, err := uploadStore.StagePart(ctx, uploads.StagePartParams{
 		OwnerID:        owner.ID,
 		UploadID:       upload.ID,
@@ -217,6 +203,7 @@ func TestUploadPartQueueLeaseRetryAndFail(t *testing.T) {
 		PlaintextSize:  5,
 		CiphertextSize: 9,
 		Checksum:       []byte("part-1"),
+		UploadedSize:   5,
 		StorageBackend: "local",
 		StorageKey:     "queue.bin.part-1",
 		AvailableAt:    now,
@@ -227,6 +214,21 @@ func TestUploadPartQueueLeaseRetryAndFail(t *testing.T) {
 	}
 	if staged.StorageBackend.String != "local" || staged.StorageKey.String != "queue.bin.part-1" {
 		t.Fatalf("StagePart() storage = %q/%q, want local/queue.bin.part-1", staged.StorageBackend.String, staged.StorageKey.String)
+	}
+	if _, err := uploadStore.StagePart(ctx, uploads.StagePartParams{
+		OwnerID:        owner.ID,
+		UploadID:       upload.ID,
+		PartNumber:     2,
+		PlaintextSize:  5,
+		CiphertextSize: 10,
+		Checksum:       []byte("part-2"),
+		UploadedSize:   10,
+		StorageBackend: "local",
+		StorageKey:     "queue.bin.part-2",
+		AvailableAt:    now.Add(time.Minute),
+		Now:            now,
+	}); err != nil {
+		t.Fatalf("StagePart(2) error = %v", err)
 	}
 
 	claimed, err := uploadStore.ClaimQueuedPart(ctx, uploads.ClaimQueuedPartParams{
@@ -277,6 +279,18 @@ func TestUploadPartQueueLeaseRetryAndFail(t *testing.T) {
 	}
 	if next.PartNumber != 2 {
 		t.Fatalf("ClaimQueuedPart() after fail part number = %d, want next queued part 2", next.PartNumber)
+	}
+
+	completed, err := uploadStore.MarkStagedPartUploaded(ctx, uploads.MarkStagedPartUploadedParams{
+		PartID:       next.ID,
+		TelegramPeer: "self",
+		MessageID:    202,
+	})
+	if err != nil {
+		t.Fatalf("MarkStagedPartUploaded() error = %v", err)
+	}
+	if completed.Status != uploads.StatusComplete || !completed.MessageID.Valid || completed.MessageID.Int64 != 202 {
+		t.Fatalf("MarkStagedPartUploaded() = %+v, want complete Telegram part", completed)
 	}
 }
 

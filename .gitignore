@@ -11,6 +11,7 @@ config.env
 *.pub
 
 # Local database/session/cache artifacts
+var/
 *.sqlite
 *.sqlite3
 *.db

@@ -17,6 +17,7 @@ const (
 	DefaultUploadPartSizeBytes        int64 = 64 * 1024 * 1024
 	DefaultTelegramDocumentLimitBytes int64 = 2 * 1024 * 1024 * 1024
 	DefaultUploadSafetyMarginBytes    int64 = 64 * 1024 * 1024
+	DefaultUploadStagingDir                 = "var/upload-staging"
 
 	DefaultTelegramAuthIPLimitPerMinute      = 30
 	DefaultTelegramSendCodePhoneLimitPerHour = 5
@@ -42,6 +43,7 @@ type Config struct {
 	UploadPartSizeBytes        int64
 	TelegramDocumentLimitBytes int64
 	UploadSafetyMarginBytes    int64
+	UploadStagingDir           string
 
 	AuthRateLimitEnabled              bool
 	TelegramAuthIPLimitPerMinute      int
@@ -66,6 +68,7 @@ func Load() (Config, error) {
 		TelegramAPIID:      os.Getenv("TELEGRAM_API_ID"),
 		TelegramAPIHash:    os.Getenv("TELEGRAM_API_HASH"),
 		CookieSameSite:     getEnv("COOKIE_SAME_SITE", "Lax"),
+		UploadStagingDir:   getEnv("UPLOAD_STAGING_DIR", DefaultUploadStagingDir),
 	}
 
 	var err error
@@ -172,6 +175,9 @@ func (cfg Config) Validate() error {
 	}
 	if cfg.UploadSafetyMarginBytes < 0 {
 		problems = append(problems, "UPLOAD_SAFETY_MARGIN_BYTES must be greater than or equal to 0")
+	}
+	if strings.TrimSpace(cfg.UploadStagingDir) == "" {
+		problems = append(problems, "UPLOAD_STAGING_DIR is required")
 	}
 	if cfg.UploadPartSizeBytes > 0 && cfg.TelegramDocumentLimitBytes > 0 && cfg.UploadSafetyMarginBytes >= 0 {
 		if cfg.UploadPartSizeBytes > cfg.TelegramDocumentLimitBytes-cfg.UploadSafetyMarginBytes {

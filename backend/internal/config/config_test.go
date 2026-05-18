@@ -97,6 +97,18 @@ func TestValidateRejectsNonPositiveUploadLimits(t *testing.T) {
 	assertErrorContains(t, err, "UPLOAD_SAFETY_MARGIN_BYTES must be greater than or equal to 0")
 }
 
+func TestValidateRequiresUploadStagingDir(t *testing.T) {
+	cfg := validConfig()
+	cfg.UploadStagingDir = " "
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("Validate() error = nil, want upload staging dir error")
+	}
+
+	assertErrorContains(t, err, "UPLOAD_STAGING_DIR is required")
+}
+
 func TestValidateRejectsInvalidEnabledRateLimits(t *testing.T) {
 	cfg := validConfig()
 	cfg.AuthRateLimitEnabled = true
@@ -155,6 +167,7 @@ func validConfig() Config {
 		UploadPartSizeBytes:        DefaultUploadPartSizeBytes,
 		TelegramDocumentLimitBytes: DefaultTelegramDocumentLimitBytes,
 		UploadSafetyMarginBytes:    DefaultUploadSafetyMarginBytes,
+		UploadStagingDir:           DefaultUploadStagingDir,
 
 		AuthRateLimitEnabled:              true,
 		TelegramAuthIPLimitPerMinute:      DefaultTelegramAuthIPLimitPerMinute,

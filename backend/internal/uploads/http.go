@@ -24,6 +24,7 @@ const (
 
 type Settings struct {
 	PartSize                  int64
+	StagingDir                string
 	EffectiveSettingsProvider func(context.Context, string) (EffectiveSettings, error)
 }
 
@@ -37,16 +38,26 @@ type Handler struct {
 	sessionCrypto auth.TelegramSessionCrypto
 	telegram      auth.TelegramStorageClient
 	settings      Settings
+	staging       *LocalSpool
 	now           func() time.Time
 }
 
 func NewHandler(db *sql.DB, ageRecipient age.Recipient, sessionCrypto auth.TelegramSessionCrypto, telegram auth.TelegramStorageClient, settings Settings) *Handler {
+	var staging *LocalSpool
+	if strings.TrimSpace(settings.StagingDir) != "" {
+		spool, err := NewLocalSpool(settings.StagingDir)
+		if err != nil {
+			panic("upload staging initialization failed: " + err.Error())
+		}
+		staging = spool
+	}
 	return &Handler{
 		store:         NewStore(db),
 		ageRecipient:  ageRecipient,
 		sessionCrypto: sessionCrypto,
 		telegram:      telegram,
 		settings:      settings,
+		staging:       staging,
 		now:           time.Now,
 	}
 }
@@ -167,6 +178,11 @@ func (h *Handler) UploadPart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if h.staging != nil {
+		h.stageUploadPart(w, r, user.ID, uploadID, partNumber, upload, now)
+		return
+	}
+
 	telegramSession, err := h.store.TelegramSession(r.Context(), user.ID)
 	if errors.Is(err, ErrTelegramSessionNotFound) {
 		writeError(w, http.StatusConflict, "telegram_session_missing")
@@ -252,6 +268,73 @@ func (h *Handler) UploadPart(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"part": uploadPartResponse(part),
+	})
+}
+
+func (h *Handler) stageUploadPart(w http.ResponseWriter, r *http.Request, ownerID string, uploadID string, partNumber int, upload Upload, now time.Time) {
+	name := uploadPartName(uploadID, partNumber)
+	plaintextHash, err := agefile.NewSHA256FromState(upload.ChecksumState)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "upload_checksum_state_invalid")
+		return
+	}
+
+	storageKey := stagedPartKey(uploadID, partNumber)
+	var result agefile.EncryptResult
+	if err := h.staging.Write(r.Context(), storageKey, func(writer io.Writer) error {
+		encrypted, err := agefile.EncryptStreamWithHash(writer, r.Body, h.ageRecipient, plaintextHash)
+		if err != nil {
+			return err
+		}
+		result = encrypted
+		return nil
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, "part_stage_failed")
+		return
+	}
+
+	part, err := h.store.StagePart(r.Context(), StagePartParams{
+		OwnerID:        ownerID,
+		UploadID:       uploadID,
+		PartNumber:     partNumber,
+		PlaintextSize:  result.PlaintextSize,
+		CiphertextSize: result.CiphertextSize,
+		Checksum:       result.Checksum,
+		ChecksumState:  result.HashState,
+		UploadedSize:   upload.UploadedSize + result.PlaintextSize,
+		StorageBackend: LocalStagingBackend,
+		StorageKey:     storageKey,
+		AvailableAt:    now,
+		Now:            now,
+	})
+	if errors.Is(err, ErrUploadNotFound) {
+		_ = h.staging.Delete(storageKey)
+		writeError(w, http.StatusNotFound, "upload_not_found")
+		return
+	}
+	if errors.Is(err, ErrUploadExpired) {
+		_ = h.staging.Delete(storageKey)
+		writeError(w, http.StatusConflict, "upload_expired")
+		return
+	}
+	if errors.Is(err, ErrUploadPartOutOfOrder) {
+		_ = h.staging.Delete(storageKey)
+		writeError(w, http.StatusConflict, "upload_part_out_of_order")
+		return
+	}
+	if err != nil {
+		_ = h.staging.Delete(storageKey)
+		writeError(w, http.StatusInternalServerError, "part_stage_store_failed")
+		return
+	}
+
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"part": uploadPartResponse(part),
+		"queue": map[string]any{
+			"status":      "queued",
+			"storage_key": storageKey,
+			"name":        name,
+		},
 	})
 }
 
