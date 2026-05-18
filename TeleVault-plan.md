@@ -1,14 +1,18 @@
-# TeleDrive 2.0 Project Plan
+# TeleDrive Vault Project Plan
 
-This document defines the plan for building a new TeleDrive backend/core in a separate directory while using the current project as a reference implementation.
+This document defines the plan for building TeleDrive Vault, a security-first encrypted file storage service that uses Telegram as a storage transport while keeping application sessions, metadata, staging, queues, and access control under the service's control.
 
 Current reference project directory: `/Users/sommelier/teledrive`
 
 New project directory: `/Users/sommelier/teledrive-2`.
 
+Working product name: `TeleDrive Vault`.
+
+Repository and local directory names can remain technical while the product name stabilizes. User-facing docs, UI copy, and architecture documents should use `TeleDrive Vault` unless the project is renamed again later.
+
 ## 1. Goal
 
-Build a new, security-first TeleDrive implementation:
+Build a new, security-first TeleDrive Vault implementation:
 
 - Store files in Telegram only as encrypted ciphertext.
 - Avoid putting Telegram sessions into JWTs or client-visible tokens.
@@ -75,10 +79,10 @@ Accepted MVP decisions:
 - MVP encryption: server-side streaming age-compatible encryption.
 - MVP metadata: keep filenames plaintext, while preserving schema room for encrypted names later.
 - MVP sharing: no public links or user-to-user sharing in the first usable version.
-- MVP upload path: start with synchronous API streaming to Telegram, then add worker-based retries/cleanup where needed.
+- MVP upload path: stage upload data on the server first, then drain it to Telegram through a durable queue with bounded worker concurrency and retry/backoff.
 - MVP frontend: reuse/adapt the existing React UI only after the backend encrypted owner-only flow is stable.
 - Upload sizing: adapt per-connection/per-account upload parts to current Telegram limits with a safety margin. Baseline Telegram limits are 2 GB for free accounts and 4 GB for Premium accounts.
-- Upload backend: direct encrypted streaming to Telegram is the primary path; object storage is a future pluggable backend or staging option.
+- Upload backend: local spool or object storage staging is part of the primary path; direct Telegram transfer happens through the drain worker.
 - Admin access: a separate admin panel will manage server-side Telegram accounts and operational settings, with a separate bootstrap path so admin access does not hinge on one Telegram account.
 - Auth methods: support Telegram phone/code login now and QR login as an additional method where practical.
 - Key model: keep the app-controlled age identity for server-side encryption in MVP; per-user age key export/import is a future private-vault mode.
@@ -175,6 +179,8 @@ Go API ---- PostgreSQL
 Main components:
 
 - `api`: HTTP API.
+- `staging`: local spool or object storage abstraction for upload payloads before Telegram draining.
+- `queue`: durable job leasing, retry scheduling, and upload-part draining.
 - `worker`: Telegram upload/download and background migration jobs.
 - `crypto`: age encryption/decryption and key wrapping.
 - `auth`: app sessions and Telegram login flow.
@@ -231,6 +237,20 @@ Use a central policy layer instead of ad hoc checks in handlers:
 - `CanAdmin(user)`
 
 Every endpoint must call policy before accessing or modifying data.
+
+### Queueing and staging
+
+Large uploads should not depend on in-memory buffering or on Telegram accepting every part immediately.
+
+- Stage file data on the server first, either on local disk spool or object storage.
+- Persist upload and part state in SQL so uploads survive process restarts.
+- Drain staged parts to Telegram from a worker through a durable queue.
+- Use bounded concurrency and retry with backoff when Telegram slows down, times out, or returns `FLOOD_WAIT`.
+- Treat the queue as part of the product: it keeps uploads resumable, debuggable, and safer for Telegram accounts.
+- Prefer PostgreSQL for the primary queue because it supports robust row-claiming patterns such as `SKIP LOCKED`.
+- Support MariaDB for portability, with a minimum recommended version of 10.6 for `SKIP LOCKED`-based queue claims on InnoDB.
+- Support SQLite3 for single-node, local, embedded, or lightweight deployments where simplicity matters more than multi-worker queue throughput.
+- Do not present SQLite3 as the ideal production queue backend for high concurrency; it is the compatibility option, not the scalability target.
 
 ## 7. Encryption Model
 
@@ -363,7 +383,15 @@ upload_parts
 - ciphertext_size
 - checksum
 - status
+- storage_backend
+- storage_key
+- available_at
+- leased_until
+- attempts
+- last_error
+- worker_id
 - created_at
+- updated_at
 
 file_keys
 - id
@@ -414,6 +442,7 @@ MVP migration note:
 - Add unique constraints for `users.telegram_id`, `(file_id, part_number)`, and `(upload_id, part_number)`.
 - Add foreign keys for owners, parents, sessions, file parts, upload parts, and key envelopes.
 - Add partial indexes for active sessions and non-deleted files.
+- Add queue leasing fields for staged upload parts or jobs: `available_at`, `leased_until`, `attempts`, `last_error`, and `worker_id`.
 
 ## 9. API Draft
 
@@ -508,13 +537,14 @@ MVP migration note:
 - Upload encrypted file parts to Telegram through the API streaming path for MVP.
 - Store Telegram message IDs in `file_parts`.
 - Download encrypted parts from Telegram.
-- Retry transient Telegram failures.
-- Add background worker structure for cleanup, retries, and future migration jobs.
+- Stage upload payloads before Telegram transfer.
+- Retry transient Telegram failures with leased queue jobs and backoff.
+- Add background worker structure for cleanup, queue draining, retries, and future migration jobs.
 
 ### Phase 6: Upload/download MVP
 
 - Implement upload session creation.
-- Implement part upload.
+- Implement part upload and staging.
 - Implement upload completion.
 - Implement authenticated download with decrypt streaming.
 - Implement abandoned upload expiration and cleanup.
@@ -614,7 +644,14 @@ teledrive-2/
 
 ## 13. Immediate Next Steps
 
-1. Build the first usable web UI for auth and owner-only file browsing/upload smoke flows.
+1. Lock in the adaptive Telegram limit policy and durable queue/staging model:
+   - probe-driven per-account caps,
+   - rolling safety margins,
+   - bounded concurrent uploads,
+   - backoff/retry rules for `FLOOD_WAIT` and temporary Telegram slowdown,
+   - local spool or object storage staging before Telegram drain,
+   - portable SQL queue semantics across PostgreSQL, MariaDB, and SQLite3.
+2. Build the first usable web UI for auth and owner-only file browsing/upload smoke flows.
 
 ## 13.1 Deferred Planned Auth Work
 
