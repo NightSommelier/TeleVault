@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -141,6 +142,36 @@ func (h *Handler) effectiveSettings(ctx context.Context, userID string) (Effecti
 		return h.settings.EffectiveSettingsProvider(ctx, userID)
 	}
 	return EffectiveSettings{PartSize: h.settings.PartSize}, nil
+}
+
+func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
+	user, ok := auth.UserFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "missing_authenticated_user")
+		return
+	}
+
+	uploadID := strings.TrimSpace(r.PathValue("id"))
+	if uploadID == "" {
+		writeError(w, http.StatusBadRequest, "upload_id_required")
+		return
+	}
+
+	upload, parts, err := h.store.GetWithParts(r.Context(), user.ID, uploadID)
+	if errors.Is(err, ErrUploadNotFound) {
+		writeError(w, http.StatusNotFound, "upload_not_found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "upload_get_failed")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"upload":   uploadResponse(upload),
+		"parts":    uploadPartsResponse(parts),
+		"progress": uploadProgressResponse(upload, parts, h.now),
+	})
 }
 
 func (h *Handler) UploadPart(w http.ResponseWriter, r *http.Request) {
@@ -425,6 +456,8 @@ func uploadResponse(upload Upload) map[string]any {
 		"status":             upload.Status,
 		"idempotency_key":    nullableStringValue(upload.IdempotencyKey),
 		"checksum_algorithm": nullableStringValue(upload.ChecksumAlgorithm),
+		"uploaded_size":      upload.UploadedSize,
+		"next_part_number":   upload.NextPartNumber,
 		"created_at":         upload.CreatedAt,
 		"updated_at":         upload.UpdatedAt,
 		"expires_at":         upload.ExpiresAt,
@@ -457,6 +490,84 @@ func uploadPartResponse(part UploadPart) map[string]any {
 		"created_at":          part.CreatedAt,
 		"updated_at":          part.UpdatedAt,
 	}
+}
+
+func uploadPartsResponse(parts []UploadPart) []map[string]any {
+	out := make([]map[string]any, 0, len(parts))
+	for _, part := range parts {
+		out = append(out, uploadPartResponse(part))
+	}
+	return out
+}
+
+func uploadProgressResponse(upload Upload, parts []UploadPart, now func() time.Time) map[string]any {
+	expectedParts := partCount(nullableInt64(upload.PlaintextSize), upload.PartSize)
+	progress := map[string]any{
+		"expected_parts":           expectedParts,
+		"received_parts":           len(parts),
+		"queued_parts":             0,
+		"leased_parts":             0,
+		"complete_parts":           0,
+		"failed_parts":             0,
+		"plaintext_received_size":  upload.UploadedSize,
+		"plaintext_complete_size":  int64(0),
+		"ciphertext_staged_size":   int64(0),
+		"ciphertext_complete_size": int64(0),
+		"next_retry_at":            nil,
+		"active_workers":           []string{},
+		"ready_to_complete":        false,
+	}
+
+	activeWorkers := make(map[string]struct{})
+	var nextRetry sql.NullTime
+	currentTime := now()
+	for _, part := range parts {
+		if part.PlaintextSize.Valid && part.Status == StatusComplete {
+			progress["plaintext_complete_size"] = progress["plaintext_complete_size"].(int64) + part.PlaintextSize.Int64
+		}
+		if part.CiphertextSize.Valid {
+			if part.StorageKey.Valid && part.Status != StatusComplete {
+				progress["ciphertext_staged_size"] = progress["ciphertext_staged_size"].(int64) + part.CiphertextSize.Int64
+			}
+			if part.Status == StatusComplete {
+				progress["ciphertext_complete_size"] = progress["ciphertext_complete_size"].(int64) + part.CiphertextSize.Int64
+			}
+		}
+
+		switch part.Status {
+		case StatusComplete:
+			progress["complete_parts"] = progress["complete_parts"].(int) + 1
+		case "failed":
+			progress["failed_parts"] = progress["failed_parts"].(int) + 1
+		default:
+			if part.LeasedUntil.Valid && part.LeasedUntil.Time.After(currentTime) {
+				progress["leased_parts"] = progress["leased_parts"].(int) + 1
+				if part.WorkerID.Valid {
+					activeWorkers[part.WorkerID.String] = struct{}{}
+				}
+			} else {
+				progress["queued_parts"] = progress["queued_parts"].(int) + 1
+			}
+			if part.AvailableAt.After(currentTime) && (!nextRetry.Valid || part.AvailableAt.Before(nextRetry.Time)) {
+				nextRetry = sql.NullTime{Time: part.AvailableAt, Valid: true}
+			}
+		}
+	}
+
+	if nextRetry.Valid {
+		progress["next_retry_at"] = nextRetry.Time
+	}
+	workers := make([]string, 0, len(activeWorkers))
+	for workerID := range activeWorkers {
+		workers = append(workers, workerID)
+	}
+	sort.Strings(workers)
+	progress["active_workers"] = workers
+	progress["ready_to_complete"] = upload.Status != StatusComplete &&
+		expectedParts > 0 &&
+		int64(progress["complete_parts"].(int)) == expectedParts &&
+		progress["failed_parts"].(int) == 0
+	return progress
 }
 
 func fileResponse(file File) map[string]any {

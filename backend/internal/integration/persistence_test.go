@@ -296,6 +296,17 @@ func TestUploadPartQueueLeaseRetryAndFail(t *testing.T) {
 	if completed.Status != uploads.StatusComplete || !completed.MessageID.Valid || completed.MessageID.Int64 != 202 {
 		t.Fatalf("MarkStagedPartUploaded() = %+v, want complete Telegram part", completed)
 	}
+
+	statusUpload, statusParts, err := uploadStore.GetWithParts(ctx, owner.ID, upload.ID)
+	if err != nil {
+		t.Fatalf("GetWithParts() error = %v", err)
+	}
+	if statusUpload.ID != upload.ID || len(statusParts) != 2 {
+		t.Fatalf("GetWithParts() upload = %+v parts = %d, want upload with 2 parts", statusUpload, len(statusParts))
+	}
+	if _, _, err := uploadStore.GetWithParts(ctx, "00000000-0000-0000-0000-000000000000", upload.ID); !errors.Is(err, uploads.ErrUploadNotFound) {
+		t.Fatalf("cross-owner GetWithParts() error = %v, want ErrUploadNotFound", err)
+	}
 }
 
 func TestAdminUploadSettingsVaultUploadPartSize(t *testing.T) {

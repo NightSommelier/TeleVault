@@ -906,6 +906,51 @@ WHERE id = $1
 	return file, nil
 }
 
+func (s *Store) GetWithParts(ctx context.Context, ownerID string, uploadID string) (Upload, []UploadPart, error) {
+	upload, err := scanUpload(s.db.QueryRowContext(ctx, `
+SELECT id, owner_id, parent_id, name_plain, mime_type, plaintext_size, part_size, status,
+       idempotency_key, checksum_algorithm, checksum, checksum_state, plaintext_uploaded_size,
+       next_part_number, created_at, updated_at, expires_at
+FROM uploads
+WHERE id = $1
+  AND owner_id = $2`,
+		uploadID,
+		ownerID,
+	))
+	if errors.Is(err, sql.ErrNoRows) {
+		return Upload{}, nil, ErrUploadNotFound
+	}
+	if err != nil {
+		return Upload{}, nil, err
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+SELECT id, upload_id, part_number, plaintext_size, ciphertext_size, checksum, telegram_peer, telegram_message_id,
+       status, storage_backend, storage_key, available_at, leased_until, attempts, last_error, worker_id, created_at, updated_at
+FROM upload_parts
+WHERE upload_id = $1
+ORDER BY part_number ASC`,
+		upload.ID,
+	)
+	if err != nil {
+		return Upload{}, nil, err
+	}
+	defer rows.Close()
+
+	var parts []UploadPart
+	for rows.Next() {
+		part, err := scanUploadPart(rows)
+		if err != nil {
+			return Upload{}, nil, err
+		}
+		parts = append(parts, part)
+	}
+	if err := rows.Err(); err != nil {
+		return Upload{}, nil, err
+	}
+	return upload, parts, nil
+}
+
 func (s *Store) EnsureActiveUpload(ctx context.Context, ownerID string, uploadID string, now time.Time) error {
 	var expiresAt time.Time
 	err := s.db.QueryRowContext(ctx, `
