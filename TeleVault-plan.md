@@ -247,6 +247,7 @@ Large uploads should not depend on in-memory buffering or on Telegram accepting 
 - Persist upload and part state in SQL so uploads survive process restarts.
 - Drain staged parts to Telegram from a worker through a durable queue.
 - Use bounded concurrency and retry with backoff when Telegram slows down, times out, or returns `FLOOD_WAIT`.
+- Support global and per-account upload policy for free/premium accounts: document cap, safety margin, target upload rate, fixed cooldown between parts, and stored max parallel uploads.
 - Treat the queue as part of the product: it keeps uploads resumable, debuggable, and safer for Telegram accounts.
 - Prefer PostgreSQL for the primary queue because it supports robust row-claiming patterns such as `SKIP LOCKED`.
 - Support MariaDB for portability, with a minimum recommended version of 10.6 for `SKIP LOCKED`-based queue claims on InnoDB.
@@ -649,6 +650,7 @@ teledrive-2/
 1. Finish upload worker hardening:
    - run the staged-upload smoke flow against real Telegram,
    - add bounded worker concurrency,
+   - tune per-account upload policies for free and Premium accounts,
    - expose queue/upload progress states for the frontend,
    - tune retry/backoff and adaptive per-account caps from real failures.
 2. Build the first usable web UI for auth and owner-only file browsing/upload/download smoke flows.

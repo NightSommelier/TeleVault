@@ -498,9 +498,12 @@ func TestAdminUploadSettingsVaultUploadPartSize(t *testing.T) {
 	defer cleanupAdmin()
 
 	settings, err := settingsStore.UpdateUploadSettings(ctx, adminsettings.UploadSettings{
-		UploadPartSizeBytes:        128,
-		TelegramDocumentLimitBytes: 1024,
-		UploadSafetyMarginBytes:    64,
+		UploadPartSizeBytes:          128,
+		TelegramDocumentLimitBytes:   1024,
+		UploadSafetyMarginBytes:      64,
+		MaxParallelUploads:           1,
+		TargetUploadBytesPerSecond:   0,
+		CooldownBetweenPartsMillisec: 0,
 	}, admin.ID)
 	if err != nil {
 		t.Fatalf("UpdateUploadSettings() error = %v", err)
@@ -510,9 +513,12 @@ func TestAdminUploadSettingsVaultUploadPartSize(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		_, _ = settingsStore.UpdateUploadSettings(context.Background(), adminsettings.UploadSettings{
-			UploadPartSizeBytes:        config.DefaultUploadPartSizeBytes,
-			TelegramDocumentLimitBytes: config.DefaultTelegramDocumentLimitBytes,
-			UploadSafetyMarginBytes:    config.DefaultUploadSafetyMarginBytes,
+			UploadPartSizeBytes:          config.DefaultUploadPartSizeBytes,
+			TelegramDocumentLimitBytes:   config.DefaultTelegramDocumentLimitBytes,
+			UploadSafetyMarginBytes:      config.DefaultUploadSafetyMarginBytes,
+			MaxParallelUploads:           1,
+			TargetUploadBytesPerSecond:   0,
+			CooldownBetweenPartsMillisec: 0,
 		}, "")
 	})
 
@@ -545,23 +551,32 @@ func TestEffectiveUploadSettingsUseAccountLimit(t *testing.T) {
 	defer cleanupAdmin()
 
 	if _, err := settingsStore.UpdateUploadSettings(ctx, adminsettings.UploadSettings{
-		UploadPartSizeBytes:        512,
-		TelegramDocumentLimitBytes: 2048,
-		UploadSafetyMarginBytes:    64,
+		UploadPartSizeBytes:          512,
+		TelegramDocumentLimitBytes:   2048,
+		UploadSafetyMarginBytes:      64,
+		MaxParallelUploads:           1,
+		TargetUploadBytesPerSecond:   0,
+		CooldownBetweenPartsMillisec: 0,
 	}, admin.ID); err != nil {
 		t.Fatalf("UpdateUploadSettings() error = %v", err)
 	}
 	t.Cleanup(func() {
 		_, _ = settingsStore.UpdateUploadSettings(context.Background(), adminsettings.UploadSettings{
-			UploadPartSizeBytes:        config.DefaultUploadPartSizeBytes,
-			TelegramDocumentLimitBytes: config.DefaultTelegramDocumentLimitBytes,
-			UploadSafetyMarginBytes:    config.DefaultUploadSafetyMarginBytes,
+			UploadPartSizeBytes:          config.DefaultUploadPartSizeBytes,
+			TelegramDocumentLimitBytes:   config.DefaultTelegramDocumentLimitBytes,
+			UploadSafetyMarginBytes:      config.DefaultUploadSafetyMarginBytes,
+			MaxParallelUploads:           1,
+			TargetUploadBytesPerSecond:   0,
+			CooldownBetweenPartsMillisec: 0,
 		}, "")
 	})
 
 	if _, err := settingsStore.UpsertTelegramAccountLimit(ctx, admin.ID, adminsettings.TelegramAccountLimit{
-		TelegramDocumentLimitBytes: 256,
-		UploadSafetyMarginBytes:    32,
+		TelegramDocumentLimitBytes:   256,
+		UploadSafetyMarginBytes:      32,
+		MaxParallelUploads:           sql.NullInt64{Int64: 2, Valid: true},
+		TargetUploadBytesPerSecond:   sql.NullInt64{Int64: 10_000_000, Valid: true},
+		CooldownBetweenPartsMillisec: sql.NullInt64{Int64: 500, Valid: true},
 	}, admin.ID); err != nil {
 		t.Fatalf("UpsertTelegramAccountLimit() error = %v", err)
 	}
@@ -575,6 +590,9 @@ func TestEffectiveUploadSettingsUseAccountLimit(t *testing.T) {
 	}
 	if effective.Source != "account_manual" {
 		t.Fatalf("Source = %q, want account_manual", effective.Source)
+	}
+	if effective.MaxParallelUploads != 2 || effective.TargetUploadBytesPerSecond != 10_000_000 || effective.CooldownBetweenPartsMillisec != 500 {
+		t.Fatalf("effective upload policy = %+v, want account policy overrides", effective)
 	}
 }
 
@@ -684,13 +702,13 @@ func ensureLatestMigration(t *testing.T, database *sql.DB) {
 SELECT EXISTS (
     SELECT 1
     FROM schema_migrations
-			WHERE version = '000014'
+			WHERE version = '000015'
 )`).Scan(&exists)
 	if err != nil {
 		t.Fatalf("schema migration check failed: %v", err)
 	}
 	if !exists {
-		t.Fatalf("TEST_DATABASE_URL database is not migrated through 000014; run go run ./cmd/migrate up first")
+		t.Fatalf("TEST_DATABASE_URL database is not migrated through 000015; run go run ./cmd/migrate up first")
 	}
 }
 

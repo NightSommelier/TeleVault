@@ -90,11 +90,14 @@ type TelegramSession struct {
 }
 
 type QueuedPartWork struct {
-	Part             UploadPart
-	OwnerID          string
-	OwnerTelegramID  int64
-	EncryptedSession []byte
-	StoragePeer      sql.NullString
+	Part                         UploadPart
+	OwnerID                      string
+	OwnerTelegramID              int64
+	EncryptedSession             []byte
+	StoragePeer                  sql.NullString
+	MaxParallelUploads           int
+	TargetUploadBytesPerSecond   int64
+	CooldownBetweenPartsMillisec int
 }
 
 type File struct {
@@ -591,11 +594,16 @@ SELECT claimed.id, claimed.upload_id, claimed.part_number, claimed.plaintext_siz
        claimed.checksum, claimed.telegram_peer, claimed.telegram_message_id, claimed.status,
        claimed.storage_backend, claimed.storage_key, claimed.available_at, claimed.leased_until,
        claimed.attempts, claimed.last_error, claimed.worker_id, claimed.created_at, claimed.updated_at,
-       u.owner_id, users.telegram_id, ts.encrypted_session, ts.storage_peer
+       u.owner_id, users.telegram_id, ts.encrypted_session, ts.storage_peer,
+       COALESCE(tal.max_parallel_uploads, admin_settings.max_parallel_uploads, 1),
+       COALESCE(tal.target_upload_bytes_per_second, admin_settings.target_upload_bytes_per_second, 0),
+       COALESCE(tal.cooldown_between_parts_ms, admin_settings.cooldown_between_parts_ms, 0)
 FROM claimed
 JOIN uploads u ON u.id = claimed.upload_id
 JOIN users ON users.id = u.owner_id
-LEFT JOIN telegram_sessions ts ON ts.user_id = u.owner_id`,
+LEFT JOIN telegram_sessions ts ON ts.user_id = u.owner_id
+LEFT JOIN telegram_account_limits tal ON tal.user_id = u.owner_id
+LEFT JOIN admin_settings ON admin_settings.id = TRUE`,
 		params.Now,
 		params.Now.Add(params.LeaseDuration),
 		params.WorkerID,
@@ -622,6 +630,9 @@ LEFT JOIN telegram_sessions ts ON ts.user_id = u.owner_id`,
 		&work.OwnerTelegramID,
 		&work.EncryptedSession,
 		&work.StoragePeer,
+		&work.MaxParallelUploads,
+		&work.TargetUploadBytesPerSecond,
+		&work.CooldownBetweenPartsMillisec,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return QueuedPartWork{}, ErrUploadPartNotFound

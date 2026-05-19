@@ -134,6 +134,26 @@ func TestDrainWorkerRetriesFloodWait(t *testing.T) {
 	}
 }
 
+func TestUploadPolicyDelayUsesCooldownAndTargetRate(t *testing.T) {
+	delay := uploadPolicyDelay(QueuedPartWork{
+		Part: UploadPart{
+			CiphertextSize: sql.NullInt64{Int64: 100, Valid: true},
+		},
+		TargetUploadBytesPerSecond:   50,
+		CooldownBetweenPartsMillisec: 250,
+	}, 500*time.Millisecond)
+	if delay != 1750*time.Millisecond {
+		t.Fatalf("uploadPolicyDelay() = %v, want 1.75s", delay)
+	}
+
+	delay = uploadPolicyDelay(QueuedPartWork{
+		CooldownBetweenPartsMillisec: 250,
+	}, 10*time.Second)
+	if delay != 250*time.Millisecond {
+		t.Fatalf("uploadPolicyDelay() without target rate = %v, want cooldown only", delay)
+	}
+}
+
 func testSessionCrypto(t *testing.T) auth.TelegramSessionCrypto {
 	t.Helper()
 	box, err := secrets.NewBox(bytes.Repeat([]byte{1}, secrets.KeyBytes))

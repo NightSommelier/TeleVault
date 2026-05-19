@@ -133,6 +133,7 @@ func (w *DrainWorker) drainClaimedPart(ctx context.Context, work QueuedPartWork)
 
 	uploadCtx, cancel := context.WithTimeout(ctx, w.settings.UploadTimeout)
 	defer cancel()
+	startedAt := w.settings.Now()
 
 	result, err := w.telegram.UploadEncryptedPart(
 		uploadCtx,
@@ -153,7 +154,11 @@ func (w *DrainWorker) drainClaimedPart(ctx context.Context, work QueuedPartWork)
 		return err
 	}
 
-	return w.spool.Delete(part.StorageKey.String)
+	if err := w.spool.Delete(part.StorageKey.String); err != nil {
+		return err
+	}
+
+	return w.throttleAfterUpload(ctx, work, startedAt)
 }
 
 func (w *DrainWorker) retryPart(ctx context.Context, part UploadPart, cause error) error {
@@ -190,4 +195,32 @@ func retryDelay(err error, attempts int, base time.Duration, maxDelay time.Durat
 		return maxDelay
 	}
 	return delay
+}
+
+func (w *DrainWorker) throttleAfterUpload(ctx context.Context, work QueuedPartWork, startedAt time.Time) error {
+	delay := uploadPolicyDelay(work, w.settings.Now().Sub(startedAt))
+	if delay <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return nil
+	case <-timer.C:
+		return nil
+	}
+}
+
+func uploadPolicyDelay(work QueuedPartWork, elapsed time.Duration) time.Duration {
+	delay := time.Duration(work.CooldownBetweenPartsMillisec) * time.Millisecond
+	if work.TargetUploadBytesPerSecond <= 0 || !work.Part.CiphertextSize.Valid || work.Part.CiphertextSize.Int64 <= 0 {
+		return delay
+	}
+
+	targetDuration := time.Duration(float64(work.Part.CiphertextSize.Int64) / float64(work.TargetUploadBytesPerSecond) * float64(time.Second))
+	if targetDuration <= elapsed {
+		return delay
+	}
+	return delay + targetDuration - elapsed
 }

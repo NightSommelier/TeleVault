@@ -51,9 +51,12 @@ func (h *Handler) PatchUploadSettings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	settings, err := h.store.UpdateUploadSettings(r.Context(), UploadSettings{
-		UploadPartSizeBytes:        request.UploadPartSizeBytes,
-		TelegramDocumentLimitBytes: request.TelegramDocumentLimitBytes,
-		UploadSafetyMarginBytes:    request.UploadSafetyMarginBytes,
+		UploadPartSizeBytes:          request.UploadPartSizeBytes,
+		TelegramDocumentLimitBytes:   request.TelegramDocumentLimitBytes,
+		UploadSafetyMarginBytes:      request.UploadSafetyMarginBytes,
+		MaxParallelUploads:           request.MaxParallelUploads,
+		TargetUploadBytesPerSecond:   request.TargetUploadBytesPerSecond,
+		CooldownBetweenPartsMillisec: request.CooldownBetweenPartsMillisec,
 	}, user.ID)
 	if errors.Is(err, ErrInvalidSettings) {
 		writeError(w, http.StatusBadRequest, "admin_settings_invalid")
@@ -89,9 +92,12 @@ func (h *Handler) PatchTelegramAccountLimit(w http.ResponseWriter, r *http.Reque
 	}
 
 	limit, err := h.store.UpsertTelegramAccountLimit(r.Context(), targetUserID, TelegramAccountLimit{
-		TelegramDocumentLimitBytes: request.TelegramDocumentLimitBytes,
-		UploadSafetyMarginBytes:    request.UploadSafetyMarginBytes,
-		IsPremium:                  request.IsPremium,
+		TelegramDocumentLimitBytes:   request.TelegramDocumentLimitBytes,
+		UploadSafetyMarginBytes:      request.UploadSafetyMarginBytes,
+		IsPremium:                    request.IsPremium,
+		MaxParallelUploads:           nullableInt64FromPointer(request.MaxParallelUploads),
+		TargetUploadBytesPerSecond:   nullableInt64FromPointer(request.TargetUploadBytesPerSecond),
+		CooldownBetweenPartsMillisec: nullableInt64FromPointer(request.CooldownBetweenPartsMillisec),
 	}, user.ID)
 	if errors.Is(err, ErrInvalidSettings) {
 		writeError(w, http.StatusBadRequest, "telegram_account_limit_invalid")
@@ -108,23 +114,32 @@ func (h *Handler) PatchTelegramAccountLimit(w http.ResponseWriter, r *http.Reque
 }
 
 type uploadSettingsRequest struct {
-	UploadPartSizeBytes        int64 `json:"upload_part_size_bytes"`
-	TelegramDocumentLimitBytes int64 `json:"telegram_document_limit_bytes"`
-	UploadSafetyMarginBytes    int64 `json:"upload_safety_margin_bytes"`
+	UploadPartSizeBytes          int64 `json:"upload_part_size_bytes"`
+	TelegramDocumentLimitBytes   int64 `json:"telegram_document_limit_bytes"`
+	UploadSafetyMarginBytes      int64 `json:"upload_safety_margin_bytes"`
+	MaxParallelUploads           int   `json:"max_parallel_uploads"`
+	TargetUploadBytesPerSecond   int64 `json:"target_upload_bytes_per_second"`
+	CooldownBetweenPartsMillisec int   `json:"cooldown_between_parts_ms"`
 }
 
 type telegramAccountLimitRequest struct {
-	TelegramDocumentLimitBytes int64 `json:"telegram_document_limit_bytes"`
-	UploadSafetyMarginBytes    int64 `json:"upload_safety_margin_bytes"`
-	IsPremium                  bool  `json:"is_premium"`
+	TelegramDocumentLimitBytes   int64  `json:"telegram_document_limit_bytes"`
+	UploadSafetyMarginBytes      int64  `json:"upload_safety_margin_bytes"`
+	IsPremium                    bool   `json:"is_premium"`
+	MaxParallelUploads           *int64 `json:"max_parallel_uploads"`
+	TargetUploadBytesPerSecond   *int64 `json:"target_upload_bytes_per_second"`
+	CooldownBetweenPartsMillisec *int64 `json:"cooldown_between_parts_ms"`
 }
 
 func uploadSettingsResponse(settings UploadSettings) map[string]any {
 	return map[string]any{
-		"upload_part_size_bytes":        settings.UploadPartSizeBytes,
-		"telegram_document_limit_bytes": settings.TelegramDocumentLimitBytes,
-		"upload_safety_margin_bytes":    settings.UploadSafetyMarginBytes,
-		"updated_at":                    settings.UpdatedAt,
+		"upload_part_size_bytes":         settings.UploadPartSizeBytes,
+		"telegram_document_limit_bytes":  settings.TelegramDocumentLimitBytes,
+		"upload_safety_margin_bytes":     settings.UploadSafetyMarginBytes,
+		"max_parallel_uploads":           settings.MaxParallelUploads,
+		"target_upload_bytes_per_second": settings.TargetUploadBytesPerSecond,
+		"cooldown_between_parts_ms":      settings.CooldownBetweenPartsMillisec,
+		"updated_at":                     settings.UpdatedAt,
 	}
 }
 
@@ -138,20 +153,30 @@ func telegramAccountLimitsResponse(limits []TelegramAccountLimit) []map[string]a
 
 func telegramAccountLimitResponse(limit TelegramAccountLimit) map[string]any {
 	return map[string]any{
-		"user_id":                       limit.UserID,
-		"telegram_id":                   limit.TelegramID,
-		"username":                      nullableStringValue(limit.Username),
-		"display_name":                  nullableStringValue(limit.DisplayName),
-		"telegram_document_limit_bytes": limit.TelegramDocumentLimitBytes,
-		"upload_safety_margin_bytes":    limit.UploadSafetyMarginBytes,
-		"detected_document_limit_bytes": nullableInt64Value(limit.DetectedDocumentLimitBytes),
-		"is_premium":                    limit.IsPremium,
-		"last_probe_status":             nullableStringValue(limit.LastProbeStatus),
-		"last_probe_error":              nullableStringValue(limit.LastProbeError),
-		"last_probed_at":                nullableTimeValue(limit.LastProbedAt),
-		"next_probe_at":                 nullableTimeValue(limit.NextProbeAt),
-		"updated_at":                    limit.UpdatedAt,
+		"user_id":                        limit.UserID,
+		"telegram_id":                    limit.TelegramID,
+		"username":                       nullableStringValue(limit.Username),
+		"display_name":                   nullableStringValue(limit.DisplayName),
+		"telegram_document_limit_bytes":  limit.TelegramDocumentLimitBytes,
+		"upload_safety_margin_bytes":     limit.UploadSafetyMarginBytes,
+		"detected_document_limit_bytes":  nullableInt64Value(limit.DetectedDocumentLimitBytes),
+		"is_premium":                     limit.IsPremium,
+		"max_parallel_uploads":           nullableInt64Value(limit.MaxParallelUploads),
+		"target_upload_bytes_per_second": nullableInt64Value(limit.TargetUploadBytesPerSecond),
+		"cooldown_between_parts_ms":      nullableInt64Value(limit.CooldownBetweenPartsMillisec),
+		"last_probe_status":              nullableStringValue(limit.LastProbeStatus),
+		"last_probe_error":               nullableStringValue(limit.LastProbeError),
+		"last_probed_at":                 nullableTimeValue(limit.LastProbedAt),
+		"next_probe_at":                  nullableTimeValue(limit.NextProbeAt),
+		"updated_at":                     limit.UpdatedAt,
 	}
+}
+
+func nullableInt64FromPointer(value *int64) sql.NullInt64 {
+	if value == nil {
+		return sql.NullInt64{}
+	}
+	return sql.NullInt64{Int64: *value, Valid: true}
 }
 
 func nullableStringValue(value sql.NullString) any {
