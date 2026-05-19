@@ -44,6 +44,44 @@ func (h *Handler) Export(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (h *Handler) Import(w http.ResponseWriter, r *http.Request) {
+	user, ok := auth.UserFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "missing_authenticated_user")
+		return
+	}
+
+	var manifest Manifest
+	if err := json.NewDecoder(r.Body).Decode(&manifest); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_json")
+		return
+	}
+
+	summary, err := h.store.ImportManifest(r.Context(), user.ID, manifest)
+	if errors.Is(err, ErrInvalidManifest) {
+		writeError(w, http.StatusBadRequest, "invalid_recovery_manifest")
+		return
+	}
+	if errors.Is(err, ErrConflict) {
+		writeError(w, http.StatusConflict, "recovery_import_conflict")
+		return
+	}
+	if errors.Is(err, ErrNotFound) {
+		writeError(w, http.StatusNotFound, "user_not_found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "recovery_import_failed")
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	if err := json.NewEncoder(w).Encode(map[string]any{"import": summary}); err != nil {
+		http.Error(w, "failed to write response", http.StatusInternalServerError)
+	}
+}
+
 func writeError(w http.ResponseWriter, status int, code string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

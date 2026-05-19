@@ -16,6 +16,8 @@ import (
 )
 
 var ErrNotFound = errors.New("recovery resource not found")
+var ErrInvalidManifest = errors.New("invalid recovery manifest")
+var ErrConflict = errors.New("recovery import conflict")
 
 type Store struct {
 	db  *sql.DB
@@ -97,6 +99,86 @@ func (s *Store) ExportManifest(ctx context.Context, userID string, exportedAt ti
 	return manifest, nil
 }
 
+type ImportSummary struct {
+	SnapshotID      string `json:"snapshot_id"`
+	SnapshotVersion int    `json:"snapshot_version"`
+	FilesImported   int    `json:"files_imported"`
+	PartsImported   int    `json:"parts_imported"`
+}
+
+func (s *Store) ImportManifest(ctx context.Context, userID string, manifest Manifest) (ImportSummary, error) {
+	if manifest.Schema != ManifestSchema {
+		return ImportSummary{}, fmt.Errorf("%w: unsupported schema", ErrInvalidManifest)
+	}
+	if manifest.User.AgePrivateIdentity == "" || manifest.User.AgePublicRecipient == "" {
+		return ImportSummary{}, fmt.Errorf("%w: missing recovery key material", ErrInvalidManifest)
+	}
+	identity, err := age.ParseX25519Identity(manifest.User.AgePrivateIdentity)
+	if err != nil {
+		return ImportSummary{}, fmt.Errorf("%w: invalid age identity", ErrInvalidManifest)
+	}
+	if identity.Recipient().String() != manifest.User.AgePublicRecipient {
+		return ImportSummary{}, fmt.Errorf("%w: age recipient mismatch", ErrInvalidManifest)
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return ImportSummary{}, err
+	}
+	defer tx.Rollback()
+
+	user, err := loadUser(ctx, tx, userID)
+	if err != nil {
+		return ImportSummary{}, err
+	}
+	if user.TelegramID != manifest.User.TelegramID {
+		return ImportSummary{}, fmt.Errorf("%w: telegram id mismatch", ErrInvalidManifest)
+	}
+
+	if err := s.importUserKey(ctx, tx, userID, identity); err != nil {
+		return ImportSummary{}, err
+	}
+	if err := ensureNoFileConflicts(ctx, tx, manifest.Files); err != nil {
+		return ImportSummary{}, err
+	}
+	if err := ensureParentsExist(manifest.Files); err != nil {
+		return ImportSummary{}, err
+	}
+
+	filesImported, partsImported, err := importFiles(ctx, tx, userID, manifest.Files)
+	if err != nil {
+		return ImportSummary{}, err
+	}
+
+	localSnapshotID, err := newUUID()
+	if err != nil {
+		return ImportSummary{}, err
+	}
+	localSnapshotVersion, err := nextSnapshotVersion(ctx, tx, userID)
+	if err != nil {
+		return ImportSummary{}, err
+	}
+	manifestBytes, err := json.Marshal(manifest)
+	if err != nil {
+		return ImportSummary{}, err
+	}
+	manifestHash := sha256.Sum256(manifestBytes)
+	if err := insertSnapshot(ctx, tx, localSnapshotID, userID, localSnapshotVersion, manifestHash[:]); err != nil {
+		return ImportSummary{}, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return ImportSummary{}, err
+	}
+
+	return ImportSummary{
+		SnapshotID:      localSnapshotID,
+		SnapshotVersion: localSnapshotVersion,
+		FilesImported:   filesImported,
+		PartsImported:   partsImported,
+	}, nil
+}
+
 type userRow struct {
 	ID          string
 	TelegramID  int64
@@ -157,6 +239,32 @@ ON CONFLICT (user_id) DO NOTHING`,
 	}
 
 	return loadUserKey(ctx, tx, userID)
+}
+
+func (s *Store) importUserKey(ctx context.Context, tx *sql.Tx, userID string, identity *age.X25519Identity) error {
+	existing, err := loadUserKey(ctx, tx, userID)
+	if err == nil {
+		if existing.PublicRecipient != identity.Recipient().String() {
+			return fmt.Errorf("%w: existing recovery key differs", ErrConflict)
+		}
+		return nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+
+	encryptedIdentity, err := s.box.Encrypt([]byte(identity.String()), recoveryKeyAAD(userID))
+	if err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `
+INSERT INTO user_recovery_keys (user_id, public_recipient, encrypted_private_identity)
+VALUES ($1, $2, $3)`,
+		userID,
+		identity.Recipient().String(),
+		encryptedIdentity,
+	)
+	return err
 }
 
 func loadUserKey(ctx context.Context, tx *sql.Tx, userID string) (userKey, error) {
@@ -330,6 +438,131 @@ VALUES ($1, $2, $3, $4, $5)`,
 		manifestHash,
 	)
 	return err
+}
+
+func ensureNoFileConflicts(ctx context.Context, tx *sql.Tx, files []FileEntry) error {
+	for _, file := range files {
+		var exists bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM files WHERE id = $1)`, file.ID).Scan(&exists); err != nil {
+			return err
+		}
+		if exists {
+			return fmt.Errorf("%w: file %s already exists", ErrConflict, file.ID)
+		}
+		for _, part := range file.Parts {
+			if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM file_parts WHERE id = $1)`, part.ID).Scan(&exists); err != nil {
+				return err
+			}
+			if exists {
+				return fmt.Errorf("%w: file part %s already exists", ErrConflict, part.ID)
+			}
+		}
+	}
+	return nil
+}
+
+func ensureParentsExist(files []FileEntry) error {
+	ids := make(map[string]struct{}, len(files))
+	for _, file := range files {
+		if file.ID == "" {
+			return fmt.Errorf("%w: missing file id", ErrInvalidManifest)
+		}
+		ids[file.ID] = struct{}{}
+	}
+	for _, file := range files {
+		if file.ParentID == "" {
+			continue
+		}
+		if _, ok := ids[file.ParentID]; !ok {
+			return fmt.Errorf("%w: missing parent %s", ErrInvalidManifest, file.ParentID)
+		}
+	}
+	return nil
+}
+
+func importFiles(ctx context.Context, tx *sql.Tx, userID string, files []FileEntry) (int, int, error) {
+	for _, file := range files {
+		if _, err := tx.ExecContext(ctx, `
+INSERT INTO files (
+    id, owner_id, parent_id, name_plain, mime_type, plaintext_size, ciphertext_size,
+    type, status, checksum, created_at, updated_at, deleted_at
+)
+VALUES ($1, $2, NULL, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+			file.ID,
+			userID,
+			nullableString(file.NamePlain),
+			nullableString(file.MimeType),
+			nullableInt64(file.PlaintextSize),
+			nullableInt64(file.CiphertextSize),
+			file.Type,
+			file.Status,
+			nullableBytes(file.Checksum),
+			file.CreatedAt,
+			file.UpdatedAt,
+			nullableTimePtr(file.DeletedAt),
+		); err != nil {
+			return 0, 0, err
+		}
+	}
+
+	for _, file := range files {
+		if file.ParentID == "" {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE files SET parent_id = $1 WHERE id = $2`, file.ParentID, file.ID); err != nil {
+			return 0, 0, err
+		}
+	}
+
+	partsImported := 0
+	for _, file := range files {
+		for _, part := range file.Parts {
+			if _, err := tx.ExecContext(ctx, `
+INSERT INTO file_parts (
+    id, file_id, part_number, telegram_peer, telegram_message_id, ciphertext_size, checksum, created_at
+)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+				part.ID,
+				file.ID,
+				part.PartNumber,
+				part.TelegramPeer,
+				part.TelegramMessageID,
+				part.CiphertextSize,
+				nullableBytes(part.Checksum),
+				part.CreatedAt,
+			); err != nil {
+				return 0, 0, err
+			}
+			partsImported++
+		}
+	}
+
+	return len(files), partsImported, nil
+}
+
+func nullableString(value string) sql.NullString {
+	return sql.NullString{String: value, Valid: value != ""}
+}
+
+func nullableBytes(value []byte) []byte {
+	if len(value) == 0 {
+		return nil
+	}
+	return value
+}
+
+func nullableInt64(value *int64) sql.NullInt64 {
+	if value == nil {
+		return sql.NullInt64{}
+	}
+	return sql.NullInt64{Int64: *value, Valid: true}
+}
+
+func nullableTimePtr(value *time.Time) sql.NullTime {
+	if value == nil {
+		return sql.NullTime{}
+	}
+	return sql.NullTime{Time: *value, Valid: true}
 }
 
 func newUUID() (string, error) {

@@ -113,6 +113,7 @@ func (s *Server) routes() {
 
 	recoveryHandler := recovery.NewHandler(s.db, s.secrets)
 	s.mux.Handle("POST /recovery/export", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(recoveryHandler.Export))))
+	s.mux.Handle("POST /recovery/import", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(recoveryHandler.Import))))
 
 	adminHandler := adminsettings.NewHandler(s.db, s.cfg)
 	s.mux.Handle("GET /admin/settings", authHandler.RequireAuth(authHandler.RequireAdmin(http.HandlerFunc(adminHandler.GetSettings))))
