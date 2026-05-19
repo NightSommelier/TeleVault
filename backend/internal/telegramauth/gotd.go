@@ -38,7 +38,7 @@ func (c *Client) SendCode(ctx context.Context, phone string) (auth.TelegramCodeC
 		NoUpdates:         true,
 		SessionStorage:    storage,
 		UpdateHandler:     nil,
-		Device:            telegram.DeviceConfig{AppVersion: "TeleVault 2.0"},
+		Device:            telegram.DeviceConfig{AppVersion: "TeleVault"},
 		CompressThreshold: -1,
 	})
 
@@ -94,7 +94,7 @@ func (c *Client) SignIn(ctx context.Context, phone string, code string, challeng
 		NoUpdates:         true,
 		SessionStorage:    storage,
 		UpdateHandler:     nil,
-		Device:            telegram.DeviceConfig{AppVersion: "TeleVault 2.0"},
+		Device:            telegram.DeviceConfig{AppVersion: "TeleVault"},
 		CompressThreshold: -1,
 	})
 
@@ -145,7 +145,7 @@ func (c *Client) StartQRLogin(ctx context.Context) (auth.TelegramQRLoginAttempt,
 		NoUpdates:         false,
 		SessionStorage:    storage,
 		UpdateHandler:     dispatcher,
-		Device:            telegram.DeviceConfig{AppVersion: "TeleVault 2.0"},
+		Device:            telegram.DeviceConfig{AppVersion: "TeleVault"},
 		CompressThreshold: -1,
 	})
 
@@ -242,7 +242,7 @@ func (c *Client) UploadEncryptedPart(ctx context.Context, encodedSession string,
 		NoUpdates:         true,
 		SessionStorage:    storage,
 		UpdateHandler:     nil,
-		Device:            telegram.DeviceConfig{AppVersion: "TeleVault 2.0"},
+		Device:            telegram.DeviceConfig{AppVersion: "TeleVault"},
 		CompressThreshold: -1,
 	})
 
@@ -310,7 +310,7 @@ func (c *Client) DownloadEncryptedPart(ctx context.Context, encodedSession strin
 		NoUpdates:         true,
 		SessionStorage:    storage,
 		UpdateHandler:     nil,
-		Device:            telegram.DeviceConfig{AppVersion: "TeleVault 2.0"},
+		Device:            telegram.DeviceConfig{AppVersion: "TeleVault"},
 		CompressThreshold: -1,
 	})
 
@@ -353,7 +353,7 @@ func (c *Client) DeleteEncryptedPart(ctx context.Context, encodedSession string,
 		NoUpdates:         true,
 		SessionStorage:    storage,
 		UpdateHandler:     nil,
-		Device:            telegram.DeviceConfig{AppVersion: "TeleVault 2.0"},
+		Device:            telegram.DeviceConfig{AppVersion: "TeleVault"},
 		CompressThreshold: -1,
 	})
 
