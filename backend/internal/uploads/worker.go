@@ -8,6 +8,7 @@ import (
 	"os"
 	"regexp"
 	"strconv"
+	"sync"
 	"time"
 
 	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/auth"
@@ -84,12 +85,7 @@ func NewDrainWorker(store WorkStore, spool *LocalSpool, sessionCrypto auth.Teleg
 }
 
 func (w *DrainWorker) DrainOne(ctx context.Context) (bool, error) {
-	now := w.settings.Now()
-	work, err := w.store.ClaimQueuedPartWork(ctx, ClaimQueuedPartParams{
-		WorkerID:      w.settings.WorkerID,
-		Now:           now,
-		LeaseDuration: w.settings.LeaseDuration,
-	})
+	work, err := w.claimQueuedPartWork(ctx)
 	if errors.Is(err, ErrUploadPartNotFound) {
 		return false, nil
 	}
@@ -97,13 +93,112 @@ func (w *DrainWorker) DrainOne(ctx context.Context) (bool, error) {
 		return false, err
 	}
 
-	if err := w.drainClaimedPart(ctx, work); err != nil {
+	if err := w.drainClaimedWork(ctx, work); err != nil {
 		return true, err
 	}
 	return true, nil
 }
 
-func (w *DrainWorker) drainClaimedPart(ctx context.Context, work QueuedPartWork) error {
+func (w *DrainWorker) DrainLoop(ctx context.Context, pollInterval time.Duration) error {
+	if pollInterval <= 0 {
+		pollInterval = 5 * time.Second
+	}
+
+	state := struct {
+		sync.Mutex
+		active int
+		wake   chan struct{}
+	}{
+		wake: make(chan struct{}, 1),
+	}
+	notify := func() {
+		select {
+		case state.wake <- struct{}{}:
+		default:
+		}
+	}
+
+	launch := func(work QueuedPartWork) {
+		state.Lock()
+		state.active++
+		state.Unlock()
+
+		go func(work QueuedPartWork) {
+			defer func() {
+				state.Lock()
+				state.active--
+				state.Unlock()
+				notify()
+			}()
+			_ = w.drainClaimedWork(ctx, work)
+		}(work)
+	}
+
+	var pending *QueuedPartWork
+	for {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
+		for {
+			if pending == nil {
+				work, err := w.claimQueuedPartWork(ctx)
+				if errors.Is(err, ErrUploadPartNotFound) {
+					break
+				}
+				if err != nil {
+					return err
+				}
+				pending = &work
+			}
+
+			limit := pending.MaxParallelUploads
+			if limit <= 0 {
+				limit = 1
+			}
+			state.Lock()
+			active := state.active
+			state.Unlock()
+			if active >= limit {
+				break
+			}
+
+			launch(*pending)
+			pending = nil
+		}
+
+		state.Lock()
+		active := state.active
+		state.Unlock()
+		if active == 0 {
+			timer := time.NewTimer(pollInterval)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return ctx.Err()
+			case <-timer.C:
+			}
+			continue
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-state.wake:
+		}
+	}
+}
+
+func (w *DrainWorker) claimQueuedPartWork(ctx context.Context) (QueuedPartWork, error) {
+	now := w.settings.Now()
+	return w.store.ClaimQueuedPartWork(ctx, ClaimQueuedPartParams{
+		WorkerID:      w.settings.WorkerID,
+		Now:           now,
+		LeaseDuration: w.settings.LeaseDuration,
+	})
+}
+
+func (w *DrainWorker) drainClaimedWork(ctx context.Context, work QueuedPartWork) error {
 	part := work.Part
 	if !part.StorageBackend.Valid || part.StorageBackend.String != LocalStagingBackend {
 		err := fmt.Errorf("unsupported storage backend %q", nullableString(part.StorageBackend))

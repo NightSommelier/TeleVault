@@ -89,22 +89,19 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-loop:
-	for {
+	if flags.once {
 		worked, err := worker.DrainOne(ctx)
 		if err != nil {
 			logger.Warn("upload part drain failed", "error", err)
 		}
-		if flags.once || ctx.Err() != nil {
-			break
-		}
 		if !worked {
-			select {
-			case <-ctx.Done():
-				break loop
-			case <-time.After(flags.pollInterval):
-			}
+			return
 		}
+		return
+	}
+
+	if err := worker.DrainLoop(ctx, flags.pollInterval); err != nil && ctx.Err() == nil {
+		logger.Warn("upload drain loop stopped", "error", err)
 	}
 }
 

@@ -399,7 +399,7 @@ func TestUploadPartQueueLeaseRetryAndFail(t *testing.T) {
 		UploadedSize:   10,
 		StorageBackend: "local",
 		StorageKey:     "queue.bin.part-2",
-		AvailableAt:    now.Add(time.Minute),
+		AvailableAt:    now,
 		Now:            now,
 	}); err != nil {
 		t.Fatalf("StagePart(2) error = %v", err)
@@ -422,7 +422,7 @@ func TestUploadPartQueueLeaseRetryAndFail(t *testing.T) {
 		Now:           now,
 		LeaseDuration: time.Minute,
 	}); !errors.Is(err, uploads.ErrUploadPartNotFound) {
-		t.Fatalf("second ClaimQueuedPart() error = %v, want ErrUploadPartNotFound", err)
+		t.Fatalf("second ClaimQueuedPart() with earlier incomplete part error = %v, want ErrUploadPartNotFound", err)
 	}
 
 	if err := uploadStore.RetryQueuedPart(ctx, uploads.RetryPartParams{

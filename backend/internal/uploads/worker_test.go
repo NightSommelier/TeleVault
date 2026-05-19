@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -141,6 +142,172 @@ func TestDrainWorkerRetriesFloodWait(t *testing.T) {
 	}
 }
 
+func TestDrainLoopRespectsConfiguredConcurrency(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	spool, err := NewLocalSpool(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewLocalSpool() error = %v", err)
+	}
+	for _, key := range []string{"upload-a/part-1.age", "upload-b/part-1.age"} {
+		if err := spool.Write(ctx, key, func(w io.Writer) error {
+			_, err := w.Write([]byte("ciphertext"))
+			return err
+		}); err != nil {
+			t.Fatalf("spool.Write(%q) error = %v", key, err)
+		}
+	}
+
+	crypto := testSessionCrypto(t)
+	encryptedSession, err := crypto.Encrypt("telegram:12345", "telegram-session")
+	if err != nil {
+		t.Fatalf("Encrypt() error = %v", err)
+	}
+
+	store := &sequenceWorkStore{
+		works: []QueuedPartWork{
+			{
+				Part: UploadPart{
+					ID:             "part-a",
+					UploadID:       "upload-a",
+					PartNumber:     1,
+					StorageBackend: sql.NullString{String: LocalStagingBackend, Valid: true},
+					StorageKey:     sql.NullString{String: "upload-a/part-1.age", Valid: true},
+				},
+				OwnerTelegramID:    12345,
+				EncryptedSession:   encryptedSession,
+				StoragePeer:        sql.NullString{String: "self", Valid: true},
+				MaxParallelUploads: 2,
+			},
+			{
+				Part: UploadPart{
+					ID:             "part-b",
+					UploadID:       "upload-b",
+					PartNumber:     1,
+					StorageBackend: sql.NullString{String: LocalStagingBackend, Valid: true},
+					StorageKey:     sql.NullString{String: "upload-b/part-1.age", Valid: true},
+				},
+				OwnerTelegramID:    12345,
+				EncryptedSession:   encryptedSession,
+				StoragePeer:        sql.NullString{String: "self", Valid: true},
+				MaxParallelUploads: 2,
+			},
+		},
+	}
+	telegram := newGateWorkerTelegram(2)
+
+	worker, err := NewDrainWorker(store, spool, crypto, telegram, WorkerSettings{
+		WorkerID:      "worker-a",
+		LeaseDuration: time.Minute,
+		Now:           func() time.Time { return time.Unix(1000, 0) },
+	})
+	if err != nil {
+		t.Fatalf("NewDrainWorker() error = %v", err)
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- worker.DrainLoop(ctx, 10*time.Millisecond)
+	}()
+
+	select {
+	case <-telegram.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for concurrent uploads to start")
+	}
+	if got := telegram.maxActive(); got != 2 {
+		t.Fatalf("max active uploads = %d, want 2", got)
+	}
+
+	telegram.release()
+	cancel()
+
+	select {
+	case err := <-errCh:
+		if err != nil && !errors.Is(err, context.Canceled) {
+			t.Fatalf("DrainLoop() error = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for DrainLoop() to stop")
+	}
+}
+
+func TestDrainLoopDoesNotExceedLowerCapForPendingWork(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	spool, err := NewLocalSpool(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewLocalSpool() error = %v", err)
+	}
+	for _, key := range []string{"upload-a/part-1.age", "upload-b/part-1.age", "upload-c/part-1.age"} {
+		if err := spool.Write(ctx, key, func(w io.Writer) error {
+			_, err := w.Write([]byte("ciphertext"))
+			return err
+		}); err != nil {
+			t.Fatalf("spool.Write(%q) error = %v", key, err)
+		}
+	}
+
+	crypto := testSessionCrypto(t)
+	encryptedSession, err := crypto.Encrypt("telegram:12345", "telegram-session")
+	if err != nil {
+		t.Fatalf("Encrypt() error = %v", err)
+	}
+
+	store := &sequenceWorkStore{
+		works: []QueuedPartWork{
+			testQueuedWork("part-a", "upload-a", "upload-a/part-1.age", encryptedSession, 2),
+			testQueuedWork("part-b", "upload-b", "upload-b/part-1.age", encryptedSession, 2),
+			testQueuedWork("part-c", "upload-c", "upload-c/part-1.age", encryptedSession, 1),
+		},
+	}
+	telegram := newGateWorkerTelegram(3)
+
+	worker, err := NewDrainWorker(store, spool, crypto, telegram, WorkerSettings{
+		WorkerID:      "worker-a",
+		LeaseDuration: time.Minute,
+		Now:           func() time.Time { return time.Unix(1000, 0) },
+	})
+	if err != nil {
+		t.Fatalf("NewDrainWorker() error = %v", err)
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- worker.DrainLoop(ctx, 10*time.Millisecond)
+	}()
+
+	select {
+	case <-telegram.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for two active uploads")
+	}
+	time.Sleep(50 * time.Millisecond)
+	if got := telegram.uploadCount(); got != 2 {
+		t.Fatalf("started uploads before release = %d, want 2", got)
+	}
+
+	telegram.release()
+	cancel()
+
+	select {
+	case err := <-errCh:
+		if err != nil && !errors.Is(err, context.Canceled) {
+			t.Fatalf("DrainLoop() error = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for DrainLoop() to stop")
+	}
+	if got := telegram.uploadCount(); got != 3 {
+		t.Fatalf("started uploads after release = %d, want 3", got)
+	}
+	if got := telegram.maxActive(); got != 2 {
+		t.Fatalf("max active uploads = %d, want 2", got)
+	}
+}
+
 func TestUploadPolicyDelayUsesCooldownAndTargetRate(t *testing.T) {
 	delay := uploadPolicyDelay(QueuedPartWork{
 		Part: UploadPart{
@@ -239,4 +406,137 @@ func (t *fakeWorkerTelegram) DownloadEncryptedPart(context.Context, string, stri
 
 func (t *fakeWorkerTelegram) DeleteEncryptedPart(context.Context, string, string, int64) error {
 	return nil
+}
+
+type sequenceWorkStore struct {
+	mu    sync.Mutex
+	works []QueuedPartWork
+	next  int
+}
+
+func (s *sequenceWorkStore) ClaimQueuedPartWork(context.Context, ClaimQueuedPartParams) (QueuedPartWork, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.next >= len(s.works) {
+		return QueuedPartWork{}, ErrUploadPartNotFound
+	}
+	work := s.works[s.next]
+	s.next++
+	return work, nil
+}
+
+func (s *sequenceWorkStore) MarkStagedPartUploaded(_ context.Context, params MarkStagedPartUploadedParams) (UploadPart, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, work := range s.works {
+		if work.Part.ID == params.PartID {
+			part := work.Part
+			part.Status = StatusComplete
+			part.TelegramPeer = sql.NullString{String: params.TelegramPeer, Valid: params.TelegramPeer != ""}
+			part.MessageID = sql.NullInt64{Int64: params.MessageID, Valid: params.MessageID != 0}
+			return part, nil
+		}
+	}
+	return UploadPart{}, ErrUploadPartNotFound
+}
+
+func (s *sequenceWorkStore) RetryQueuedPart(context.Context, RetryPartParams) error { return nil }
+
+func (s *sequenceWorkStore) FailQueuedPart(context.Context, string, error) error { return nil }
+
+func testQueuedWork(partID string, uploadID string, storageKey string, encryptedSession []byte, maxParallelUploads int) QueuedPartWork {
+	return QueuedPartWork{
+		Part: UploadPart{
+			ID:             partID,
+			UploadID:       uploadID,
+			PartNumber:     1,
+			StorageBackend: sql.NullString{String: LocalStagingBackend, Valid: true},
+			StorageKey:     sql.NullString{String: storageKey, Valid: true},
+		},
+		OwnerTelegramID:    12345,
+		EncryptedSession:   encryptedSession,
+		StoragePeer:        sql.NullString{String: "self", Valid: true},
+		MaxParallelUploads: maxParallelUploads,
+	}
+}
+
+type gateWorkerTelegram struct {
+	mu          sync.Mutex
+	active      int
+	max         int
+	uploads     int
+	started     chan struct{}
+	releaseC    chan struct{}
+	done        chan struct{}
+	releaseOnce sync.Once
+	completed   int
+	needDone    int
+	startOnce   sync.Once
+}
+
+func newGateWorkerTelegram(needDone int) *gateWorkerTelegram {
+	return &gateWorkerTelegram{
+		started:  make(chan struct{}),
+		releaseC: make(chan struct{}),
+		done:     make(chan struct{}),
+		needDone: needDone,
+	}
+}
+
+func (t *gateWorkerTelegram) UploadEncryptedPart(_ context.Context, session string, storagePeer string, name string, mimeType string, body io.Reader) (auth.TelegramUploadResult, error) {
+	if _, err := io.ReadAll(body); err != nil {
+		return auth.TelegramUploadResult{}, err
+	}
+
+	t.mu.Lock()
+	t.active++
+	t.uploads++
+	if t.active > t.max {
+		t.max = t.active
+	}
+	if t.active == 2 {
+		t.startOnce.Do(func() { close(t.started) })
+	}
+	t.mu.Unlock()
+
+	<-t.releaseC
+
+	t.mu.Lock()
+	t.active--
+	t.completed++
+	if t.completed >= t.needDone {
+		select {
+		case <-t.done:
+		default:
+			close(t.done)
+		}
+	}
+	t.mu.Unlock()
+
+	return auth.TelegramUploadResult{Peer: "self", MessageID: 100}, nil
+}
+
+func (t *gateWorkerTelegram) DownloadEncryptedPart(context.Context, string, string, int64, io.Writer) error {
+	return nil
+}
+
+func (t *gateWorkerTelegram) DeleteEncryptedPart(context.Context, string, string, int64) error {
+	return nil
+}
+
+func (t *gateWorkerTelegram) release() {
+	t.releaseOnce.Do(func() { close(t.releaseC) })
+	<-t.done
+}
+
+func (t *gateWorkerTelegram) maxActive() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.max
+}
+
+func (t *gateWorkerTelegram) uploadCount() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.uploads
 }

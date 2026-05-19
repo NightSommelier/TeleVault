@@ -573,6 +573,13 @@ WITH next_part AS (
       AND (p.leased_until IS NULL OR p.leased_until <= $1)
       AND u.status IN ('pending', 'uploading')
       AND u.expires_at > $1
+      AND NOT EXISTS (
+          SELECT 1
+          FROM upload_parts prev
+          WHERE prev.upload_id = p.upload_id
+            AND prev.part_number < p.part_number
+            AND prev.status <> 'complete'
+      )
     ORDER BY p.available_at ASC, p.created_at ASC
     FOR UPDATE SKIP LOCKED
     LIMIT 1

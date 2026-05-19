@@ -1,58 +1,79 @@
-# Next Step: Adaptive Upload Worker Concurrency and Pacing
+# Next Step: Upload Policy Visibility in Progress API
+
+## Agent Workflow Contract
+
+This file is the handoff contract for the implementation agent.
+
+- Do not make commits.
+- Do not push.
+- Do not rewrite history.
+- Leave all implementation changes as a normal workspace diff.
+- After finishing, report:
+  - what files changed;
+  - what behavior changed;
+  - what tests/checks were run and their result;
+  - any blocker or skipped acceptance criterion.
+- The reviewer/maintainer will inspect the diff, update this file for the next task, and make the commit.
+- If the task is ambiguous, stop and write the specific question instead of implementing a broad guess.
 
 ## Goal
 
-Finish upload worker hardening so the instance can keep draining parts safely when Telegram slows down or when multiple uploads are active at the same time.
+Expose the effective upload policy in the upload status/progress API so the frontend can explain why parts are queued, leased, or deferred.
 
-Right now the worker drains parts sequentially, but the plan already calls for bounded concurrency, per-account pacing, and adaptive backoff when Telegram starts throttling. Implement that next, without changing the storage model unless a test proves it is required.
+The worker already drains with bounded concurrency and strict per-upload ordering. The next step is to surface the policy that controls that behavior instead of leaving the UI to infer it.
 
-## Context
+## Current State
 
-Relevant current behavior:
-
-- the API already stages encrypted parts locally and the worker drains them to Telegram;
-- queue state, retry metadata, and active worker ids are already exposed;
-- admin settings already carry upload policy fields such as target upload rate, cooldown, and max parallel uploads;
-- `FLOOD_WAIT_X` handling already exists, but the worker still needs better account-aware pacing and concurrency control.
-
-Important files:
-
-- `backend/internal/uploads/worker.go`
-- `backend/internal/uploads/http.go`
-- `backend/internal/uploads/store.go`
-- `backend/internal/adminsettings/`
-- `backend/internal/integration/`
-- `docs/development/uploads.md`
-- `TeleVault-plan.md`
+- `backend/internal/uploads/http.go` already returns queue progress, active workers, retry timing, and completion readiness.
+- `backend/internal/uploads/store.go` already resolves the effective upload policy fields for claimed work:
+  - `max_parallel_uploads`;
+  - `target_upload_bytes_per_second`;
+  - `cooldown_between_parts_ms`.
+- `backend/internal/adminsettings/` already stores the global and per-account policy values.
+- The frontend currently knows whether parts are queued or leased, but not why the instance is pacing uploads the way it is.
 
 ## Required Behavior
 
-1. Add bounded worker concurrency for draining staged parts, driven by the existing policy fields.
-2. Keep per-upload part ordering intact.
-3. Make the worker respect current account pacing when it sees backlog or Telegram slowdowns.
-4. Continue honoring `FLOOD_WAIT_X` by pushing the next retry forward instead of retrying aggressively.
-5. Keep queue progress visible enough for the frontend to explain why work is queued, leased, or deferred.
-6. Do not introduce a broad schema migration unless a concrete bug or missing field forces it.
-7. Do not regress the current staged-upload flow, retry controls, or privacy-masking wrapper work.
+1. Add the effective upload policy to the upload progress/status response.
+2. Keep the values aligned with the same policy resolution used by the worker.
+3. Make the response explicit enough for the frontend to explain:
+   - the current concurrency cap;
+   - the current target upload rate;
+   - the current cooldown between parts.
+4. Do not expose secrets, session material, Telegram peer ids, or internal database ids that the UI does not already need.
+5. Do not change the concurrency logic from the previous task.
 
 ## Suggested Implementation
 
-Use the existing queue and settings first.
+Prefer a small API extension:
 
-Good shape:
+- extend the upload handler response with a dedicated policy object;
+- source the values from the same settings or policy resolution path already used by upload draining;
+- add tests for the response shape and the resolved values;
+- keep the frontend changes minimal and utilitarian.
 
-- cap active drain work with `max_parallel_uploads`;
-- keep one lease per part and one worker slot per concurrent upload;
-- let the worker back off when the effective upload duration or queue pressure exceeds the configured pacing;
-- preserve the current retry schedule for transient Telegram errors;
-- keep single-upload part ordering deterministic.
+If the upload handler cannot access the effective policy cleanly, add a focused provider to the handler settings rather than duplicating store logic in HTTP code.
 
-## Constraints
+## Files To Inspect
 
-- No change that breaks existing uploads or recovery paths.
-- No hidden behavior that surprises the user with unbounded throttling.
-- No broad rewrite of the queue unless the current structure cannot support the policy cleanly.
-- Keep the implementation small enough to test with the current integration and unit test style.
+- `backend/internal/uploads/http.go`
+- `backend/internal/uploads/http_test.go`
+- `backend/internal/uploads/store.go`
+- `backend/internal/adminsettings/`
+- `backend/internal/httpserver/static/index.html`
+- `docs/development/uploads.md`
+- `TeleVault-plan.md`
+
+## Tests To Add Or Update
+
+Add focused tests for:
+
+- the progress response includes the policy fields;
+- the values match the effective settings for the current user/account;
+- existing progress fields are unchanged;
+- no secret or low-level transport data is exposed.
+
+If the embedded web UI is updated, also validate the embedded JavaScript syntax.
 
 ## Docs
 
@@ -61,7 +82,7 @@ Update:
 - `docs/development/uploads.md`
 - `TeleVault-plan.md`
 
-Document how the worker decides when to drain, when to wait, and how the configured limits affect throughput.
+Document that the upload status page now shows the effective policy driving queueing and pacing.
 
 ## Verification
 
@@ -78,14 +99,14 @@ Then run:
 git diff --check
 ```
 
-If the embedded web UI changes, also validate the JS syntax.
+If the embedded web UI changes, also validate the JavaScript syntax.
 
 ## Acceptance Criteria
 
-- The worker obeys `max_parallel_uploads` or the equivalent configured concurrency cap.
-- Upload ordering remains stable inside a single upload session.
-- Telegram slowdowns push work back through retry/backoff instead of causing tight retry loops.
-- Queue progress still explains queued, leased, failed, and ready states correctly.
-- Tests cover the new pacing/concurrency behavior.
+- Upload progress/status responses include the effective upload policy.
+- The concurrency cap and pacing values match the effective policy.
+- Existing queue state fields still work.
+- No new sensitive data is exposed in the response.
+- Tests cover the new response fields and value resolution.
 - `go test ./... -count=1` passes.
 - `git diff --check` passes.
