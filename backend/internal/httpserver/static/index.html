@@ -151,6 +151,7 @@
     }
     .field input[type="text"],
     .field input[type="number"],
+    .field input[type="password"],
     .copy-field input[type="text"],
     .field select {
       width: 100%;
@@ -483,6 +484,10 @@
               <button id="createPublicLinkBtn" class="primary">Create link</button>
             </div>
           </div>
+          <div class="field">
+            <label for="publicPasswordInput">Password</label>
+            <input id="publicPasswordInput" type="password" minlength="8" maxlength="1024" autocomplete="new-password" placeholder="Optional, at least 8 characters">
+          </div>
           <div id="publicLinkResult" class="copy-field hidden">
             <input id="publicLinkInput" type="text" readonly>
             <button id="copyPublicLinkBtn">Copy</button>
@@ -552,6 +557,7 @@
       createPublicLinkBtn: document.getElementById('createPublicLinkBtn'),
       publicLinkResult: document.getElementById('publicLinkResult'),
       publicLinkInput: document.getElementById('publicLinkInput'),
+      publicPasswordInput: document.getElementById('publicPasswordInput'),
       copyPublicLinkBtn: document.getElementById('copyPublicLinkBtn'),
       publicLinksBody: document.getElementById('publicLinksBody'),
     };
@@ -913,6 +919,7 @@
       el.shareExpirySelect.value = '';
       el.publicExpirySelect.value = '1d';
       el.publicLinkInput.value = '';
+      el.publicPasswordInput.value = '';
       el.publicLinkResult.classList.add('hidden');
       setShareStatus('');
       el.shareModal.classList.remove('hidden');
@@ -1013,9 +1020,11 @@
           csrf: true,
           body: JSON.stringify({
             expires_at: selectedExpiry(el.publicExpirySelect.value),
+            password: el.publicPasswordInput.value.trim() || undefined,
           }),
         });
         el.publicLinkInput.value = data.url || '';
+        el.publicPasswordInput.value = '';
         el.publicLinkResult.classList.remove('hidden');
         setShareStatus('Public link created.');
         await refreshPublicLinks();
@@ -1034,7 +1043,7 @@
       el.publicLinksBody.innerHTML = links.map((link) => `
         <tr>
           <td>${escapeHTML(new Date(link.created_at).toLocaleString())}</td>
-          <td>${link.expires_at ? escapeHTML(new Date(link.expires_at).toLocaleString()) : 'No limit'}</td>
+          <td>${link.expires_at ? escapeHTML(new Date(link.expires_at).toLocaleString()) : 'No limit'}${link.password_required ? ' + password' : ''}</td>
           <td><button data-revoke-public-link="${link.id}">Revoke</button></td>
         </tr>
       `).join('');

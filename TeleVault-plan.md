@@ -557,7 +557,7 @@ Post-MVP only.
 
 - Implement user-to-user shares. Done for registered users by Telegram ID.
 - Implement public links. Done for bearer download links with hashed tokens, expiry, and revoke.
-- Implement password-protected links.
+- Implement password-protected links. Done with Argon2id password hashes and browser form download.
 - Implement expiry and revoke. Done for internal shares and public links.
 - Add audit events.
 

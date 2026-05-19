@@ -3,10 +3,12 @@ package files
 import (
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"html/template"
 	"io"
 	"net/http"
 	"strconv"
@@ -14,12 +16,57 @@ import (
 	"time"
 
 	"filippo.io/age"
+	"golang.org/x/crypto/argon2"
 
 	"gitrepo.pp.ua/Sommelier/TeleDriveVault/backend/internal/auth"
 	"gitrepo.pp.ua/Sommelier/TeleDriveVault/backend/internal/crypto/agefile"
 )
 
-const publicLinkTokenBytes = 32
+const (
+	publicLinkTokenBytes        = 32
+	publicLinkPasswordSaltBytes = 16
+	publicLinkPasswordMinLength = 8
+	publicLinkPasswordMaxLength = 1024
+	publicLinkArgonTime         = 1
+	publicLinkArgonMemoryKiB    = 64 * 1024
+	publicLinkArgonThreads      = 4
+	publicLinkPasswordHashBytes = 32
+)
+
+var publicLinkPageTemplate = template.Must(template.New("public-link").Parse(`<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.Name}} - TeleDrive Vault</title>
+  <style>
+    body { margin: 0; font: 14px/1.45 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #1b1f24; background: #f7f8fa; }
+    main { min-height: 100vh; display: grid; place-items: center; padding: 24px; }
+    .panel { width: min(460px, 100%); background: #fff; border: 1px solid #d9dee7; border-radius: 8px; padding: 18px; box-shadow: 0 1px 2px rgba(16, 24, 40, .06); }
+    h1 { font-size: 18px; margin: 0 0 6px; overflow-wrap: anywhere; }
+    .muted { color: #68707c; margin-bottom: 14px; }
+    form { display: grid; gap: 10px; }
+    input { min-height: 38px; padding: 0 10px; border: 1px solid #d9dee7; border-radius: 6px; font: inherit; }
+    button, a.button { min-height: 38px; display: inline-grid; place-items: center; border: 1px solid #0f766e; border-radius: 6px; background: #0f766e; color: #fff; text-decoration: none; font: inherit; padding: 0 14px; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="panel">
+      <h1>{{.Name}}</h1>
+      <div class="muted">{{.Size}}</div>
+      {{if .PasswordRequired}}
+      <form method="post" action="/public/{{.Token}}/download">
+        <input name="password" type="password" autocomplete="current-password" placeholder="Password" required autofocus>
+        <button type="submit">Download</button>
+      </form>
+      {{else}}
+      <a class="button" href="/public/{{.Token}}/download">Download</a>
+      {{end}}
+    </div>
+  </main>
+</body>
+</html>`))
 
 type Handler struct {
 	store         *Store
@@ -325,7 +372,13 @@ func (h *Handler) CreatePublicLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	link, err := h.store.CreatePublicLink(r.Context(), user.ID, fileID, tokenHash, expiresAt)
+	password, ok := derivePublicLinkPassword(request.Password)
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid_public_link_password")
+		return
+	}
+
+	link, err := h.store.CreatePublicLink(r.Context(), user.ID, fileID, tokenHash, expiresAt, password)
 	if errors.Is(err, ErrNotFound) {
 		writeError(w, http.StatusNotFound, "file_not_found")
 		return
@@ -408,7 +461,7 @@ func (h *Handler) PublicMetadata(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	file, _, _, err := h.store.DownloadDataByPublicTokenHash(r.Context(), publicLinkTokenHash(token))
+	file, link, err := h.store.PublicFileByTokenHash(r.Context(), publicLinkTokenHash(token))
 	if errors.Is(err, ErrNotFound) {
 		writeError(w, http.StatusNotFound, "public_link_not_found")
 		return
@@ -418,8 +471,14 @@ func (h *Handler) PublicMetadata(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if acceptsHTML(r) {
+		h.writePublicLinkPage(w, r, token, file, link)
+		return
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
-		"file": fileResponse(file),
+		"file":              fileResponse(file),
+		"password_required": link.PasswordRequired,
 	})
 }
 
@@ -430,7 +489,21 @@ func (h *Handler) PublicDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	file, parts, telegramSession, err := h.store.DownloadDataByPublicTokenHash(r.Context(), publicLinkTokenHash(token))
+	file, link, err := h.store.PublicFileByTokenHash(r.Context(), publicLinkTokenHash(token))
+	if errors.Is(err, ErrNotFound) {
+		writeError(w, http.StatusNotFound, "public_link_not_found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "public_download_load_failed")
+		return
+	}
+	if link.PasswordRequired && !verifyPublicLinkPassword(link, publicLinkPasswordFromRequest(r)) {
+		writeError(w, http.StatusUnauthorized, "public_link_password_required")
+		return
+	}
+
+	file, parts, telegramSession, err := h.store.DownloadDataForPublicFile(r.Context(), file)
 	if errors.Is(err, ErrNotFound) {
 		writeError(w, http.StatusNotFound, "public_link_not_found")
 		return
@@ -494,6 +567,7 @@ type createShareRequest struct {
 
 type createPublicLinkRequest struct {
 	ExpiresAt string `json:"expires_at"`
+	Password  string `json:"password"`
 }
 
 func normalizeName(name string) string {
@@ -559,14 +633,15 @@ func publicLinksResponse(links []PublicLink) []map[string]any {
 
 func publicLinkResponse(link PublicLink) map[string]any {
 	return map[string]any{
-		"id":         link.ID,
-		"file_id":    link.FileID,
-		"owner_id":   link.OwnerID,
-		"permission": link.Permission,
-		"expires_at": nullableTimeValue(link.ExpiresAt),
-		"revoked_at": nullableTimeValue(link.RevokedAt),
-		"created_at": link.CreatedAt,
-		"updated_at": link.UpdatedAt,
+		"id":                link.ID,
+		"file_id":           link.FileID,
+		"owner_id":          link.OwnerID,
+		"permission":        link.Permission,
+		"expires_at":        nullableTimeValue(link.ExpiresAt),
+		"revoked_at":        nullableTimeValue(link.RevokedAt),
+		"password_required": link.PasswordRequired,
+		"created_at":        link.CreatedAt,
+		"updated_at":        link.UpdatedAt,
 	}
 }
 
@@ -596,7 +671,110 @@ func publicLinkURL(r *http.Request, token string) string {
 	if forwardedHost := strings.TrimSpace(r.Header.Get("X-Forwarded-Host")); forwardedHost != "" {
 		host = strings.Split(forwardedHost, ",")[0]
 	}
-	return scheme + "://" + strings.TrimSpace(host) + "/public/" + token + "/download"
+	return scheme + "://" + strings.TrimSpace(host) + "/public/" + token
+}
+
+func derivePublicLinkPassword(password string) (PublicLinkPassword, bool) {
+	password = strings.TrimSpace(password)
+	if password == "" {
+		return PublicLinkPassword{}, true
+	}
+	if len(password) < publicLinkPasswordMinLength || len(password) > publicLinkPasswordMaxLength {
+		return PublicLinkPassword{}, false
+	}
+	salt := make([]byte, publicLinkPasswordSaltBytes)
+	if _, err := rand.Read(salt); err != nil {
+		return PublicLinkPassword{}, false
+	}
+	hash := argon2.IDKey(
+		[]byte(password),
+		salt,
+		publicLinkArgonTime,
+		publicLinkArgonMemoryKiB,
+		publicLinkArgonThreads,
+		publicLinkPasswordHashBytes,
+	)
+	return PublicLinkPassword{
+		KDF:            "argon2id",
+		Salt:           salt,
+		Hash:           hash,
+		ArgonTime:      publicLinkArgonTime,
+		ArgonMemoryKiB: publicLinkArgonMemoryKiB,
+		ArgonThreads:   publicLinkArgonThreads,
+	}, true
+}
+
+func verifyPublicLinkPassword(link PublicLink, password string) bool {
+	if !link.PasswordRequired {
+		return true
+	}
+	if strings.TrimSpace(password) == "" ||
+		!link.PasswordKDF.Valid ||
+		link.PasswordKDF.String != "argon2id" ||
+		len(link.PasswordSalt) == 0 ||
+		len(link.PasswordHash) == 0 ||
+		!link.PasswordArgonTime.Valid ||
+		!link.PasswordArgonMemoryKiB.Valid ||
+		!link.PasswordArgonThreads.Valid {
+		return false
+	}
+	hash := argon2.IDKey(
+		[]byte(password),
+		link.PasswordSalt,
+		uint32(link.PasswordArgonTime.Int64),
+		uint32(link.PasswordArgonMemoryKiB.Int64),
+		uint8(link.PasswordArgonThreads.Int64),
+		uint32(len(link.PasswordHash)),
+	)
+	return subtle.ConstantTimeCompare(hash, link.PasswordHash) == 1
+}
+
+func publicLinkPasswordFromRequest(r *http.Request) string {
+	if header := strings.TrimSpace(r.Header.Get("X-Public-Link-Password")); header != "" {
+		return header
+	}
+	if r.Method == http.MethodPost {
+		contentType := r.Header.Get("Content-Type")
+		if strings.HasPrefix(contentType, "application/json") {
+			var body struct {
+				Password string `json:"password"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err == nil {
+				return body.Password
+			}
+			return ""
+		}
+		if err := r.ParseForm(); err == nil {
+			return r.Form.Get("password")
+		}
+	}
+	return ""
+}
+
+func acceptsHTML(r *http.Request) bool {
+	accept := r.Header.Get("Accept")
+	return accept == "" || strings.Contains(accept, "text/html")
+}
+
+func (h *Handler) writePublicLinkPage(w http.ResponseWriter, r *http.Request, token string, file File, link PublicLink) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	name := nullableString(file.NamePlain)
+	if name == "" {
+		name = "download"
+	}
+	_ = publicLinkPageTemplate.Execute(w, map[string]any{
+		"Token":            token,
+		"Name":             name,
+		"Size":             formatPublicFileSize(file.PlaintextSize),
+		"PasswordRequired": link.PasswordRequired,
+	})
+}
+
+func formatPublicFileSize(size sql.NullInt64) string {
+	if !size.Valid {
+		return "Unknown size"
+	}
+	return strconv.FormatInt(size.Int64, 10) + " bytes"
 }
 
 func nullableStringValue(value sql.NullString) any {

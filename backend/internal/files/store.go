@@ -7,7 +7,10 @@ import (
 	"time"
 )
 
-var ErrNotFound = errors.New("file not found")
+var (
+	ErrNotFound         = errors.New("file not found")
+	ErrPasswordRequired = errors.New("public link password required")
+)
 
 const (
 	TypeFile    = "file"
@@ -59,14 +62,30 @@ type Share struct {
 }
 
 type PublicLink struct {
-	ID         string
-	FileID     string
-	OwnerID    string
-	Permission string
-	ExpiresAt  sql.NullTime
-	RevokedAt  sql.NullTime
-	CreatedAt  time.Time
-	UpdatedAt  time.Time
+	ID                     string
+	FileID                 string
+	OwnerID                string
+	Permission             string
+	ExpiresAt              sql.NullTime
+	RevokedAt              sql.NullTime
+	PasswordRequired       bool
+	PasswordKDF            sql.NullString
+	PasswordSalt           []byte
+	PasswordHash           []byte
+	PasswordArgonTime      sql.NullInt64
+	PasswordArgonMemoryKiB sql.NullInt64
+	PasswordArgonThreads   sql.NullInt64
+	CreatedAt              time.Time
+	UpdatedAt              time.Time
+}
+
+type PublicLinkPassword struct {
+	KDF            string
+	Salt           []byte
+	Hash           []byte
+	ArgonTime      int
+	ArgonMemoryKiB int
+	ArgonThreads   int
 }
 
 type Store struct {
@@ -234,8 +253,26 @@ func (s *Store) DownloadData(ctx context.Context, requesterID string, id string)
 }
 
 func (s *Store) DownloadDataByPublicTokenHash(ctx context.Context, tokenHash []byte) (File, []FilePart, TelegramSession, error) {
-	file, err := scanFile(s.db.QueryRowContext(ctx, `
-SELECT f.id, f.owner_id, f.parent_id, f.name_plain, f.mime_type, f.plaintext_size, f.ciphertext_size, f.type, f.status, f.created_at, f.updated_at
+	file, link, err := s.PublicFileByTokenHash(ctx, tokenHash)
+	if err != nil {
+		return File{}, nil, TelegramSession{}, err
+	}
+	if link.PasswordRequired {
+		return File{}, nil, TelegramSession{}, ErrPasswordRequired
+	}
+	return s.downloadDataForFile(ctx, file)
+}
+
+func (s *Store) DownloadDataForPublicFile(ctx context.Context, file File) (File, []FilePart, TelegramSession, error) {
+	return s.downloadDataForFile(ctx, file)
+}
+
+func (s *Store) PublicFileByTokenHash(ctx context.Context, tokenHash []byte) (File, PublicLink, error) {
+	row := s.db.QueryRowContext(ctx, `
+SELECT f.id, f.owner_id, f.parent_id, f.name_plain, f.mime_type, f.plaintext_size, f.ciphertext_size, f.type, f.status, f.created_at, f.updated_at,
+       l.id, l.file_id, l.owner_id, l.permission, l.expires_at, l.revoked_at, (l.password_hash IS NOT NULL),
+       l.password_kdf, l.password_salt, l.password_hash, l.password_argon_time, l.password_argon_memory_kib, l.password_argon_threads,
+       l.created_at, l.updated_at
 FROM public_links l
 JOIN files f ON f.id = l.file_id
 WHERE l.token_hash = $1
@@ -243,14 +280,15 @@ WHERE l.token_hash = $1
   AND (l.expires_at IS NULL OR l.expires_at > now())
   AND f.deleted_at IS NULL`,
 		tokenHash,
-	))
+	)
+	file, link, err := scanFileAndPublicLink(row)
 	if errors.Is(err, sql.ErrNoRows) {
-		return File{}, nil, TelegramSession{}, ErrNotFound
+		return File{}, PublicLink{}, ErrNotFound
 	}
 	if err != nil {
-		return File{}, nil, TelegramSession{}, err
+		return File{}, PublicLink{}, err
 	}
-	return s.downloadDataForFile(ctx, file)
+	return file, link, nil
 }
 
 func (s *Store) downloadDataForFile(ctx context.Context, file File) (File, []FilePart, TelegramSession, error) {
@@ -303,7 +341,7 @@ WHERE ts.user_id = $1`,
 	return file, parts, session, nil
 }
 
-func (s *Store) CreatePublicLink(ctx context.Context, ownerID string, fileID string, tokenHash []byte, expiresAt sql.NullTime) (PublicLink, error) {
+func (s *Store) CreatePublicLink(ctx context.Context, ownerID string, fileID string, tokenHash []byte, expiresAt sql.NullTime, password PublicLinkPassword) (PublicLink, error) {
 	file, err := s.GetByID(ctx, ownerID, fileID)
 	if err != nil {
 		return PublicLink{}, err
@@ -314,13 +352,31 @@ func (s *Store) CreatePublicLink(ctx context.Context, ownerID string, fileID str
 
 	var linkID string
 	err = s.db.QueryRowContext(ctx, `
-INSERT INTO public_links (file_id, owner_id, token_hash, permission, expires_at)
-VALUES ($1, $2, $3, 'read', $4)
+INSERT INTO public_links (
+    file_id,
+    owner_id,
+    token_hash,
+    permission,
+    expires_at,
+    password_kdf,
+    password_salt,
+    password_hash,
+    password_argon_time,
+    password_argon_memory_kib,
+    password_argon_threads
+)
+VALUES ($1, $2, $3, 'read', $4, $5, $6, $7, $8, $9, $10)
 RETURNING id`,
 		fileID,
 		ownerID,
 		tokenHash,
 		nullableTime(expiresAt),
+		nullablePasswordString(password.KDF),
+		nullablePasswordBytes(password.Salt),
+		nullablePasswordBytes(password.Hash),
+		nullablePasswordInt(password.ArgonTime),
+		nullablePasswordInt(password.ArgonMemoryKiB),
+		nullablePasswordInt(password.ArgonThreads),
 	).Scan(&linkID)
 	if err != nil {
 		return PublicLink{}, err
@@ -331,7 +387,9 @@ RETURNING id`,
 
 func (s *Store) GetPublicLink(ctx context.Context, ownerID string, fileID string, linkID string) (PublicLink, error) {
 	link, err := scanPublicLink(s.db.QueryRowContext(ctx, `
-SELECT id, file_id, owner_id, permission, expires_at, revoked_at, created_at, updated_at
+SELECT id, file_id, owner_id, permission, expires_at, revoked_at, (password_hash IS NOT NULL),
+       password_kdf, password_salt, password_hash, password_argon_time, password_argon_memory_kib, password_argon_threads,
+       created_at, updated_at
 FROM public_links
 WHERE owner_id = $1
   AND file_id = $2
@@ -355,7 +413,9 @@ func (s *Store) ListPublicLinks(ctx context.Context, ownerID string, fileID stri
 	}
 
 	rows, err := s.db.QueryContext(ctx, `
-SELECT id, file_id, owner_id, permission, expires_at, revoked_at, created_at, updated_at
+SELECT id, file_id, owner_id, permission, expires_at, revoked_at, (password_hash IS NOT NULL),
+       password_kdf, password_salt, password_hash, password_argon_time, password_argon_memory_kib, password_argon_threads,
+       created_at, updated_at
 FROM public_links
 WHERE owner_id = $1
   AND file_id = $2
@@ -690,6 +750,13 @@ func scanPublicLink(row rowScanner) (PublicLink, error) {
 		&link.Permission,
 		&link.ExpiresAt,
 		&link.RevokedAt,
+		&link.PasswordRequired,
+		&link.PasswordKDF,
+		&link.PasswordSalt,
+		&link.PasswordHash,
+		&link.PasswordArgonTime,
+		&link.PasswordArgonMemoryKiB,
+		&link.PasswordArgonThreads,
 		&link.CreatedAt,
 		&link.UpdatedAt,
 	)
@@ -699,9 +766,67 @@ func scanPublicLink(row rowScanner) (PublicLink, error) {
 	return link, nil
 }
 
+func scanFileAndPublicLink(row rowScanner) (File, PublicLink, error) {
+	var file File
+	var link PublicLink
+	err := row.Scan(
+		&file.ID,
+		&file.OwnerID,
+		&file.ParentID,
+		&file.NamePlain,
+		&file.MimeType,
+		&file.PlaintextSize,
+		&file.CiphertextSize,
+		&file.Type,
+		&file.Status,
+		&file.CreatedAt,
+		&file.UpdatedAt,
+		&link.ID,
+		&link.FileID,
+		&link.OwnerID,
+		&link.Permission,
+		&link.ExpiresAt,
+		&link.RevokedAt,
+		&link.PasswordRequired,
+		&link.PasswordKDF,
+		&link.PasswordSalt,
+		&link.PasswordHash,
+		&link.PasswordArgonTime,
+		&link.PasswordArgonMemoryKiB,
+		&link.PasswordArgonThreads,
+		&link.CreatedAt,
+		&link.UpdatedAt,
+	)
+	if err != nil {
+		return File{}, PublicLink{}, err
+	}
+	return file, link, nil
+}
+
 func nullableTime(value sql.NullTime) any {
 	if !value.Valid {
 		return nil
 	}
 	return value.Time
+}
+
+func nullablePasswordString(value string) any {
+	if value == "" {
+		return nil
+	}
+	return value
+}
+
+func nullablePasswordBytes(value []byte) any {
+	if len(value) == 0 {
+		return nil
+	}
+	return value
+}
+
+func nullablePasswordInt(value int) any {
+	if value == 0 {
+		return nil
+	}
+	return value
 }

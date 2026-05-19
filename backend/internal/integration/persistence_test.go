@@ -202,7 +202,7 @@ func TestFilesUploadsPersistenceOwnerIsolationAndCompletion(t *testing.T) {
 		t.Fatalf("revoked shared download error = %v, want files.ErrNotFound", err)
 	}
 	publicTokenHash := sha256.Sum256([]byte("integration-public-token-" + uniqueSuffix()))
-	publicLink, err := fileStore.CreatePublicLink(ctx, owner.ID, file.ID, publicTokenHash[:], sql.NullTime{})
+	publicLink, err := fileStore.CreatePublicLink(ctx, owner.ID, file.ID, publicTokenHash[:], sql.NullTime{}, files.PublicLinkPassword{})
 	if err != nil {
 		t.Fatalf("CreatePublicLink() error = %v", err)
 	}
@@ -225,6 +225,24 @@ func TestFilesUploadsPersistenceOwnerIsolationAndCompletion(t *testing.T) {
 	}
 	if _, _, _, err := fileStore.DownloadDataByPublicTokenHash(ctx, publicTokenHash[:]); !errors.Is(err, files.ErrNotFound) {
 		t.Fatalf("revoked public download error = %v, want files.ErrNotFound", err)
+	}
+	protectedTokenHash := sha256.Sum256([]byte("integration-protected-token-" + uniqueSuffix()))
+	protectedLink, err := fileStore.CreatePublicLink(ctx, owner.ID, file.ID, protectedTokenHash[:], sql.NullTime{}, files.PublicLinkPassword{
+		KDF:            "argon2id",
+		Salt:           []byte("integration-salt"),
+		Hash:           []byte("integration-hash"),
+		ArgonTime:      1,
+		ArgonMemoryKiB: 64 * 1024,
+		ArgonThreads:   4,
+	})
+	if err != nil {
+		t.Fatalf("CreatePublicLink(protected) error = %v", err)
+	}
+	if !protectedLink.PasswordRequired {
+		t.Fatalf("CreatePublicLink(protected) PasswordRequired = false, want true")
+	}
+	if _, _, _, err := fileStore.DownloadDataByPublicTokenHash(ctx, protectedTokenHash[:]); !errors.Is(err, files.ErrPasswordRequired) {
+		t.Fatalf("protected public download error = %v, want files.ErrPasswordRequired", err)
 	}
 	if err := fileStore.SoftDelete(ctx, other.ID, file.ID, time.Now()); !errors.Is(err, files.ErrNotFound) {
 		t.Fatalf("cross-owner delete error = %v, want files.ErrNotFound", err)
@@ -666,13 +684,13 @@ func ensureLatestMigration(t *testing.T, database *sql.DB) {
 SELECT EXISTS (
     SELECT 1
     FROM schema_migrations
-			WHERE version = '000013'
+			WHERE version = '000014'
 )`).Scan(&exists)
 	if err != nil {
 		t.Fatalf("schema migration check failed: %v", err)
 	}
 	if !exists {
-		t.Fatalf("TEST_DATABASE_URL database is not migrated through 000013; run go run ./cmd/migrate up first")
+		t.Fatalf("TEST_DATABASE_URL database is not migrated through 000014; run go run ./cmd/migrate up first")
 	}
 }
 

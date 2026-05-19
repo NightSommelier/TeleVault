@@ -91,6 +91,7 @@ func (s *Server) routes() {
 	s.mux.Handle("DELETE /files/{id}/public-links/{link_id}", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(filesHandler.RevokePublicLink))))
 	s.mux.HandleFunc("GET /public/{token}", filesHandler.PublicMetadata)
 	s.mux.HandleFunc("GET /public/{token}/download", filesHandler.PublicDownload)
+	s.mux.HandleFunc("POST /public/{token}/download", filesHandler.PublicDownload)
 
 	adminSettingsStore := adminsettings.NewStore(s.db, s.cfg)
 	uploadsHandler := uploads.NewHandler(s.db, s.ageRecipient, telegramSessionCrypto, s.telegram, uploads.Settings{
