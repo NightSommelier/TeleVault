@@ -386,6 +386,19 @@
             <progress id="uploadProgress" value="0" max="100"></progress>
           </div>
         </div>
+        <div class="panel">
+          <div class="panel-head">
+            <div class="panel-title">Recovery</div>
+          </div>
+          <div class="panel-body stack">
+            <div class="actions">
+              <button id="exportRecoveryBtn">Export map</button>
+              <button id="importRecoveryBtn">Import map</button>
+            </div>
+            <input id="recoveryFileInput" class="hidden-input" type="file" accept="application/json,.json">
+            <div id="recoveryStatus" class="status"></div>
+          </div>
+        </div>
       </aside>
 
       <section>
@@ -560,6 +573,10 @@
       publicPasswordInput: document.getElementById('publicPasswordInput'),
       copyPublicLinkBtn: document.getElementById('copyPublicLinkBtn'),
       publicLinksBody: document.getElementById('publicLinksBody'),
+      exportRecoveryBtn: document.getElementById('exportRecoveryBtn'),
+      importRecoveryBtn: document.getElementById('importRecoveryBtn'),
+      recoveryFileInput: document.getElementById('recoveryFileInput'),
+      recoveryStatus: document.getElementById('recoveryStatus'),
     };
 
     function csrfToken() {
@@ -1207,6 +1224,73 @@
       el.uploadStatus.classList.toggle('error', error);
     }
 
+    function setRecoveryStatus(message, error = false) {
+      el.recoveryStatus.textContent = message;
+      el.recoveryStatus.classList.toggle('error', error);
+    }
+
+    async function exportRecovery() {
+      el.exportRecoveryBtn.disabled = true;
+      setRecoveryStatus('Exporting...');
+      try {
+        const response = await fetch('/recovery/export', {
+          method: 'POST',
+          headers: { 'X-CSRF-Token': csrfToken() },
+          credentials: 'same-origin',
+        });
+        if (!response.ok) {
+          let message = response.statusText;
+          try {
+            const body = await response.json();
+            message = body.error || message;
+          } catch (_) {}
+          throw new Error(message);
+        }
+        const blob = await response.blob();
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = `televault-recovery-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        URL.revokeObjectURL(link.href);
+        setRecoveryStatus('Recovery map exported.');
+      } catch (err) {
+        setRecoveryStatus(err.message, true);
+      } finally {
+        el.exportRecoveryBtn.disabled = false;
+      }
+    }
+
+    function startRecoveryImport() {
+      el.recoveryFileInput.value = '';
+      el.recoveryFileInput.click();
+    }
+
+    async function importRecoveryFile() {
+      const file = el.recoveryFileInput.files[0];
+      if (!file) return;
+      el.importRecoveryBtn.disabled = true;
+      setRecoveryStatus('Importing...');
+      try {
+        const manifestText = await file.text();
+        JSON.parse(manifestText);
+        const data = await api('/recovery/import', {
+          method: 'POST',
+          csrf: true,
+          headers: { 'Content-Type': 'application/json' },
+          body: manifestText,
+        });
+        const summary = data.import;
+        setRecoveryStatus(`Imported ${summary.files_imported} files and ${summary.parts_imported} parts.`);
+        await refreshFiles();
+      } catch (err) {
+        setRecoveryStatus(err.message, true);
+      } finally {
+        el.importRecoveryBtn.disabled = false;
+      }
+    }
+
     async function sha256Hex(file) {
       const digest = await crypto.subtle.digest('SHA-256', await file.arrayBuffer());
       return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, '0')).join('');
@@ -1262,6 +1346,9 @@
       updateDropZone();
     });
     el.uploadBtn.addEventListener('click', uploadSelected);
+    el.exportRecoveryBtn.addEventListener('click', exportRecovery);
+    el.importRecoveryBtn.addEventListener('click', startRecoveryImport);
+    el.recoveryFileInput.addEventListener('change', importRecoveryFile);
     el.closeShareBtn.addEventListener('click', closeShareDialog);
     el.createShareBtn.addEventListener('click', createShare);
     el.createPublicLinkBtn.addEventListener('click', createPublicLink);
