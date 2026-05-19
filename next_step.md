@@ -1,85 +1,96 @@
-# Completed: File Metadata Details UI Foundation
+# Completed: Drag-and-Drop Folder Move and Main-Area Upload Ergonomics
 
 Status: completed on 2026-05-19.
 
-The previous task added a file and folder details modal in `backend/internal/httpserver/static/index.html`, added file metadata counts to `GET /files/{id}`, updated docs in `docs/development/files.md`, `docs/development/web.md`, and `TeleVault-plan.md`, and passed:
+The previous task tightened the embedded web UI drag-and-drop behavior in `backend/internal/httpserver/static/index.html`:
 
-```sh
-cd backend
-go test ./... -count=1
-```
+- dropping external files on the main file area now enqueues uploads immediately for the current folder;
+- dropping external files on the sidebar dropzone still stages the selection for explicit confirmation;
+- dragging an existing file/folder onto another folder still moves it into that folder;
+- dragging an existing file/folder onto breadcrumbs or the `Up` control now moves it to an ancestor folder or root.
 
-```sh
-node -e "const fs=require('fs'); const html=fs.readFileSync('backend/internal/httpserver/static/index.html','utf8'); const m=html.match(/<script>([\\s\\S]*)<\\/script>/); new Function(m[1]); console.log('js ok')"
-```
+The docs were updated in `docs/development/web.md`, and the privacy-masking plan was clarified in `TeleVault-plan.md`.
 
-```sh
-git diff --check
-```
-
-Do not redo the completed details foundation unless a regression is found.
+Do not redo this drag-and-drop task unless a regression is found.
 
 ---
 
-# Next Step: File List Metadata Preview and Scannability
+# Next Step: Privacy Masking Artifact Camouflage Foundation
 
 ## Goal
 
-Make the file table easier to scan at a glance without changing the backend list shape.
+Make Telegram-side uploaded artifacts less recognizable as raw age-encrypted files.
 
-The details modal now carries the richer metadata. The next step is to surface a compact metadata preview directly in the file list so users can see ownership and timestamps without opening details first.
+Today the service keeps original user filenames out of Telegram by uploading opaque artifact names such as `<upload_part_id>.bin`, but the encrypted payload can still start with an obvious age header such as:
+
+```text
+age-encryption.org/v1
+-> X25519 ...
+```
+
+Add a foundation for privacy masking so future and optionally current uploads can use decoy artifact names/extensions/mime families and, when enabled, wrap the ciphertext payload so Telegram does not see the age header at byte zero.
 
 ## Context
 
 Recent relevant work:
 
-- The embedded web UI already lists files and folders, supports upload/download, delete, move by drag-and-drop, share, public links, and the new details modal.
-- `GET /files` and `GET /shared` already return enough fields for a compact list preview: `owner_id`, `created_at`, `updated_at`, `type`, `status`, `plaintext_size`, and `mime_type`.
-- The richer counts such as `part_count` and public-link summary stay in the details modal.
+- Worker uploads already use opaque artifact names instead of original filenames.
+- Downloads still serve the original user-facing filename through service metadata.
+- The user explicitly wants decoy formats such as `.mp3`, `.mp4`, `.avi`, `.m4v`, `.3gp`, `.jpg`, `.jpeg`, and similar ordinary-looking names.
+- The user also wants to avoid exposing raw `age-encryption.org/v1` headers to Telegram storage.
 
 Important files:
 
-- `backend/internal/httpserver/static/index.html`
-- `docs/development/web.md`
+- `backend/internal/uploads/http.go`
+- `backend/internal/uploads/worker.go`
+- `backend/internal/uploads/http_test.go`
+- `backend/internal/uploads/worker_test.go`
+- `backend/internal/crypto/agefile/`
+- `docs/development/uploads.md`
+- `docs/threat-model.md`
 - `TeleVault-plan.md`
 
 ## Required Behavior
 
-1. Add a compact metadata preview to each file/folder row in the web UI.
-2. The preview should show ownership context and creation time at a glance:
-   - `You` for own items;
-   - `Shared owner` or equivalent for shared items;
-   - created timestamp in a muted, compact form.
-3. Keep the row layout stable on desktop and mobile.
-4. Do not add new backend list queries or per-row API calls.
-5. Keep `Details` as the place for the richer metadata fields.
-6. Do not change upload, download, delete, move, share, public-link, or recovery behavior.
+1. Define a small privacy-masking design before broad implementation.
+2. Add a deterministic artifact-name helper that can choose a decoy extension from an allowlist.
+3. Keep the real user filename and MIME type only in service metadata.
+4. Do not use the original filename in Telegram artifact names.
+5. Do not expose raw public-link tokens, Telegram sessions, AGE private keys, Telegram peer ids, or message ids in any user-facing UI.
+6. For payload header masking, implement only a safe foundation:
+   - either document the wrapper format clearly and add tests without enabling it yet;
+   - or add a backward-compatible wrapper reader/writer with a version marker that the download path can unwrap before age decryption.
+7. Existing files already uploaded without masking must remain downloadable.
+8. Downloads must keep serving the original user filename.
 
 ## Suggested Implementation
 
-In `backend/internal/httpserver/static/index.html`:
+Start conservatively:
 
-- Add a muted secondary line under the file/folder name or inside the name cell.
-- Reuse the fields already present in list responses.
-- Keep action buttons and the existing size/status columns intact.
-- Keep the UI dependency-free.
+- Add a `PrivacyMaskingMode` or similarly named internal concept, defaulting to current behavior unless config already has a suitable flag.
+- Add a helper such as `telegramArtifactName(artifactID string, mode PrivacyMaskingMode)`.
+- Use an allowlist of decoy extensions. Keep it small and explicit at first: `.mp3`, `.mp4`, `.avi`, `.m4v`, `.3gp`, `.jpg`, `.jpeg`, `.zip`, `.pdf`.
+- Add tests proving artifact names never include the original filename and always remain deterministic for a given artifact id/mode.
+- For age header masking, prefer a reversible wrapper around the ciphertext bytes rather than modifying age itself. The wrapper must be clearly versioned and must not break existing unwrapped ciphertext.
 
 ## Constraints
 
-- No backend API changes for list endpoints.
-- No N+1 queries.
-- No broad table redesign.
-- No new frontend dependencies.
-- No secrets in the UI.
+- No lossy transformation of ciphertext.
+- No change that makes already uploaded files unreadable.
+- No original filenames in Telegram artifact names.
+- No random extension selection that makes retries non-idempotent.
+- No broad storage schema migration unless absolutely necessary.
+- No attempt to fake valid media containers in this step unless the reader/writer path is fully specified and tested.
 
 ## Docs
 
 Update:
 
-- `docs/development/web.md`
+- `docs/development/uploads.md`
+- `docs/threat-model.md`
 - `TeleVault-plan.md`
 
-Mention that the row preview is intentionally compact and that the richer counters remain in the details modal.
+Mention exactly what privacy masking does and does not protect against.
 
 ## Verification
 
@@ -90,7 +101,7 @@ cd backend
 go test ./... -count=1
 ```
 
-Validate the embedded JS syntax:
+Validate the embedded JS syntax if the web UI changes:
 
 ```sh
 node -e "const fs=require('fs'); const html=fs.readFileSync('backend/internal/httpserver/static/index.html','utf8'); const m=html.match(/<script>([\\s\\S]*)<\\/script>/); new Function(m[1]); console.log('js ok')"
@@ -102,17 +113,13 @@ Then run:
 git diff --check
 ```
 
-Manual UI checks if possible:
-
-- Confirm the row preview is visible for own files and shared files.
-- Confirm the table stays readable on narrow screens.
-- Open the details modal and confirm it still shows the richer metadata.
-
 ## Acceptance Criteria
 
-- Each file and folder row shows a compact ownership/timestamp preview.
-- The file table stays stable and readable.
-- The richer metadata remains available in the details modal.
-- Existing file table, queue, upload, download, move, delete, share, and public-link behavior remains intact.
-- Tests and JS syntax check pass.
+- Telegram artifact naming has a tested privacy-masking foundation.
+- Decoy extensions come from an explicit allowlist.
+- Artifact names stay deterministic and do not use original user filenames.
+- Existing unmasked downloads remain supported.
+- The age-header masking path is either clearly documented for the next implementation step or implemented with backward-compatible tests.
+- Docs explain the protection and limits.
+- Tests pass.
 - No secrets or local test files are committed.

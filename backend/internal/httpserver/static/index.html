@@ -237,6 +237,12 @@
     tr.drag-over td {
       background: var(--soft);
     }
+    .crumbs button.drag-over,
+    #upBtn.drag-over {
+      outline: 2px dashed var(--primary);
+      outline-offset: 2px;
+      background: var(--soft);
+    }
     .table {
       width: 100%;
       border-collapse: collapse;
@@ -879,6 +885,8 @@
         row.addEventListener('dragend', () => {
           state.draggingItem = null;
           el.filesBody.querySelectorAll('.drag-over').forEach((item) => item.classList.remove('drag-over'));
+          el.breadcrumbs.querySelectorAll('.drag-over').forEach((item) => item.classList.remove('drag-over'));
+          el.upBtn.classList.remove('drag-over');
         });
         if (row.dataset.fileType !== 'folder') return;
         row.addEventListener('dragover', (event) => {
@@ -931,6 +939,27 @@
       el.sharedFilesBtn.classList.toggle('active', state.view === 'shared');
       el.breadcrumbs.querySelectorAll('[data-crumb-index]').forEach((button) => {
         button.addEventListener('click', () => jumpToCrumb(Number(button.dataset.crumbIndex)));
+      });
+      wireAncestorDropTargets();
+    }
+
+    function wireAncestorDropTargets() {
+      el.breadcrumbs.querySelectorAll('[data-crumb-index]').forEach((button) => {
+        button.addEventListener('dragover', (event) => {
+          if (!state.draggingItem || state.view !== 'own') return;
+          event.preventDefault();
+          event.dataTransfer.dropEffect = 'move';
+          button.classList.add('drag-over');
+        });
+        button.addEventListener('dragleave', () => button.classList.remove('drag-over'));
+        button.addEventListener('drop', async (event) => {
+          if (!state.draggingItem || state.view !== 'own') return;
+          event.preventDefault();
+          button.classList.remove('drag-over');
+          const index = Number(button.dataset.crumbIndex);
+          const targetID = index < 0 ? '' : (state.folderStack[index] ? state.folderStack[index].id : '');
+          await moveFile(state.draggingItem.id, targetID);
+        });
       });
     }
 
@@ -1091,12 +1120,12 @@
     }
 
     async function moveFile(id, parentID) {
-      if (!id || !parentID) return;
+      if (!id) return;
       try {
         await api(`/files/${id}`, {
           method: 'PATCH',
           csrf: true,
-          body: JSON.stringify({ parent_id: parentID }),
+          body: JSON.stringify({ parent_id: parentID || '' }),
         });
         setUploadStatus('Item moved.');
         await refreshFiles();
@@ -1730,6 +1759,20 @@
     el.ownFilesBtn.addEventListener('click', () => setView('own'));
     el.sharedFilesBtn.addEventListener('click', () => setView('shared'));
     el.upBtn.addEventListener('click', goUp);
+    el.upBtn.addEventListener('dragover', (event) => {
+      if (!state.draggingItem || state.view !== 'own' || !state.currentFolderId) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = 'move';
+      el.upBtn.classList.add('drag-over');
+    });
+    el.upBtn.addEventListener('dragleave', () => el.upBtn.classList.remove('drag-over'));
+    el.upBtn.addEventListener('drop', async (event) => {
+      if (!state.draggingItem || state.view !== 'own' || !state.currentFolderId) return;
+      event.preventDefault();
+      el.upBtn.classList.remove('drag-over');
+      const parent = state.folderStack[state.folderStack.length - 2];
+      await moveFile(state.draggingItem.id, parent ? parent.id : '');
+    });
     el.createFolderBtn.addEventListener('click', createFolder);
     el.folderNameInput.addEventListener('keydown', (event) => {
       if (event.key === 'Enter') createFolder();
@@ -1768,7 +1811,7 @@
       if (!hasExternalFiles(event.dataTransfer)) return;
       event.preventDefault();
       el.filePanel.classList.remove('dragging');
-      acceptDroppedFiles(event.dataTransfer.files);
+      uploadDroppedFilesToFolder(event.dataTransfer.files, state.currentFolderId || '');
     });
     function acceptDroppedFiles(fileList) {
       state.droppedFiles = Array.from(fileList || []).filter((file) => file && file.size >= 0);
