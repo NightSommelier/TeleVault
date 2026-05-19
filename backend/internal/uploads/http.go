@@ -31,7 +31,10 @@ type Settings struct {
 }
 
 type EffectiveSettings struct {
-	PartSize int64
+	PartSize                     int64
+	MaxParallelUploads           int
+	TargetUploadBytesPerSecond   int64
+	CooldownBetweenPartsMillisec int
 }
 
 type Handler struct {
@@ -142,7 +145,7 @@ func (h *Handler) effectiveSettings(ctx context.Context, userID string) (Effecti
 	if h.settings.EffectiveSettingsProvider != nil {
 		return h.settings.EffectiveSettingsProvider(ctx, userID)
 	}
-	return EffectiveSettings{PartSize: h.settings.PartSize}, nil
+	return EffectiveSettings{PartSize: h.settings.PartSize, MaxParallelUploads: 1}, nil
 }
 
 func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
@@ -168,10 +171,16 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	effectiveSettings, err := h.effectiveSettings(r.Context(), user.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "upload_settings_load_failed")
+		return
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
 		"upload":   uploadResponse(upload),
 		"parts":    uploadPartsResponse(parts),
-		"progress": uploadProgressResponse(upload, parts, h.now),
+		"progress": uploadProgressResponse(upload, parts, effectiveSettings, h.now),
 	})
 }
 
@@ -502,7 +511,7 @@ func uploadPartsResponse(parts []UploadPart) []map[string]any {
 	return out
 }
 
-func uploadProgressResponse(upload Upload, parts []UploadPart, now func() time.Time) map[string]any {
+func uploadProgressResponse(upload Upload, parts []UploadPart, settings EffectiveSettings, now func() time.Time) map[string]any {
 	expectedParts := partCount(nullableInt64(upload.PlaintextSize), upload.PartSize)
 	progress := map[string]any{
 		"expected_parts":           expectedParts,
@@ -518,6 +527,7 @@ func uploadProgressResponse(upload Upload, parts []UploadPart, now func() time.T
 		"next_retry_at":            nil,
 		"active_workers":           []string{},
 		"ready_to_complete":        false,
+		"upload_policy":            uploadPolicyResponse(settings),
 	}
 
 	activeWorkers := make(map[string]struct{})
@@ -570,6 +580,26 @@ func uploadProgressResponse(upload Upload, parts []UploadPart, now func() time.T
 		int64(progress["complete_parts"].(int)) == expectedParts &&
 		progress["failed_parts"].(int) == 0
 	return progress
+}
+
+func uploadPolicyResponse(settings EffectiveSettings) map[string]any {
+	maxParallelUploads := settings.MaxParallelUploads
+	if maxParallelUploads <= 0 {
+		maxParallelUploads = 1
+	}
+	targetUploadBytesPerSecond := settings.TargetUploadBytesPerSecond
+	if targetUploadBytesPerSecond < 0 {
+		targetUploadBytesPerSecond = 0
+	}
+	cooldownBetweenPartsMillisec := settings.CooldownBetweenPartsMillisec
+	if cooldownBetweenPartsMillisec < 0 {
+		cooldownBetweenPartsMillisec = 0
+	}
+	return map[string]any{
+		"max_parallel_uploads":           maxParallelUploads,
+		"target_upload_bytes_per_second": targetUploadBytesPerSecond,
+		"cooldown_between_parts_ms":      cooldownBetweenPartsMillisec,
+	}
 }
 
 func fileResponse(file File) map[string]any {

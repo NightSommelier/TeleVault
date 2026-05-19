@@ -104,7 +104,12 @@ func (s *Server) routes() {
 			if err != nil {
 				return uploads.EffectiveSettings{}, err
 			}
-			return uploads.EffectiveSettings{PartSize: settings.UploadPartSizeBytes}, nil
+			return uploads.EffectiveSettings{
+				PartSize:                     settings.UploadPartSizeBytes,
+				MaxParallelUploads:           settings.MaxParallelUploads,
+				TargetUploadBytesPerSecond:   settings.TargetUploadBytesPerSecond,
+				CooldownBetweenPartsMillisec: settings.CooldownBetweenPartsMillisec,
+			}, nil
 		},
 	})
 	s.mux.Handle("POST /uploads", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(uploadsHandler.Create))))

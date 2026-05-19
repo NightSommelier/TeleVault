@@ -111,7 +111,12 @@ func TestUploadProgressResponseSummarizesQueueState(t *testing.T) {
 		},
 	}
 
-	progress := uploadProgressResponse(upload, parts, func() time.Time { return now })
+	settings := EffectiveSettings{
+		MaxParallelUploads:           3,
+		TargetUploadBytesPerSecond:   10_000_000,
+		CooldownBetweenPartsMillisec: 500,
+	}
+	progress := uploadProgressResponse(upload, parts, settings, func() time.Time { return now })
 	if progress["expected_parts"] != int64(3) ||
 		progress["received_parts"] != 3 ||
 		progress["queued_parts"] != 1 ||
@@ -131,5 +136,17 @@ func TestUploadProgressResponseSummarizesQueueState(t *testing.T) {
 	workers, ok := progress["active_workers"].([]string)
 	if !ok || len(workers) != 1 || workers[0] != "worker-b" {
 		t.Fatalf("active_workers = %#v, want [worker-b]", progress["active_workers"])
+	}
+	policy, ok := progress["upload_policy"].(map[string]any)
+	if !ok {
+		t.Fatalf("upload_policy = %#v, want object", progress["upload_policy"])
+	}
+	if policy["max_parallel_uploads"] != 3 ||
+		policy["target_upload_bytes_per_second"] != int64(10_000_000) ||
+		policy["cooldown_between_parts_ms"] != 500 {
+		t.Fatalf("upload_policy = %#v", policy)
+	}
+	if _, ok := policy["telegram_peer"]; ok {
+		t.Fatalf("upload_policy exposes telegram_peer: %#v", policy)
 	}
 }
