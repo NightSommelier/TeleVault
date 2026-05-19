@@ -1,8 +1,8 @@
-# Completed: Upload Queue UI and Background Multi-File Workflow
+# Completed: File Metadata Details UI Foundation
 
 Status: completed on 2026-05-19.
 
-The previous task added a visible dependency-free foreground upload queue in `backend/internal/httpserver/static/index.html`, updated docs in `docs/development/web.md` and `TeleVault-plan.md`, and passed:
+The previous task added a file and folder details modal in `backend/internal/httpserver/static/index.html`, added file metadata counts to `GET /files/{id}`, updated docs in `docs/development/files.md`, `docs/development/web.md`, and `TeleVault-plan.md`, and passed:
 
 ```sh
 cd backend
@@ -17,27 +17,25 @@ node -e "const fs=require('fs'); const html=fs.readFileSync('backend/internal/ht
 git diff --check
 ```
 
-Do not redo the completed upload-queue foundation unless a regression is found.
+Do not redo the completed details foundation unless a regression is found.
 
 ---
 
-# Next Step: Upload Queue Controls and Cleanup UX
+# Next Step: File List Metadata Preview and Scannability
 
 ## Goal
 
-Make the new upload queue easier to operate after files complete or fail.
+Make the file table easier to scan at a glance without changing the backend list shape.
 
-The queue currently shows per-file states and keeps processing after failures, but completed and failed rows remain passive. Add lightweight controls so users can retry failed uploads, remove finished/failed rows, and clear completed rows without changing backend upload architecture.
+The details modal now carries the richer metadata. The next step is to surface a compact metadata preview directly in the file list so users can see ownership and timestamps without opening details first.
 
 ## Context
 
 Recent relevant work:
 
-- Foreground upload queue was added to the embedded web UI.
-- Queue processing is intentionally conservative: one active file at a time.
-- Queue items track `file`, `parentID`, `status`, `progress`, `message`, and `error`.
-- Successful uploads refresh the current folder list.
-- Failed uploads do not block later queued files.
+- The embedded web UI already lists files and folders, supports upload/download, delete, move by drag-and-drop, share, public links, and the new details modal.
+- `GET /files` and `GET /shared` already return enough fields for a compact list preview: `owner_id`, `created_at`, `updated_at`, `type`, `status`, `plaintext_size`, and `mime_type`.
+- The richer counts such as `part_count` and public-link summary stay in the details modal.
 
 Important files:
 
@@ -47,43 +45,32 @@ Important files:
 
 ## Required Behavior
 
-1. Add queue item controls in the web UI:
-   - failed item: `Retry` and `Remove`;
-   - completed item: `Remove`;
-   - queue panel/global action: `Clear completed` when at least one completed item exists.
-2. `Retry` should reset a failed item to `queued`, clear its error, reset progress/message, and restart the queue if it is not already running.
-3. `Remove` should remove only inactive items (`complete` or `failed`). Do not allow removing `queued`, `hashing`, `staging`, `telegram`, or `completing` items in this step.
-4. `Clear completed` should remove all completed items and leave failed/in-flight/queued items untouched.
-5. Retried items must keep their original target folder (`parentID`) and original `File` object.
-6. A retry failure should return the item to `failed` and still allow later queued items to continue.
-7. Keep the UI dependency-free and avoid backend changes unless a real API gap is discovered.
+1. Add a compact metadata preview to each file/folder row in the web UI.
+2. The preview should show ownership context and creation time at a glance:
+   - `You` for own items;
+   - `Shared owner` or equivalent for shared items;
+   - created timestamp in a muted, compact form.
+3. Keep the row layout stable on desktop and mobile.
+4. Do not add new backend list queries or per-row API calls.
+5. Keep `Details` as the place for the richer metadata fields.
+6. Do not change upload, download, delete, move, share, public-link, or recovery behavior.
 
 ## Suggested Implementation
 
 In `backend/internal/httpserver/static/index.html`:
 
-- Extend the queue panel header or body with a `Clear completed` button.
-- Add DOM references for the new controls.
-- Update `renderUploadQueue()` to render per-row action buttons based on item status.
-- Add helper functions such as:
-
-```js
-retryQueueItem(id)
-removeQueueItem(id)
-clearCompletedQueueItems()
-wireUploadQueueActions()
-```
-
-- Make `renderUploadQueue()` call the action-wiring helper after updating `innerHTML`.
-- Keep row action handlers data-attribute based, consistent with existing file/share action wiring.
+- Add a muted secondary line under the file/folder name or inside the name cell.
+- Reuse the fields already present in list responses.
+- Keep action buttons and the existing size/status columns intact.
+- Keep the UI dependency-free.
 
 ## Constraints
 
-- Do not introduce parallel uploads.
-- Do not add cancel-in-flight behavior yet.
-- Do not persist queue state across page reloads yet.
-- Do not store plaintext files on disk beyond the existing upload request flow.
-- Do not change Telegram worker concurrency or retry policy in this step.
+- No backend API changes for list endpoints.
+- No N+1 queries.
+- No broad table redesign.
+- No new frontend dependencies.
+- No secrets in the UI.
 
 ## Docs
 
@@ -92,7 +79,7 @@ Update:
 - `docs/development/web.md`
 - `TeleVault-plan.md`
 
-Mention that the foreground queue supports retry/removal controls, while in-flight cancel and backend worker concurrency remain separate future work.
+Mention that the row preview is intentionally compact and that the richer counters remain in the details modal.
 
 ## Verification
 
@@ -117,18 +104,15 @@ git diff --check
 
 Manual UI checks if possible:
 
-- Select multiple files and confirm queue rows still process one at a time.
-- Force one upload failure, retry it, and confirm it keeps the original target folder.
-- Remove a failed row and a completed row.
-- Clear completed rows while failed rows remain visible.
+- Confirm the row preview is visible for own files and shared files.
+- Confirm the table stays readable on narrow screens.
+- Open the details modal and confirm it still shows the richer metadata.
 
 ## Acceptance Criteria
 
-- Failed rows show working `Retry` and `Remove` controls.
-- Completed rows show working `Remove` controls.
-- `Clear completed` removes only completed rows.
-- Retried rows keep their original target folder and can complete successfully.
-- Active and queued rows cannot be removed in this step.
-- Existing upload queue behavior remains intact.
-- No backend API changes are made unless justified by a real missing field.
+- Each file and folder row shows a compact ownership/timestamp preview.
+- The file table stays stable and readable.
+- The richer metadata remains available in the details modal.
+- Existing file table, queue, upload, download, move, delete, share, and public-link behavior remains intact.
+- Tests and JS syntax check pass.
 - No secrets or local test files are committed.

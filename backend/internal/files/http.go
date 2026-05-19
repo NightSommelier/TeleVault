@@ -183,8 +183,34 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	response := fileResponse(file)
+	if file.Type == TypeFile {
+		partCount, err := h.store.CountFileParts(r.Context(), file.ID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "file_details_failed")
+			return
+		}
+		response["part_count"] = partCount
+		if file.OwnerID == user.ID {
+			publicLinkCount, passwordProtectedCount, err := h.store.CountActivePublicLinks(r.Context(), file.OwnerID, file.ID)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "file_details_failed")
+				return
+			}
+			response["public_link_count"] = publicLinkCount
+			response["public_link_password_count"] = passwordProtectedCount
+		} else {
+			response["public_link_count"] = nil
+			response["public_link_password_count"] = nil
+		}
+	} else {
+		response["part_count"] = nil
+		response["public_link_count"] = nil
+		response["public_link_password_count"] = nil
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
-		"file": fileResponse(file),
+		"file": response,
 	})
 }
 

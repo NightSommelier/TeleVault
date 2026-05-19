@@ -175,6 +175,39 @@ func TestFilesUploadsPersistenceOwnerIsolationAndCompletion(t *testing.T) {
 		t.Fatalf("CompleteUpload() file = %+v, want ready owner file", file)
 	}
 
+	partCount, err := fileStore.CountFileParts(ctx, file.ID)
+	if err != nil {
+		t.Fatalf("CountFileParts() error = %v", err)
+	}
+	if partCount != 2 {
+		t.Fatalf("CountFileParts() = %d, want 2", partCount)
+	}
+	plainLink, err := fileStore.CreatePublicLink(ctx, owner.ID, file.ID, []byte("plain-token"), sql.NullTime{}, files.PublicLinkPassword{})
+	if err != nil {
+		t.Fatalf("CreatePublicLink(plain) error = %v", err)
+	}
+	passwordLink, err := fileStore.CreatePublicLink(ctx, owner.ID, file.ID, []byte("password-token"), sql.NullTime{}, files.PublicLinkPassword{
+		KDF:            "argon2id",
+		Salt:           []byte("password-salt-1234"),
+		Hash:           []byte("password-hash-abc"),
+		ArgonTime:      1,
+		ArgonMemoryKiB: 1,
+		ArgonThreads:   1,
+	})
+	if err != nil {
+		t.Fatalf("CreatePublicLink(password) error = %v", err)
+	}
+	publicLinkCount, passwordProtectedCount, err := fileStore.CountActivePublicLinks(ctx, owner.ID, file.ID)
+	if err != nil {
+		t.Fatalf("CountActivePublicLinks() error = %v", err)
+	}
+	if publicLinkCount != 2 || passwordProtectedCount != 1 {
+		t.Fatalf("CountActivePublicLinks() = %d,%d, want 2,1", publicLinkCount, passwordProtectedCount)
+	}
+	if plainLink.ID == "" || passwordLink.ID == "" {
+		t.Fatal("CreatePublicLink() returned empty id")
+	}
+
 	downloadFile, parts, session, err := fileStore.DownloadData(ctx, owner.ID, file.ID)
 	if err != nil {
 		t.Fatalf("DownloadData() error = %v", err)

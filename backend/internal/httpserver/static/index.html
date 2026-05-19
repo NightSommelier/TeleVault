@@ -272,6 +272,10 @@
       grid-template-columns: minmax(0, 1fr) auto;
       gap: 8px;
     }
+    .details-grid {
+      display: grid;
+      gap: 12px;
+    }
     .badge {
       display: inline-flex;
       align-items: center;
@@ -328,6 +332,12 @@
     }
     .queue-status {
       font-size: 12px;
+    }
+    .queue-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      flex-wrap: wrap;
     }
     .queue-empty {
       color: var(--muted);
@@ -431,6 +441,9 @@
         <div class="panel">
           <div class="panel-head">
             <div class="panel-title">Upload queue</div>
+            <div class="actions">
+              <button id="clearCompletedQueueBtn" class="hidden">Clear completed</button>
+            </div>
           </div>
           <div class="panel-body stack">
             <div id="uploadQueue" class="queue-list">
@@ -572,6 +585,35 @@
         </div>
       </div>
     </div>
+
+    <div id="detailsModal" class="modal-backdrop hidden">
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="detailsTitle">
+        <div class="modal-head">
+          <div>
+            <div id="detailsTitle" class="panel-title">Item details</div>
+            <div id="detailsFileName" class="muted"></div>
+          </div>
+          <button id="closeDetailsBtn">Close</button>
+        </div>
+        <div class="modal-body stack">
+          <div class="details-grid">
+            <div class="field">
+              <label for="detailsFileID">File ID</label>
+              <div class="copy-field">
+                <input id="detailsFileID" type="text" readonly>
+                <button id="copyDetailsFileIDBtn">Copy</button>
+              </div>
+            </div>
+            <table class="table compact-table">
+              <tbody id="detailsBody">
+                <tr><td class="muted">Loading...</td><td></td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div id="detailsStatus" class="status"></div>
+        </div>
+      </div>
+    </div>
   </div>
 
   <script>
@@ -586,6 +628,8 @@
       droppedFiles: [],
       draggingItem: null,
       shareFile: null,
+      detailsFile: null,
+      detailsRequestID: 0,
       applyingRoute: false,
       uploadQueue: [],
       uploadQueueRunning: false,
@@ -615,6 +659,7 @@
       uploadBtn: document.getElementById('uploadBtn'),
       uploadStatus: document.getElementById('uploadStatus'),
       uploadQueue: document.getElementById('uploadQueue'),
+      clearCompletedQueueBtn: document.getElementById('clearCompletedQueueBtn'),
       shareModal: document.getElementById('shareModal'),
       closeShareBtn: document.getElementById('closeShareBtn'),
       shareFileName: document.getElementById('shareFileName'),
@@ -630,6 +675,13 @@
       publicPasswordInput: document.getElementById('publicPasswordInput'),
       copyPublicLinkBtn: document.getElementById('copyPublicLinkBtn'),
       publicLinksBody: document.getElementById('publicLinksBody'),
+      detailsModal: document.getElementById('detailsModal'),
+      closeDetailsBtn: document.getElementById('closeDetailsBtn'),
+      detailsFileName: document.getElementById('detailsFileName'),
+      detailsFileID: document.getElementById('detailsFileID'),
+      copyDetailsFileIDBtn: document.getElementById('copyDetailsFileIDBtn'),
+      detailsBody: document.getElementById('detailsBody'),
+      detailsStatus: document.getElementById('detailsStatus'),
       exportRecoveryBtn: document.getElementById('exportRecoveryBtn'),
       importRecoveryBtn: document.getElementById('importRecoveryBtn'),
       recoveryFileInput: document.getElementById('recoveryFileInput'),
@@ -683,10 +735,12 @@
       state.droppedFiles = [];
       state.draggingItem = null;
       state.shareFile = null;
+      state.detailsFile = null;
       state.uploadQueue = [];
       state.uploadQueueRunning = false;
       state.nextUploadQueueID = 1;
       renderUploadQueue();
+      closeDetailsDialog();
       el.loginView.classList.remove('hidden');
       el.appView.classList.add('hidden');
       el.userbar.classList.add('hidden');
@@ -801,6 +855,12 @@
           openShareDialog(file);
         });
       });
+      el.filesBody.querySelectorAll('[data-details]').forEach((button) => {
+        button.addEventListener('click', () => {
+          const file = files.find((item) => item.id === button.dataset.details);
+          openDetailsDialog(file);
+        });
+      });
       if (state.view === 'own') wireFileRowDragHandlers();
     }
 
@@ -845,13 +905,13 @@
 
     function renderFileActions(file) {
       if (state.view === 'shared') {
-        return `<button data-download="${file.id}">Download</button>`;
+        return `<button data-download="${file.id}">Download</button><button data-details="${file.id}">Details</button>`;
       }
       const deleteButton = `<button data-delete="${file.id}">Delete</button>`;
       if (file.type === 'folder') {
-        return `<button data-open-folder="${file.id}">Open</button>${deleteButton}`;
+        return `<button data-open-folder="${file.id}">Open</button><button data-details="${file.id}">Details</button>${deleteButton}`;
       }
-      return `<button data-download="${file.id}">Download</button><button data-share="${file.id}">Share</button>${deleteButton}`;
+      return `<button data-download="${file.id}">Download</button><button data-details="${file.id}">Details</button><button data-share="${file.id}">Share</button>${deleteButton}`;
     }
 
     function renderFileName(file) {
@@ -1047,6 +1107,7 @@
 
     async function openShareDialog(file) {
       if (!file) return;
+      closeDetailsDialog();
       state.shareFile = file;
       el.shareFileName.textContent = file.name || 'Untitled';
       el.shareTelegramInput.value = '';
@@ -1065,6 +1126,37 @@
     function closeShareDialog() {
       state.shareFile = null;
       el.shareModal.classList.add('hidden');
+    }
+
+    async function openDetailsDialog(file) {
+      if (!file) return;
+      closeShareDialog();
+      state.detailsRequestID += 1;
+      const requestID = state.detailsRequestID;
+      state.detailsFile = file;
+      el.detailsFileName.textContent = file.name || 'Untitled';
+      el.detailsFileID.value = file.id || '';
+      setDetailsStatus('Loading...');
+      renderDetails(file);
+      el.detailsModal.classList.remove('hidden');
+      try {
+        const data = await api(`/files/${file.id}`);
+        if (state.detailsRequestID !== requestID) return;
+        const details = data.file || file;
+        state.detailsFile = details;
+        renderDetails(details);
+        setDetailsStatus('');
+      } catch (err) {
+        if (state.detailsRequestID !== requestID) return;
+        renderDetails(file);
+        setDetailsStatus(err.message, true);
+      }
+    }
+
+    function closeDetailsDialog() {
+      state.detailsFile = null;
+      state.detailsRequestID += 1;
+      el.detailsModal.classList.add('hidden');
     }
 
     async function refreshShares() {
@@ -1184,6 +1276,42 @@
       el.publicLinksBody.querySelectorAll('[data-revoke-public-link]').forEach((button) => {
         button.addEventListener('click', () => revokePublicLink(button.dataset.revokePublicLink));
       });
+    }
+
+    function renderDetails(file) {
+      if (!file) {
+        el.detailsBody.innerHTML = '';
+        el.detailsFileName.textContent = '';
+        el.detailsFileID.value = '';
+        return;
+      }
+      el.detailsFileName.textContent = file.name || 'Untitled';
+      el.detailsFileID.value = file.id || '';
+      const rows = [];
+      const ownerLabel = state.user && file.owner_id === state.user.id ? 'You' : 'Shared owner';
+      rows.push(['Type', file.type || '-']);
+      rows.push(['Status', file.status || '-']);
+      rows.push(['Owner', ownerLabel]);
+      rows.push(['Size', file.type === 'file' ? formatBytes(file.plaintext_size || 0) : '-']);
+      rows.push(['MIME', file.type === 'file' ? (file.mime_type || '-') : '-']);
+      rows.push(['Created', file.created_at ? new Date(file.created_at).toLocaleString() : '-']);
+      rows.push(['Updated', file.updated_at ? new Date(file.updated_at).toLocaleString() : '-']);
+      rows.push(['Part count', file.type === 'file' ? formatPartCount(file.part_count) : '-']);
+      if (state.user && file.owner_id === state.user.id && file.type === 'file') {
+        const publicLinkCount = Number.isInteger(file.public_link_count) ? file.public_link_count : null;
+        const passwordCount = Number.isInteger(file.public_link_password_count) ? file.public_link_password_count : null;
+        rows.push(['Public links', publicLinkCount === null ? '-' : (publicLinkCount === 0 ? 'No public links' : `Public links: ${publicLinkCount}`)]);
+        rows.push(['Password protected links', passwordCount === null ? '-' : (publicLinkCount === 0 ? '-' : `Password protected links: ${passwordCount}`)]);
+      } else {
+        rows.push(['Public links', '-']);
+        rows.push(['Password protected links', '-']);
+      }
+      el.detailsBody.innerHTML = rows.map(([label, value]) => `
+        <tr>
+          <th>${escapeHTML(label)}</th>
+          <td>${escapeHTML(value)}</td>
+        </tr>
+      `).join('');
     }
 
     async function revokePublicLink(linkID) {
@@ -1406,11 +1534,36 @@
       }
     }
 
+    function queueHasCompletedItems() {
+      return state.uploadQueue.some((item) => item.status === 'complete');
+    }
+
+    function queueItemActions(item) {
+      if (item.status === 'failed') {
+        return `
+          <div class="queue-actions">
+            <button data-queue-retry="${item.id}">Retry</button>
+            <button data-queue-remove="${item.id}">Remove</button>
+          </div>
+        `;
+      }
+      if (item.status === 'complete') {
+        return `
+          <div class="queue-actions">
+            <button data-queue-remove="${item.id}">Remove</button>
+          </div>
+        `;
+      }
+      return '';
+    }
+
     function renderUploadQueue() {
       if (!state.uploadQueue.length) {
         el.uploadQueue.innerHTML = '<div class="queue-empty">Queue is empty.</div>';
+        el.clearCompletedQueueBtn.classList.add('hidden');
         return;
       }
+      el.clearCompletedQueueBtn.classList.toggle('hidden', !queueHasCompletedItems());
       el.uploadQueue.innerHTML = state.uploadQueue.map((item) => {
         const statusClass = item.status === 'failed' ? 'error' : (item.status === 'complete' ? 'ok' : 'warn');
         const label = item.status === 'failed' ? (item.error || item.message || 'Failed') : item.message;
@@ -1422,9 +1575,45 @@
             </div>
             <div class="queue-status"><span class="badge ${statusClass}">${escapeHTML(item.status)}</span> ${escapeHTML(label || '')}</div>
             <progress value="${Math.max(0, Math.min(100, Number(item.progress || 0)))}" max="100"></progress>
+            ${queueItemActions(item)}
           </div>
         `;
       }).join('');
+      wireUploadQueueActions();
+    }
+
+    function wireUploadQueueActions() {
+      el.uploadQueue.querySelectorAll('[data-queue-retry]').forEach((button) => {
+        button.addEventListener('click', () => retryQueueItem(button.dataset.queueRetry));
+      });
+      el.uploadQueue.querySelectorAll('[data-queue-remove]').forEach((button) => {
+        button.addEventListener('click', () => removeQueueItem(button.dataset.queueRemove));
+      });
+    }
+
+    function retryQueueItem(id) {
+      const item = state.uploadQueue.find((entry) => String(entry.id) === String(id));
+      if (!item || item.status !== 'failed') return;
+      updateQueueItem(item.id, {
+        status: 'queued',
+        progress: 0,
+        message: 'Waiting',
+        error: '',
+      });
+      setUploadStatus(`Retry queued: ${item.file.name}`);
+      runUploadQueue();
+    }
+
+    function removeQueueItem(id) {
+      const item = state.uploadQueue.find((entry) => String(entry.id) === String(id));
+      if (!item || (item.status !== 'complete' && item.status !== 'failed')) return;
+      state.uploadQueue = state.uploadQueue.filter((entry) => String(entry.id) !== String(id));
+      renderUploadQueue();
+    }
+
+    function clearCompletedQueueItems() {
+      state.uploadQueue = state.uploadQueue.filter((item) => item.status !== 'complete');
+      renderUploadQueue();
     }
 
     function setUploadStatus(message, error = false) {
@@ -1511,6 +1700,11 @@
       return `${(bytes / Math.pow(1024, index)).toFixed(index ? 1 : 0)} ${units[index]}`;
     }
 
+    function formatPartCount(count) {
+      if (!Number.isInteger(count) || count < 0) return '-';
+      return `${count} part${count === 1 ? '' : 's'}`;
+    }
+
     function escapeHTML(value) {
       return String(value).replace(/[&<>"']/g, (char) => ({
         '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
@@ -1523,6 +1717,11 @@
 
     function hasExternalFiles(dataTransfer) {
       return dataTransfer && Array.from(dataTransfer.types || []).includes('Files');
+    }
+
+    function setDetailsStatus(message, error = false) {
+      el.detailsStatus.textContent = message;
+      el.detailsStatus.classList.toggle('error', error);
     }
 
     el.startQrBtn.addEventListener('click', startQR);
@@ -1577,9 +1776,22 @@
       updateDropZone();
     }
     el.uploadBtn.addEventListener('click', uploadSelected);
+    el.clearCompletedQueueBtn.addEventListener('click', clearCompletedQueueItems);
     el.exportRecoveryBtn.addEventListener('click', exportRecovery);
     el.importRecoveryBtn.addEventListener('click', startRecoveryImport);
     el.recoveryFileInput.addEventListener('change', importRecoveryFile);
+    el.closeDetailsBtn.addEventListener('click', closeDetailsDialog);
+    el.copyDetailsFileIDBtn.addEventListener('click', async () => {
+      if (!el.detailsFileID.value) return;
+      try {
+        await navigator.clipboard.writeText(el.detailsFileID.value);
+        setDetailsStatus('File ID copied.');
+      } catch (_) {
+        el.detailsFileID.focus();
+        el.detailsFileID.select();
+        setDetailsStatus('Select the file ID and copy it.');
+      }
+    });
     el.closeShareBtn.addEventListener('click', closeShareDialog);
     el.createShareBtn.addEventListener('click', createShare);
     el.createPublicLinkBtn.addEventListener('click', createPublicLink);
@@ -1587,8 +1799,16 @@
     el.shareModal.addEventListener('click', (event) => {
       if (event.target === el.shareModal) closeShareDialog();
     });
+    el.detailsModal.addEventListener('click', (event) => {
+      if (event.target === el.detailsModal) closeDetailsDialog();
+    });
     document.addEventListener('keydown', (event) => {
-      if (event.key === 'Escape' && !el.shareModal.classList.contains('hidden')) closeShareDialog();
+      if (event.key !== 'Escape') return;
+      if (!el.detailsModal.classList.contains('hidden')) {
+        closeDetailsDialog();
+        return;
+      }
+      if (!el.shareModal.classList.contains('hidden')) closeShareDialog();
     });
     window.addEventListener('hashchange', applyRoute);
     loadMe();

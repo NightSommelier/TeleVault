@@ -192,6 +192,40 @@ WHERE f.id = $2
 	return file, nil
 }
 
+func (s *Store) CountFileParts(ctx context.Context, fileID string) (int, error) {
+	var count int
+	err := s.db.QueryRowContext(ctx, `
+SELECT COUNT(*)
+FROM file_parts
+WHERE file_id = $1`,
+		fileID,
+	).Scan(&count)
+	if err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+func (s *Store) CountActivePublicLinks(ctx context.Context, ownerID string, fileID string) (int, int, error) {
+	var total int
+	var passwordProtected int
+	err := s.db.QueryRowContext(ctx, `
+SELECT COUNT(*),
+       COALESCE(SUM(CASE WHEN password_hash IS NOT NULL THEN 1 ELSE 0 END), 0)
+FROM public_links
+WHERE owner_id = $1
+  AND file_id = $2
+  AND revoked_at IS NULL
+  AND (expires_at IS NULL OR expires_at > now())`,
+		ownerID,
+		fileID,
+	).Scan(&total, &passwordProtected)
+	if err != nil {
+		return 0, 0, err
+	}
+	return total, passwordProtected, nil
+}
+
 func (s *Store) SoftDelete(ctx context.Context, ownerID string, id string, now time.Time) error {
 	var count int
 	err := s.db.QueryRowContext(ctx, `
