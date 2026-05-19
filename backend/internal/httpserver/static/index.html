@@ -151,6 +151,7 @@
     }
     .field input[type="text"],
     .field input[type="number"],
+    .copy-field input[type="text"],
     .field select {
       width: 100%;
       min-height: 36px;
@@ -248,6 +249,19 @@
     .table tr:last-child td { border-bottom: 0; }
     .compact-table th, .compact-table td {
       padding: 8px 10px;
+    }
+    .subhead {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding-top: 6px;
+      border-top: 1px solid var(--line);
+    }
+    .copy-field {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
     }
     .badge {
       display: inline-flex;
@@ -449,6 +463,42 @@
               <tr><td colspan="3" class="muted">No active shares.</td></tr>
             </tbody>
           </table>
+          <div class="subhead">
+            <div>
+              <div class="panel-title">Public links</div>
+              <div class="muted">Anyone with the link can download until it expires or is revoked.</div>
+            </div>
+          </div>
+          <div class="field-row">
+            <div class="field">
+              <label for="publicExpirySelect">Access</label>
+              <select id="publicExpirySelect">
+                <option value="1h">1 hour</option>
+                <option value="1d" selected>1 day</option>
+                <option value="7d">7 days</option>
+                <option value="">No limit</option>
+              </select>
+            </div>
+            <div class="actions">
+              <button id="createPublicLinkBtn" class="primary">Create link</button>
+            </div>
+          </div>
+          <div id="publicLinkResult" class="copy-field hidden">
+            <input id="publicLinkInput" type="text" readonly>
+            <button id="copyPublicLinkBtn">Copy</button>
+          </div>
+          <table class="table compact-table">
+            <thead>
+              <tr>
+                <th>Created</th>
+                <th>Expires</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="publicLinksBody">
+              <tr><td colspan="3" class="muted">No active public links.</td></tr>
+            </tbody>
+          </table>
         </div>
       </div>
     </div>
@@ -498,6 +548,12 @@
       createShareBtn: document.getElementById('createShareBtn'),
       shareStatus: document.getElementById('shareStatus'),
       sharesBody: document.getElementById('sharesBody'),
+      publicExpirySelect: document.getElementById('publicExpirySelect'),
+      createPublicLinkBtn: document.getElementById('createPublicLinkBtn'),
+      publicLinkResult: document.getElementById('publicLinkResult'),
+      publicLinkInput: document.getElementById('publicLinkInput'),
+      copyPublicLinkBtn: document.getElementById('copyPublicLinkBtn'),
+      publicLinksBody: document.getElementById('publicLinksBody'),
     };
 
     function csrfToken() {
@@ -855,9 +911,13 @@
       el.shareFileName.textContent = file.name || 'Untitled';
       el.shareTelegramInput.value = '';
       el.shareExpirySelect.value = '';
+      el.publicExpirySelect.value = '1d';
+      el.publicLinkInput.value = '';
+      el.publicLinkResult.classList.add('hidden');
       setShareStatus('');
       el.shareModal.classList.remove('hidden');
       await refreshShares();
+      await refreshPublicLinks();
       el.shareTelegramInput.focus();
     }
 
@@ -874,6 +934,17 @@
         renderShares(data.shares || []);
       } catch (err) {
         el.sharesBody.innerHTML = `<tr><td colspan="3" class="muted">${escapeHTML(err.message)}</td></tr>`;
+      }
+    }
+
+    async function refreshPublicLinks() {
+      if (!state.shareFile) return;
+      el.publicLinksBody.innerHTML = `<tr><td colspan="3" class="muted">Loading...</td></tr>`;
+      try {
+        const data = await api(`/files/${state.shareFile.id}/public-links`);
+        renderPublicLinks(data.public_links || []);
+      } catch (err) {
+        el.publicLinksBody.innerHTML = `<tr><td colspan="3" class="muted">${escapeHTML(err.message)}</td></tr>`;
       }
     }
 
@@ -933,8 +1004,73 @@
       }
     }
 
+    async function createPublicLink() {
+      if (!state.shareFile) return;
+      try {
+        el.createPublicLinkBtn.disabled = true;
+        const data = await api(`/files/${state.shareFile.id}/public-links`, {
+          method: 'POST',
+          csrf: true,
+          body: JSON.stringify({
+            expires_at: selectedExpiry(el.publicExpirySelect.value),
+          }),
+        });
+        el.publicLinkInput.value = data.url || '';
+        el.publicLinkResult.classList.remove('hidden');
+        setShareStatus('Public link created.');
+        await refreshPublicLinks();
+      } catch (err) {
+        setShareStatus(err.message, true);
+      } finally {
+        el.createPublicLinkBtn.disabled = false;
+      }
+    }
+
+    function renderPublicLinks(links) {
+      if (!links.length) {
+        el.publicLinksBody.innerHTML = `<tr><td colspan="3" class="muted">No active public links.</td></tr>`;
+        return;
+      }
+      el.publicLinksBody.innerHTML = links.map((link) => `
+        <tr>
+          <td>${escapeHTML(new Date(link.created_at).toLocaleString())}</td>
+          <td>${link.expires_at ? escapeHTML(new Date(link.expires_at).toLocaleString()) : 'No limit'}</td>
+          <td><button data-revoke-public-link="${link.id}">Revoke</button></td>
+        </tr>
+      `).join('');
+      el.publicLinksBody.querySelectorAll('[data-revoke-public-link]').forEach((button) => {
+        button.addEventListener('click', () => revokePublicLink(button.dataset.revokePublicLink));
+      });
+    }
+
+    async function revokePublicLink(linkID) {
+      if (!state.shareFile || !linkID) return;
+      try {
+        await api(`/files/${state.shareFile.id}/public-links/${linkID}`, { method: 'DELETE', csrf: true });
+        setShareStatus('Public link revoked.');
+        await refreshPublicLinks();
+      } catch (err) {
+        setShareStatus(err.message, true);
+      }
+    }
+
+    async function copyPublicLink() {
+      if (!el.publicLinkInput.value) return;
+      try {
+        await navigator.clipboard.writeText(el.publicLinkInput.value);
+        setShareStatus('Public link copied.');
+      } catch (_) {
+        el.publicLinkInput.focus();
+        el.publicLinkInput.select();
+        setShareStatus('Select the link and copy it.');
+      }
+    }
+
     function selectedShareExpiry() {
-      const value = el.shareExpirySelect.value;
+      return selectedExpiry(el.shareExpirySelect.value);
+    }
+
+    function selectedExpiry(value) {
       if (!value) return undefined;
       const date = new Date();
       if (value === '1h') date.setHours(date.getHours() + 1);
@@ -1119,6 +1255,8 @@
     el.uploadBtn.addEventListener('click', uploadSelected);
     el.closeShareBtn.addEventListener('click', closeShareDialog);
     el.createShareBtn.addEventListener('click', createShare);
+    el.createPublicLinkBtn.addEventListener('click', createPublicLink);
+    el.copyPublicLinkBtn.addEventListener('click', copyPublicLink);
     el.shareModal.addEventListener('click', (event) => {
       if (event.target === el.shareModal) closeShareDialog();
     });

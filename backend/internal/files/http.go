@@ -1,7 +1,10 @@
 package files
 
 import (
+	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -15,6 +18,8 @@ import (
 	"gitrepo.pp.ua/Sommelier/TeleDriveVault/backend/internal/auth"
 	"gitrepo.pp.ua/Sommelier/TeleDriveVault/backend/internal/crypto/agefile"
 )
+
+const publicLinkTokenBytes = 32
 
 type Handler struct {
 	store         *Store
@@ -261,6 +266,109 @@ func (h *Handler) RevokeShare(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (h *Handler) ListPublicLinks(w http.ResponseWriter, r *http.Request) {
+	user, ok := auth.UserFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "missing_authenticated_user")
+		return
+	}
+
+	fileID := strings.TrimSpace(r.PathValue("id"))
+	if fileID == "" {
+		writeError(w, http.StatusBadRequest, "file_id_required")
+		return
+	}
+
+	links, err := h.store.ListPublicLinks(r.Context(), user.ID, fileID)
+	if errors.Is(err, ErrNotFound) {
+		writeError(w, http.StatusNotFound, "file_not_found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "public_link_list_failed")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"public_links": publicLinksResponse(links),
+	})
+}
+
+func (h *Handler) CreatePublicLink(w http.ResponseWriter, r *http.Request) {
+	user, ok := auth.UserFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "missing_authenticated_user")
+		return
+	}
+
+	fileID := strings.TrimSpace(r.PathValue("id"))
+	if fileID == "" {
+		writeError(w, http.StatusBadRequest, "file_id_required")
+		return
+	}
+
+	var request createPublicLinkRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_json")
+		return
+	}
+
+	expiresAt, ok := parseOptionalExpiry(request.ExpiresAt)
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid_expires_at")
+		return
+	}
+
+	token, tokenHash, err := newPublicLinkToken()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "public_link_token_failed")
+		return
+	}
+
+	link, err := h.store.CreatePublicLink(r.Context(), user.ID, fileID, tokenHash, expiresAt)
+	if errors.Is(err, ErrNotFound) {
+		writeError(w, http.StatusNotFound, "file_not_found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "public_link_create_failed")
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"public_link": publicLinkResponse(link),
+		"token":       token,
+		"url":         publicLinkURL(r, token),
+	})
+}
+
+func (h *Handler) RevokePublicLink(w http.ResponseWriter, r *http.Request) {
+	user, ok := auth.UserFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "missing_authenticated_user")
+		return
+	}
+
+	fileID := strings.TrimSpace(r.PathValue("id"))
+	linkID := strings.TrimSpace(r.PathValue("link_id"))
+	if fileID == "" || linkID == "" {
+		writeError(w, http.StatusBadRequest, "public_link_id_required")
+		return
+	}
+
+	err := h.store.RevokePublicLink(r.Context(), user.ID, fileID, linkID, time.Now().UTC())
+	if errors.Is(err, ErrNotFound) {
+		writeError(w, http.StatusNotFound, "public_link_not_found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "public_link_revoke_failed")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (h *Handler) Download(w http.ResponseWriter, r *http.Request) {
 	user, ok := auth.UserFromContext(r.Context())
 	if !ok {
@@ -284,12 +392,64 @@ func (h *Handler) Download(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	session, err := h.sessionCrypto.DecryptForTelegramID(user.TelegramID, telegramSession.EncryptedSession)
+	session, err := h.sessionCrypto.DecryptForTelegramID(telegramSession.OwnerTelegramID, telegramSession.EncryptedSession)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "telegram_session_decrypt_failed")
 		return
 	}
 
+	h.streamDownload(w, r, file, parts, session)
+}
+
+func (h *Handler) PublicMetadata(w http.ResponseWriter, r *http.Request) {
+	token := strings.TrimSpace(r.PathValue("token"))
+	if token == "" {
+		writeError(w, http.StatusBadRequest, "public_token_required")
+		return
+	}
+
+	file, _, _, err := h.store.DownloadDataByPublicTokenHash(r.Context(), publicLinkTokenHash(token))
+	if errors.Is(err, ErrNotFound) {
+		writeError(w, http.StatusNotFound, "public_link_not_found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "public_link_load_failed")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"file": fileResponse(file),
+	})
+}
+
+func (h *Handler) PublicDownload(w http.ResponseWriter, r *http.Request) {
+	token := strings.TrimSpace(r.PathValue("token"))
+	if token == "" {
+		writeError(w, http.StatusBadRequest, "public_token_required")
+		return
+	}
+
+	file, parts, telegramSession, err := h.store.DownloadDataByPublicTokenHash(r.Context(), publicLinkTokenHash(token))
+	if errors.Is(err, ErrNotFound) {
+		writeError(w, http.StatusNotFound, "public_link_not_found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "public_download_load_failed")
+		return
+	}
+
+	session, err := h.sessionCrypto.DecryptForTelegramID(telegramSession.OwnerTelegramID, telegramSession.EncryptedSession)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "telegram_session_decrypt_failed")
+		return
+	}
+
+	h.streamDownload(w, r, file, parts, session)
+}
+
+func (h *Handler) streamDownload(w http.ResponseWriter, r *http.Request, file File, parts []FilePart, session string) {
 	name := nullableString(file.NamePlain)
 	if name == "" {
 		name = "download"
@@ -330,6 +490,10 @@ type createFolderRequest struct {
 type createShareRequest struct {
 	TelegramID int64  `json:"telegram_id"`
 	ExpiresAt  string `json:"expires_at"`
+}
+
+type createPublicLinkRequest struct {
+	ExpiresAt string `json:"expires_at"`
 }
 
 func normalizeName(name string) string {
@@ -383,6 +547,56 @@ func shareResponse(share Share) map[string]any {
 		"created_at":          share.CreatedAt,
 		"updated_at":          share.UpdatedAt,
 	}
+}
+
+func publicLinksResponse(links []PublicLink) []map[string]any {
+	out := make([]map[string]any, 0, len(links))
+	for _, link := range links {
+		out = append(out, publicLinkResponse(link))
+	}
+	return out
+}
+
+func publicLinkResponse(link PublicLink) map[string]any {
+	return map[string]any{
+		"id":         link.ID,
+		"file_id":    link.FileID,
+		"owner_id":   link.OwnerID,
+		"permission": link.Permission,
+		"expires_at": nullableTimeValue(link.ExpiresAt),
+		"revoked_at": nullableTimeValue(link.RevokedAt),
+		"created_at": link.CreatedAt,
+		"updated_at": link.UpdatedAt,
+	}
+}
+
+func newPublicLinkToken() (string, []byte, error) {
+	raw := make([]byte, publicLinkTokenBytes)
+	if _, err := rand.Read(raw); err != nil {
+		return "", nil, err
+	}
+	token := base64.RawURLEncoding.EncodeToString(raw)
+	return token, publicLinkTokenHash(token), nil
+}
+
+func publicLinkTokenHash(token string) []byte {
+	sum := sha256.Sum256([]byte(token))
+	return sum[:]
+}
+
+func publicLinkURL(r *http.Request, token string) string {
+	scheme := "https"
+	if r.TLS == nil {
+		scheme = "http"
+	}
+	if forwardedProto := strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")); forwardedProto != "" {
+		scheme = strings.Split(forwardedProto, ",")[0]
+	}
+	host := r.Host
+	if forwardedHost := strings.TrimSpace(r.Header.Get("X-Forwarded-Host")); forwardedHost != "" {
+		host = strings.Split(forwardedHost, ",")[0]
+	}
+	return scheme + "://" + strings.TrimSpace(host) + "/public/" + token + "/download"
 }
 
 func nullableStringValue(value sql.NullString) any {

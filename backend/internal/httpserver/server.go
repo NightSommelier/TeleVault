@@ -86,6 +86,11 @@ func (s *Server) routes() {
 	s.mux.Handle("GET /files/{id}/shares", authHandler.RequireAuth(http.HandlerFunc(filesHandler.ListShares)))
 	s.mux.Handle("POST /files/{id}/shares", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(filesHandler.CreateShare))))
 	s.mux.Handle("DELETE /files/{id}/shares/{share_id}", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(filesHandler.RevokeShare))))
+	s.mux.Handle("GET /files/{id}/public-links", authHandler.RequireAuth(http.HandlerFunc(filesHandler.ListPublicLinks)))
+	s.mux.Handle("POST /files/{id}/public-links", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(filesHandler.CreatePublicLink))))
+	s.mux.Handle("DELETE /files/{id}/public-links/{link_id}", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(filesHandler.RevokePublicLink))))
+	s.mux.HandleFunc("GET /public/{token}", filesHandler.PublicMetadata)
+	s.mux.HandleFunc("GET /public/{token}/download", filesHandler.PublicDownload)
 
 	adminSettingsStore := adminsettings.NewStore(s.db, s.cfg)
 	uploadsHandler := uploads.NewHandler(s.db, s.ageRecipient, telegramSessionCrypto, s.telegram, uploads.Settings{

@@ -3,6 +3,7 @@ package integration_test
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -199,6 +200,31 @@ func TestFilesUploadsPersistenceOwnerIsolationAndCompletion(t *testing.T) {
 	}
 	if _, _, _, err := fileStore.DownloadData(ctx, other.ID, file.ID); !errors.Is(err, files.ErrNotFound) {
 		t.Fatalf("revoked shared download error = %v, want files.ErrNotFound", err)
+	}
+	publicTokenHash := sha256.Sum256([]byte("integration-public-token-" + uniqueSuffix()))
+	publicLink, err := fileStore.CreatePublicLink(ctx, owner.ID, file.ID, publicTokenHash[:], sql.NullTime{})
+	if err != nil {
+		t.Fatalf("CreatePublicLink() error = %v", err)
+	}
+	publicLinks, err := fileStore.ListPublicLinks(ctx, owner.ID, file.ID)
+	if err != nil {
+		t.Fatalf("ListPublicLinks() error = %v", err)
+	}
+	if len(publicLinks) != 1 || publicLinks[0].ID != publicLink.ID {
+		t.Fatalf("ListPublicLinks() = %+v, want link %s", publicLinks, publicLink.ID)
+	}
+	publicDownload, publicParts, publicSession, err := fileStore.DownloadDataByPublicTokenHash(ctx, publicTokenHash[:])
+	if err != nil {
+		t.Fatalf("DownloadDataByPublicTokenHash() error = %v", err)
+	}
+	if publicDownload.ID != file.ID || len(publicParts) != 2 || publicSession.OwnerTelegramID != owner.TelegramID {
+		t.Fatalf("public download file=%s parts=%d owner telegram=%d, want %s parts 2 owner telegram %d", publicDownload.ID, len(publicParts), publicSession.OwnerTelegramID, file.ID, owner.TelegramID)
+	}
+	if err := fileStore.RevokePublicLink(ctx, owner.ID, file.ID, publicLink.ID, time.Now()); err != nil {
+		t.Fatalf("RevokePublicLink() error = %v", err)
+	}
+	if _, _, _, err := fileStore.DownloadDataByPublicTokenHash(ctx, publicTokenHash[:]); !errors.Is(err, files.ErrNotFound) {
+		t.Fatalf("revoked public download error = %v, want files.ErrNotFound", err)
 	}
 	if err := fileStore.SoftDelete(ctx, other.ID, file.ID, time.Now()); !errors.Is(err, files.ErrNotFound) {
 		t.Fatalf("cross-owner delete error = %v, want files.ErrNotFound", err)
@@ -640,13 +666,13 @@ func ensureLatestMigration(t *testing.T, database *sql.DB) {
 SELECT EXISTS (
     SELECT 1
     FROM schema_migrations
-			WHERE version = '000012'
+			WHERE version = '000013'
 )`).Scan(&exists)
 	if err != nil {
 		t.Fatalf("schema migration check failed: %v", err)
 	}
 	if !exists {
-		t.Fatalf("TEST_DATABASE_URL database is not migrated through 000012; run go run ./cmd/migrate up first")
+		t.Fatalf("TEST_DATABASE_URL database is not migrated through 000013; run go run ./cmd/migrate up first")
 	}
 }
 

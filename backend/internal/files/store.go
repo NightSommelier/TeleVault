@@ -40,6 +40,7 @@ type FilePart struct {
 type TelegramSession struct {
 	EncryptedSession []byte
 	StoragePeer      sql.NullString
+	OwnerTelegramID  int64
 }
 
 type Share struct {
@@ -55,6 +56,17 @@ type Share struct {
 	RevokedAt         sql.NullTime
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
+}
+
+type PublicLink struct {
+	ID         string
+	FileID     string
+	OwnerID    string
+	Permission string
+	ExpiresAt  sql.NullTime
+	RevokedAt  sql.NullTime
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
 }
 
 type Store struct {
@@ -213,11 +225,35 @@ SELECT COUNT(*) FROM updated`,
 	return nil
 }
 
-func (s *Store) DownloadData(ctx context.Context, ownerID string, id string) (File, []FilePart, TelegramSession, error) {
-	file, err := s.GetAccessibleByID(ctx, ownerID, id)
+func (s *Store) DownloadData(ctx context.Context, requesterID string, id string) (File, []FilePart, TelegramSession, error) {
+	file, err := s.GetAccessibleByID(ctx, requesterID, id)
 	if err != nil {
 		return File{}, nil, TelegramSession{}, err
 	}
+	return s.downloadDataForFile(ctx, file)
+}
+
+func (s *Store) DownloadDataByPublicTokenHash(ctx context.Context, tokenHash []byte) (File, []FilePart, TelegramSession, error) {
+	file, err := scanFile(s.db.QueryRowContext(ctx, `
+SELECT f.id, f.owner_id, f.parent_id, f.name_plain, f.mime_type, f.plaintext_size, f.ciphertext_size, f.type, f.status, f.created_at, f.updated_at
+FROM public_links l
+JOIN files f ON f.id = l.file_id
+WHERE l.token_hash = $1
+  AND l.revoked_at IS NULL
+  AND (l.expires_at IS NULL OR l.expires_at > now())
+  AND f.deleted_at IS NULL`,
+		tokenHash,
+	))
+	if errors.Is(err, sql.ErrNoRows) {
+		return File{}, nil, TelegramSession{}, ErrNotFound
+	}
+	if err != nil {
+		return File{}, nil, TelegramSession{}, err
+	}
+	return s.downloadDataForFile(ctx, file)
+}
+
+func (s *Store) downloadDataForFile(ctx context.Context, file File) (File, []FilePart, TelegramSession, error) {
 	if file.Type != TypeFile || file.Status != StatusReady {
 		return File{}, nil, TelegramSession{}, ErrNotFound
 	}
@@ -227,7 +263,7 @@ SELECT part_number, telegram_peer, telegram_message_id, ciphertext_size, checksu
 FROM file_parts
 WHERE file_id = $1
 ORDER BY part_number ASC`,
-		id,
+		file.ID,
 	)
 	if err != nil {
 		return File{}, nil, TelegramSession{}, err
@@ -251,11 +287,12 @@ ORDER BY part_number ASC`,
 
 	var session TelegramSession
 	err = s.db.QueryRowContext(ctx, `
-SELECT encrypted_session, storage_peer
-FROM telegram_sessions
-WHERE user_id = $1`,
+SELECT ts.encrypted_session, ts.storage_peer, u.telegram_id
+FROM telegram_sessions ts
+JOIN users u ON u.id = ts.user_id
+WHERE ts.user_id = $1`,
 		file.OwnerID,
-	).Scan(&session.EncryptedSession, &session.StoragePeer)
+	).Scan(&session.EncryptedSession, &session.StoragePeer, &session.OwnerTelegramID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return File{}, nil, TelegramSession{}, ErrNotFound
 	}
@@ -264,6 +301,113 @@ WHERE user_id = $1`,
 	}
 
 	return file, parts, session, nil
+}
+
+func (s *Store) CreatePublicLink(ctx context.Context, ownerID string, fileID string, tokenHash []byte, expiresAt sql.NullTime) (PublicLink, error) {
+	file, err := s.GetByID(ctx, ownerID, fileID)
+	if err != nil {
+		return PublicLink{}, err
+	}
+	if file.Type != TypeFile || file.Status != StatusReady {
+		return PublicLink{}, ErrNotFound
+	}
+
+	var linkID string
+	err = s.db.QueryRowContext(ctx, `
+INSERT INTO public_links (file_id, owner_id, token_hash, permission, expires_at)
+VALUES ($1, $2, $3, 'read', $4)
+RETURNING id`,
+		fileID,
+		ownerID,
+		tokenHash,
+		nullableTime(expiresAt),
+	).Scan(&linkID)
+	if err != nil {
+		return PublicLink{}, err
+	}
+
+	return s.GetPublicLink(ctx, ownerID, fileID, linkID)
+}
+
+func (s *Store) GetPublicLink(ctx context.Context, ownerID string, fileID string, linkID string) (PublicLink, error) {
+	link, err := scanPublicLink(s.db.QueryRowContext(ctx, `
+SELECT id, file_id, owner_id, permission, expires_at, revoked_at, created_at, updated_at
+FROM public_links
+WHERE owner_id = $1
+  AND file_id = $2
+  AND id = $3`,
+		ownerID,
+		fileID,
+		linkID,
+	))
+	if errors.Is(err, sql.ErrNoRows) {
+		return PublicLink{}, ErrNotFound
+	}
+	if err != nil {
+		return PublicLink{}, err
+	}
+	return link, nil
+}
+
+func (s *Store) ListPublicLinks(ctx context.Context, ownerID string, fileID string) ([]PublicLink, error) {
+	if _, err := s.GetByID(ctx, ownerID, fileID); err != nil {
+		return nil, err
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+SELECT id, file_id, owner_id, permission, expires_at, revoked_at, created_at, updated_at
+FROM public_links
+WHERE owner_id = $1
+  AND file_id = $2
+  AND revoked_at IS NULL
+ORDER BY created_at DESC`,
+		ownerID,
+		fileID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var links []PublicLink
+	for rows.Next() {
+		link, err := scanPublicLink(rows)
+		if err != nil {
+			return nil, err
+		}
+		links = append(links, link)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return links, nil
+}
+
+func (s *Store) RevokePublicLink(ctx context.Context, ownerID string, fileID string, linkID string, now time.Time) error {
+	result, err := s.db.ExecContext(ctx, `
+UPDATE public_links
+SET revoked_at = $4,
+    updated_at = $4
+WHERE owner_id = $1
+  AND file_id = $2
+  AND id = $3
+  AND revoked_at IS NULL`,
+		ownerID,
+		fileID,
+		linkID,
+		now,
+	)
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 func (s *Store) CreateShare(ctx context.Context, ownerID string, fileID string, granteeTelegramID int64, expiresAt sql.NullTime) (Share, error) {
@@ -535,6 +679,24 @@ func scanShare(row rowScanner) (Share, error) {
 		return Share{}, err
 	}
 	return share, nil
+}
+
+func scanPublicLink(row rowScanner) (PublicLink, error) {
+	var link PublicLink
+	err := row.Scan(
+		&link.ID,
+		&link.FileID,
+		&link.OwnerID,
+		&link.Permission,
+		&link.ExpiresAt,
+		&link.RevokedAt,
+		&link.CreatedAt,
+		&link.UpdatedAt,
+	)
+	if err != nil {
+		return PublicLink{}, err
+	}
+	return link, nil
 }
 
 func nullableTime(value sql.NullTime) any {
