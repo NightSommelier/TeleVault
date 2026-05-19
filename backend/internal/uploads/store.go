@@ -95,7 +95,6 @@ type QueuedPartWork struct {
 	OwnerTelegramID  int64
 	EncryptedSession []byte
 	StoragePeer      sql.NullString
-	UploadName       string
 }
 
 type File struct {
@@ -592,7 +591,7 @@ SELECT claimed.id, claimed.upload_id, claimed.part_number, claimed.plaintext_siz
        claimed.checksum, claimed.telegram_peer, claimed.telegram_message_id, claimed.status,
        claimed.storage_backend, claimed.storage_key, claimed.available_at, claimed.leased_until,
        claimed.attempts, claimed.last_error, claimed.worker_id, claimed.created_at, claimed.updated_at,
-       u.owner_id, users.telegram_id, ts.encrypted_session, ts.storage_peer, u.name_plain
+       u.owner_id, users.telegram_id, ts.encrypted_session, ts.storage_peer
 FROM claimed
 JOIN uploads u ON u.id = claimed.upload_id
 JOIN users ON users.id = u.owner_id
@@ -623,7 +622,6 @@ LEFT JOIN telegram_sessions ts ON ts.user_id = u.owner_id`,
 		&work.OwnerTelegramID,
 		&work.EncryptedSession,
 		&work.StoragePeer,
-		&work.UploadName,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return QueuedPartWork{}, ErrUploadPartNotFound

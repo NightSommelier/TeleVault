@@ -390,7 +390,7 @@ func TestUploadPartQueueLeaseRetryAndFail(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ClaimQueuedPartWork() after retry error = %v", err)
 	}
-	if work.Part.ID != staged.ID || work.OwnerID != owner.ID || work.OwnerTelegramID != owner.TelegramID || !bytes.Equal(work.EncryptedSession, []byte("encrypted-telegram-session")) || work.UploadName != "queue.bin" {
+	if work.Part.ID != staged.ID || work.OwnerID != owner.ID || work.OwnerTelegramID != owner.TelegramID || !bytes.Equal(work.EncryptedSession, []byte("encrypted-telegram-session")) {
 		t.Fatalf("ClaimQueuedPartWork() = %+v, want staged part with owner telegram session context", work)
 	}
 

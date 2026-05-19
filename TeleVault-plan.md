@@ -78,6 +78,7 @@ Accepted MVP decisions:
 - MVP target: self-hosted-first backend/core.
 - MVP encryption: server-side streaming age-compatible encryption.
 - MVP metadata: keep filenames plaintext, while preserving schema room for encrypted names later.
+- Telegram artifact metadata: do not upload parts to Telegram with the original user filename; use opaque artifact names such as `<upload_part_id>.bin` and restore the original filename only when serving downloads.
 - MVP sharing: no public links or user-to-user sharing in the first usable version.
 - MVP upload path: stage upload data on the server first, then drain it to Telegram through a durable queue with bounded worker concurrency and retry/backoff.
 - MVP frontend: reuse/adapt the existing React UI only after the backend encrypted owner-only flow is stable.
@@ -559,6 +560,7 @@ Post-MVP only.
 - Implement public links. Done for bearer download links with hashed tokens, expiry, and revoke.
 - Implement password-protected links. Done with Argon2id password hashes and browser form download.
 - Implement expiry and revoke. Done for internal shares and public links.
+- Keep original filenames out of Telegram document metadata. Done for staged worker uploads with `<upload_part_id>.bin`; direct non-staged uploads use an opaque upload-part artifact id.
 - Add audit events.
 
 ### Phase 8: Frontend integration

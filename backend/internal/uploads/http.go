@@ -231,7 +231,7 @@ func (h *Handler) UploadPart(w http.ResponseWriter, r *http.Request) {
 	}
 
 	peer := nullableString(telegramSession.StoragePeer)
-	name := uploadPartName(uploadID, partNumber)
+	artifactName := telegramArtifactName(uploadPartArtifactID(uploadID, partNumber))
 	plaintextHash, err := agefile.NewSHA256FromState(upload.ChecksumState)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "upload_checksum_state_invalid")
@@ -251,7 +251,7 @@ func (h *Handler) UploadPart(w http.ResponseWriter, r *http.Request) {
 		resultCh <- encryptResult{result: result}
 	}()
 
-	telegramResult, err := h.telegram.UploadEncryptedPart(r.Context(), session, peer, name, reader)
+	telegramResult, err := h.telegram.UploadEncryptedPart(r.Context(), session, peer, artifactName, reader)
 	if err != nil {
 		_ = reader.CloseWithError(err)
 		_ = h.store.MarkPartFailed(r.Context(), user.ID, uploadID, partNumber)
@@ -303,7 +303,6 @@ func (h *Handler) UploadPart(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) stageUploadPart(w http.ResponseWriter, r *http.Request, ownerID string, uploadID string, partNumber int, upload Upload, now time.Time) {
-	name := uploadPartName(uploadID, partNumber)
 	plaintextHash, err := agefile.NewSHA256FromState(upload.ChecksumState)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "upload_checksum_state_invalid")
@@ -364,7 +363,7 @@ func (h *Handler) stageUploadPart(w http.ResponseWriter, r *http.Request, ownerI
 		"queue": map[string]any{
 			"status":      "queued",
 			"storage_key": storageKey,
-			"name":        name,
+			"name":        telegramArtifactName(part.ID),
 		},
 	})
 }
@@ -587,6 +586,17 @@ func fileResponse(file File) map[string]any {
 
 func uploadPartName(uploadID string, partNumber int) string {
 	return uploadID + ".part-" + strconv.Itoa(partNumber) + ".age"
+}
+
+func uploadPartArtifactID(uploadID string, partNumber int) string {
+	return uploadID + "-part-" + strconv.Itoa(partNumber)
+}
+
+func telegramArtifactName(artifactID string) string {
+	if artifactID == "" {
+		return "artifact.bin"
+	}
+	return artifactID + ".bin"
 }
 
 func nullableString(value sql.NullString) string {

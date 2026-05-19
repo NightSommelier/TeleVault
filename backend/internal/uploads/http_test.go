@@ -66,6 +66,15 @@ func TestUploadPartResponseIncludesChecksumHex(t *testing.T) {
 	}
 }
 
+func TestTelegramArtifactNameDoesNotUseOriginalFilename(t *testing.T) {
+	if got := telegramArtifactName("6c851bbf-57f2-46ea-a216-ee029365750f"); got != "6c851bbf-57f2-46ea-a216-ee029365750f.bin" {
+		t.Fatalf("telegramArtifactName() = %q", got)
+	}
+	if got := uploadPartArtifactID("upload-1", 2); got != "upload-1-part-2" {
+		t.Fatalf("uploadPartArtifactID() = %q", got)
+	}
+}
+
 func TestUploadProgressResponseSummarizesQueueState(t *testing.T) {
 	now := time.Unix(1000, 0).UTC()
 	upload := Upload{

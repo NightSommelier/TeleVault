@@ -46,7 +46,6 @@ func TestDrainWorkerUploadsStagedPartAndDeletesLocalCopy(t *testing.T) {
 			OwnerTelegramID:  12345,
 			EncryptedSession: encryptedSession,
 			StoragePeer:      sql.NullString{String: "self", Valid: true},
-			UploadName:       "photo.png",
 		},
 	}
 	telegram := &fakeWorkerTelegram{messageID: 77}
@@ -67,7 +66,7 @@ func TestDrainWorkerUploadsStagedPartAndDeletesLocalCopy(t *testing.T) {
 	if !worked {
 		t.Fatalf("DrainOne() worked = false, want true")
 	}
-	if telegram.session != "telegram-session" || telegram.peer != "self" || telegram.name != "photo.png.part-1.age" || string(telegram.body) != "ciphertext" {
+	if telegram.session != "telegram-session" || telegram.peer != "self" || telegram.name != "part-1.bin" || string(telegram.body) != "ciphertext" {
 		t.Fatalf("telegram upload = session %q peer %q name %q body %q", telegram.session, telegram.peer, telegram.name, string(telegram.body))
 	}
 	if store.marked.PartID != "part-1" || store.marked.TelegramPeer != "self" || store.marked.MessageID != 77 {

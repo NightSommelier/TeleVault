@@ -138,7 +138,7 @@ func (w *DrainWorker) drainClaimedPart(ctx context.Context, work QueuedPartWork)
 		uploadCtx,
 		session,
 		nullableString(work.StoragePeer),
-		workerPartName(work.UploadName, part.PartNumber),
+		telegramArtifactName(part.ID),
 		body,
 	)
 	if err != nil {
@@ -190,11 +190,4 @@ func retryDelay(err error, attempts int, base time.Duration, maxDelay time.Durat
 		return maxDelay
 	}
 	return delay
-}
-
-func workerPartName(uploadName string, partNumber int) string {
-	if uploadName == "" {
-		return uploadPartName("upload", partNumber)
-	}
-	return uploadName + ".part-" + strconv.Itoa(partNumber) + ".age"
 }
