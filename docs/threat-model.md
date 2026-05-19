@@ -52,7 +52,7 @@ Date: 2026-05-15
 - Client-side zero-knowledge encryption.
 - Public links.
 - User-to-user sharing.
-- Legacy migration from TeleDrive v1.
+- Legacy migration from the older TeleDrive instance.
 - Advanced previews/search over encrypted metadata.
 - Hosted multi-tenant SaaS controls beyond self-hosted-safe defaults.
 
