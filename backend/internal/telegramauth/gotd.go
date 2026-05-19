@@ -9,6 +9,7 @@ import (
 	"io"
 	"math"
 	"math/big"
+	"strings"
 
 	"github.com/gotd/td/session"
 	"github.com/gotd/td/telegram"
@@ -227,10 +228,13 @@ func (c *Client) StartQRLogin(ctx context.Context) (auth.TelegramQRLoginAttempt,
 	}
 }
 
-func (c *Client) UploadEncryptedPart(ctx context.Context, encodedSession string, storagePeer string, name string, body io.Reader) (auth.TelegramUploadResult, error) {
+func (c *Client) UploadEncryptedPart(ctx context.Context, encodedSession string, storagePeer string, name string, mimeType string, body io.Reader) (auth.TelegramUploadResult, error) {
 	sessionBytes, err := base64.StdEncoding.DecodeString(encodedSession)
 	if err != nil {
 		return auth.TelegramUploadResult{}, err
+	}
+	if strings.TrimSpace(mimeType) == "" {
+		mimeType = "application/octet-stream"
 	}
 
 	storage := &session.StorageMemory{}
@@ -270,7 +274,7 @@ func (c *Client) UploadEncryptedPart(ctx context.Context, encodedSession string,
 			Peer: &tg.InputPeerSelf{},
 			Media: &tg.InputMediaUploadedDocument{
 				File:      inputFile,
-				MimeType:  "application/octet-stream",
+				MimeType:  mimeType,
 				ForceFile: true,
 				Attributes: []tg.DocumentAttributeClass{
 					&tg.DocumentAttributeFilename{FileName: name},

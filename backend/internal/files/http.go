@@ -20,6 +20,7 @@ import (
 
 	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/auth"
 	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/crypto/agefile"
+	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/telegramartifact"
 )
 
 const (
@@ -611,7 +612,14 @@ func (h *Handler) streamDownload(w http.ResponseWriter, r *http.Request, file Fi
 			errCh <- err
 		}(part)
 
-		decryptErr := agefile.DecryptStream(w, reader, h.ageIdentity)
+		unwrapReader, unwrapErr := telegramartifact.UnwrapReader(reader)
+		if unwrapErr != nil {
+			_ = reader.CloseWithError(unwrapErr)
+			<-errCh
+			return
+		}
+
+		decryptErr := agefile.DecryptStream(w, unwrapReader, h.ageIdentity)
 		downloadErr := <-errCh
 		if decryptErr != nil || downloadErr != nil {
 			return

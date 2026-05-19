@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/auth"
+	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/telegramartifact"
 )
 
 const (
@@ -134,13 +135,15 @@ func (w *DrainWorker) drainClaimedPart(ctx context.Context, work QueuedPartWork)
 	uploadCtx, cancel := context.WithTimeout(ctx, w.settings.UploadTimeout)
 	defer cancel()
 	startedAt := w.settings.Now()
+	wrappedBody := telegramartifact.WrapReader(part.ID, body)
 
 	result, err := w.telegram.UploadEncryptedPart(
 		uploadCtx,
 		session,
 		nullableString(work.StoragePeer),
 		telegramArtifactName(part.ID),
-		body,
+		telegramArtifactMimeType(part.ID),
+		wrappedBody,
 	)
 	if err != nil {
 		return w.retryPart(ctx, part, err)

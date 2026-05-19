@@ -64,7 +64,7 @@ type fakeProbeClient struct {
 	nextMessageID     int64
 }
 
-func (c *fakeProbeClient) UploadEncryptedPart(ctx context.Context, session string, storagePeer string, name string, body io.Reader) (auth.TelegramUploadResult, error) {
+func (c *fakeProbeClient) UploadEncryptedPart(ctx context.Context, session string, storagePeer string, name string, mimeType string, body io.Reader) (auth.TelegramUploadResult, error) {
 	var buf bytes.Buffer
 	size, err := io.Copy(&buf, body)
 	if err != nil {

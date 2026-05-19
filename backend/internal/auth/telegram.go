@@ -64,7 +64,7 @@ type TelegramUploadResult struct {
 }
 
 type TelegramStorageClient interface {
-	UploadEncryptedPart(ctx context.Context, session string, storagePeer string, name string, body io.Reader) (TelegramUploadResult, error)
+	UploadEncryptedPart(ctx context.Context, session string, storagePeer string, name string, mimeType string, body io.Reader) (TelegramUploadResult, error)
 	DownloadEncryptedPart(ctx context.Context, session string, storagePeer string, messageID int64, dst io.Writer) error
 	DeleteEncryptedPart(ctx context.Context, session string, storagePeer string, messageID int64) error
 }

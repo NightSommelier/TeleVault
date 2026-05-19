@@ -1,96 +1,67 @@
-# Completed: Drag-and-Drop Folder Move and Main-Area Upload Ergonomics
-
-Status: completed on 2026-05-19.
-
-The previous task tightened the embedded web UI drag-and-drop behavior in `backend/internal/httpserver/static/index.html`:
-
-- dropping external files on the main file area now enqueues uploads immediately for the current folder;
-- dropping external files on the sidebar dropzone still stages the selection for explicit confirmation;
-- dragging an existing file/folder onto another folder still moves it into that folder;
-- dragging an existing file/folder onto breadcrumbs or the `Up` control now moves it to an ancestor folder or root.
-
-The docs were updated in `docs/development/web.md`, and the privacy-masking plan was clarified in `TeleVault-plan.md`.
-
-Do not redo this drag-and-drop task unless a regression is found.
-
----
-
-# Next Step: Privacy Masking Artifact Camouflage Foundation
+# Next Step: Adaptive Upload Worker Concurrency and Pacing
 
 ## Goal
 
-Make Telegram-side uploaded artifacts less recognizable as raw age-encrypted files.
+Finish upload worker hardening so the instance can keep draining parts safely when Telegram slows down or when multiple uploads are active at the same time.
 
-Today the service keeps original user filenames out of Telegram by uploading opaque artifact names such as `<upload_part_id>.bin`, but the encrypted payload can still start with an obvious age header such as:
-
-```text
-age-encryption.org/v1
--> X25519 ...
-```
-
-Add a foundation for privacy masking so future and optionally current uploads can use decoy artifact names/extensions/mime families and, when enabled, wrap the ciphertext payload so Telegram does not see the age header at byte zero.
+Right now the worker drains parts sequentially, but the plan already calls for bounded concurrency, per-account pacing, and adaptive backoff when Telegram starts throttling. Implement that next, without changing the storage model unless a test proves it is required.
 
 ## Context
 
-Recent relevant work:
+Relevant current behavior:
 
-- Worker uploads already use opaque artifact names instead of original filenames.
-- Downloads still serve the original user-facing filename through service metadata.
-- The user explicitly wants decoy formats such as `.mp3`, `.mp4`, `.avi`, `.m4v`, `.3gp`, `.jpg`, `.jpeg`, and similar ordinary-looking names.
-- The user also wants to avoid exposing raw `age-encryption.org/v1` headers to Telegram storage.
+- the API already stages encrypted parts locally and the worker drains them to Telegram;
+- queue state, retry metadata, and active worker ids are already exposed;
+- admin settings already carry upload policy fields such as target upload rate, cooldown, and max parallel uploads;
+- `FLOOD_WAIT_X` handling already exists, but the worker still needs better account-aware pacing and concurrency control.
 
 Important files:
 
-- `backend/internal/uploads/http.go`
 - `backend/internal/uploads/worker.go`
-- `backend/internal/uploads/http_test.go`
-- `backend/internal/uploads/worker_test.go`
-- `backend/internal/crypto/agefile/`
+- `backend/internal/uploads/http.go`
+- `backend/internal/uploads/store.go`
+- `backend/internal/adminsettings/`
+- `backend/internal/integration/`
 - `docs/development/uploads.md`
-- `docs/threat-model.md`
 - `TeleVault-plan.md`
 
 ## Required Behavior
 
-1. Define a small privacy-masking design before broad implementation.
-2. Add a deterministic artifact-name helper that can choose a decoy extension from an allowlist.
-3. Keep the real user filename and MIME type only in service metadata.
-4. Do not use the original filename in Telegram artifact names.
-5. Do not expose raw public-link tokens, Telegram sessions, AGE private keys, Telegram peer ids, or message ids in any user-facing UI.
-6. For payload header masking, implement only a safe foundation:
-   - either document the wrapper format clearly and add tests without enabling it yet;
-   - or add a backward-compatible wrapper reader/writer with a version marker that the download path can unwrap before age decryption.
-7. Existing files already uploaded without masking must remain downloadable.
-8. Downloads must keep serving the original user filename.
+1. Add bounded worker concurrency for draining staged parts, driven by the existing policy fields.
+2. Keep per-upload part ordering intact.
+3. Make the worker respect current account pacing when it sees backlog or Telegram slowdowns.
+4. Continue honoring `FLOOD_WAIT_X` by pushing the next retry forward instead of retrying aggressively.
+5. Keep queue progress visible enough for the frontend to explain why work is queued, leased, or deferred.
+6. Do not introduce a broad schema migration unless a concrete bug or missing field forces it.
+7. Do not regress the current staged-upload flow, retry controls, or privacy-masking wrapper work.
 
 ## Suggested Implementation
 
-Start conservatively:
+Use the existing queue and settings first.
 
-- Add a `PrivacyMaskingMode` or similarly named internal concept, defaulting to current behavior unless config already has a suitable flag.
-- Add a helper such as `telegramArtifactName(artifactID string, mode PrivacyMaskingMode)`.
-- Use an allowlist of decoy extensions. Keep it small and explicit at first: `.mp3`, `.mp4`, `.avi`, `.m4v`, `.3gp`, `.jpg`, `.jpeg`, `.zip`, `.pdf`.
-- Add tests proving artifact names never include the original filename and always remain deterministic for a given artifact id/mode.
-- For age header masking, prefer a reversible wrapper around the ciphertext bytes rather than modifying age itself. The wrapper must be clearly versioned and must not break existing unwrapped ciphertext.
+Good shape:
+
+- cap active drain work with `max_parallel_uploads`;
+- keep one lease per part and one worker slot per concurrent upload;
+- let the worker back off when the effective upload duration or queue pressure exceeds the configured pacing;
+- preserve the current retry schedule for transient Telegram errors;
+- keep single-upload part ordering deterministic.
 
 ## Constraints
 
-- No lossy transformation of ciphertext.
-- No change that makes already uploaded files unreadable.
-- No original filenames in Telegram artifact names.
-- No random extension selection that makes retries non-idempotent.
-- No broad storage schema migration unless absolutely necessary.
-- No attempt to fake valid media containers in this step unless the reader/writer path is fully specified and tested.
+- No change that breaks existing uploads or recovery paths.
+- No hidden behavior that surprises the user with unbounded throttling.
+- No broad rewrite of the queue unless the current structure cannot support the policy cleanly.
+- Keep the implementation small enough to test with the current integration and unit test style.
 
 ## Docs
 
 Update:
 
 - `docs/development/uploads.md`
-- `docs/threat-model.md`
 - `TeleVault-plan.md`
 
-Mention exactly what privacy masking does and does not protect against.
+Document how the worker decides when to drain, when to wait, and how the configured limits affect throughput.
 
 ## Verification
 
@@ -101,25 +72,20 @@ cd backend
 go test ./... -count=1
 ```
 
-Validate the embedded JS syntax if the web UI changes:
-
-```sh
-node -e "const fs=require('fs'); const html=fs.readFileSync('backend/internal/httpserver/static/index.html','utf8'); const m=html.match(/<script>([\\s\\S]*)<\\/script>/); new Function(m[1]); console.log('js ok')"
-```
-
 Then run:
 
 ```sh
 git diff --check
 ```
 
+If the embedded web UI changes, also validate the JS syntax.
+
 ## Acceptance Criteria
 
-- Telegram artifact naming has a tested privacy-masking foundation.
-- Decoy extensions come from an explicit allowlist.
-- Artifact names stay deterministic and do not use original user filenames.
-- Existing unmasked downloads remain supported.
-- The age-header masking path is either clearly documented for the next implementation step or implemented with backward-compatible tests.
-- Docs explain the protection and limits.
-- Tests pass.
-- No secrets or local test files are committed.
+- The worker obeys `max_parallel_uploads` or the equivalent configured concurrency cap.
+- Upload ordering remains stable inside a single upload session.
+- Telegram slowdowns push work back through retry/backoff instead of causing tight retry loops.
+- Queue progress still explains queued, leased, failed, and ready states correctly.
+- Tests cover the new pacing/concurrency behavior.
+- `go test ./... -count=1` passes.
+- `git diff --check` passes.

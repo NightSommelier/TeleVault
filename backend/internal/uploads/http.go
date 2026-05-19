@@ -17,6 +17,7 @@ import (
 
 	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/auth"
 	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/crypto/agefile"
+	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/telegramartifact"
 )
 
 const (
@@ -231,7 +232,8 @@ func (h *Handler) UploadPart(w http.ResponseWriter, r *http.Request) {
 	}
 
 	peer := nullableString(telegramSession.StoragePeer)
-	artifactName := telegramArtifactName(uploadPartArtifactID(uploadID, partNumber))
+	artifactSpec := telegramartifact.SpecForArtifactID(uploadPartArtifactID(uploadID, partNumber))
+	artifactName := artifactSpec.Name()
 	plaintextHash, err := agefile.NewSHA256FromState(upload.ChecksumState)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "upload_checksum_state_invalid")
@@ -250,8 +252,9 @@ func (h *Handler) UploadPart(w http.ResponseWriter, r *http.Request) {
 		_ = writer.Close()
 		resultCh <- encryptResult{result: result}
 	}()
+	wrappedReader := telegramartifact.WrapReader(uploadPartArtifactID(uploadID, partNumber), reader)
 
-	telegramResult, err := h.telegram.UploadEncryptedPart(r.Context(), session, peer, artifactName, reader)
+	telegramResult, err := h.telegram.UploadEncryptedPart(r.Context(), session, peer, artifactName, artifactSpec.MIMEType(), wrappedReader)
 	if err != nil {
 		_ = reader.CloseWithError(err)
 		_ = h.store.MarkPartFailed(r.Context(), user.ID, uploadID, partNumber)
@@ -593,10 +596,11 @@ func uploadPartArtifactID(uploadID string, partNumber int) string {
 }
 
 func telegramArtifactName(artifactID string) string {
-	if artifactID == "" {
-		return "artifact.bin"
-	}
-	return artifactID + ".bin"
+	return telegramartifact.SpecForArtifactID(artifactID).Name()
+}
+
+func telegramArtifactMimeType(artifactID string) string {
+	return telegramartifact.SpecForArtifactID(artifactID).MIMEType()
 }
 
 func nullableString(value sql.NullString) string {

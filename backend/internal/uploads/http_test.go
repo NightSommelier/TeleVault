@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"testing"
 	"time"
+
+	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/telegramartifact"
 )
 
 func TestNormalizeName(t *testing.T) {
@@ -67,8 +69,12 @@ func TestUploadPartResponseIncludesChecksumHex(t *testing.T) {
 }
 
 func TestTelegramArtifactNameDoesNotUseOriginalFilename(t *testing.T) {
-	if got := telegramArtifactName("6c851bbf-57f2-46ea-a216-ee029365750f"); got != "6c851bbf-57f2-46ea-a216-ee029365750f.bin" {
-		t.Fatalf("telegramArtifactName() = %q", got)
+	spec := telegramartifact.SpecForArtifactID("6c851bbf-57f2-46ea-a216-ee029365750f")
+	if got := telegramArtifactName(spec.ArtifactID); got != spec.Name() {
+		t.Fatalf("telegramArtifactName() = %q, want %q", got, spec.Name())
+	}
+	if got := telegramArtifactMimeType(spec.ArtifactID); got != spec.MIMEType() {
+		t.Fatalf("telegramArtifactMimeType() = %q, want %q", got, spec.MIMEType())
 	}
 	if got := uploadPartArtifactID("upload-1", 2); got != "upload-1-part-2" {
 		t.Fatalf("uploadPartArtifactID() = %q", got)

@@ -12,6 +12,7 @@ import (
 
 	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/auth"
 	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/crypto/secrets"
+	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/telegramartifact"
 )
 
 func TestDrainWorkerUploadsStagedPartAndDeletesLocalCopy(t *testing.T) {
@@ -66,8 +67,14 @@ func TestDrainWorkerUploadsStagedPartAndDeletesLocalCopy(t *testing.T) {
 	if !worked {
 		t.Fatalf("DrainOne() worked = false, want true")
 	}
-	if telegram.session != "telegram-session" || telegram.peer != "self" || telegram.name != "part-1.bin" || string(telegram.body) != "ciphertext" {
-		t.Fatalf("telegram upload = session %q peer %q name %q body %q", telegram.session, telegram.peer, telegram.name, string(telegram.body))
+	wantName := telegramArtifactName("part-1")
+	wantMIME := telegramArtifactMimeType("part-1")
+	wantBody, err := io.ReadAll(telegramartifact.WrapReader("part-1", bytes.NewReader([]byte("ciphertext"))))
+	if err != nil {
+		t.Fatalf("ReadAll(WrapReader()) error = %v", err)
+	}
+	if telegram.session != "telegram-session" || telegram.peer != "self" || telegram.name != wantName || telegram.mimeType != wantMIME || !bytes.Equal(telegram.body, wantBody) {
+		t.Fatalf("telegram upload = session %q peer %q name %q mime %q body %q", telegram.session, telegram.peer, telegram.name, telegram.mimeType, string(telegram.body))
 	}
 	if store.marked.PartID != "part-1" || store.marked.TelegramPeer != "self" || store.marked.MessageID != 77 {
 		t.Fatalf("MarkStagedPartUploaded() params = %+v", store.marked)
@@ -206,13 +213,15 @@ type fakeWorkerTelegram struct {
 	session   string
 	peer      string
 	name      string
+	mimeType  string
 	body      []byte
 }
 
-func (t *fakeWorkerTelegram) UploadEncryptedPart(_ context.Context, session string, storagePeer string, name string, body io.Reader) (auth.TelegramUploadResult, error) {
+func (t *fakeWorkerTelegram) UploadEncryptedPart(_ context.Context, session string, storagePeer string, name string, mimeType string, body io.Reader) (auth.TelegramUploadResult, error) {
 	t.session = session
 	t.peer = storagePeer
 	t.name = name
+	t.mimeType = mimeType
 	var err error
 	t.body, err = io.ReadAll(body)
 	if err != nil {

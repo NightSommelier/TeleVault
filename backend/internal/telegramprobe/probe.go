@@ -18,7 +18,7 @@ const (
 var ErrInvalidPlan = errors.New("invalid telegram probe plan")
 
 type UploadClient interface {
-	UploadEncryptedPart(ctx context.Context, session string, storagePeer string, name string, body io.Reader) (auth.TelegramUploadResult, error)
+	UploadEncryptedPart(ctx context.Context, session string, storagePeer string, name string, mimeType string, body io.Reader) (auth.TelegramUploadResult, error)
 	DeleteEncryptedPart(ctx context.Context, session string, storagePeer string, messageID int64) error
 }
 
@@ -80,7 +80,7 @@ func Run(ctx context.Context, client UploadClient, session string, storagePeer s
 	result := Result{AttemptedSizes: sizes}
 	for _, size := range sizes {
 		name := fmt.Sprintf("t2d-limit-probe-%d.bin", size)
-		uploadResult, err := client.UploadEncryptedPart(ctx, session, storagePeer, name, io.LimitReader(zeroReader{}, size))
+		uploadResult, err := client.UploadEncryptedPart(ctx, session, storagePeer, name, "application/octet-stream", io.LimitReader(zeroReader{}, size))
 		if err != nil {
 			result.FailedBytes = size
 			return result, err
