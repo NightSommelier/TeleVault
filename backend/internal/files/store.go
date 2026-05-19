@@ -11,6 +11,7 @@ var (
 	ErrNotFound         = errors.New("file not found")
 	ErrPasswordRequired = errors.New("public link password required")
 	ErrInvalidMove      = errors.New("invalid file move")
+	ErrInvalidName      = errors.New("invalid file name")
 )
 
 const (
@@ -227,13 +228,28 @@ WHERE owner_id = $1
 }
 
 func (s *Store) SoftDelete(ctx context.Context, ownerID string, id string, now time.Time) error {
+	return s.softDeleteMany(ctx, ownerID, []string{id}, now)
+}
+
+func (s *Store) SoftDeleteMany(ctx context.Context, ownerID string, ids []string, now time.Time) error {
+	return s.softDeleteMany(ctx, ownerID, ids, now)
+}
+
+func (s *Store) softDeleteMany(ctx context.Context, ownerID string, ids []string, now time.Time) error {
+	if len(ids) == 0 {
+		return ErrNotFound
+	}
 	var count int
 	err := s.db.QueryRowContext(ctx, `
-WITH RECURSIVE target AS (
+WITH RECURSIVE requested AS (
+    SELECT DISTINCT ids.id
+    FROM unnest($2::uuid[]) AS ids(id)
+),
+target AS (
     SELECT id
     FROM files
     WHERE owner_id = $1
-      AND id = $2
+      AND id IN (SELECT id FROM requested)
       AND deleted_at IS NULL
     UNION ALL
     SELECT child.id
@@ -266,7 +282,7 @@ queued_cleanup AS (
 )
 SELECT COUNT(*) FROM updated`,
 		ownerID,
-		id,
+		ids,
 		now,
 	).Scan(&count)
 	if err != nil {
@@ -279,39 +295,65 @@ SELECT COUNT(*) FROM updated`,
 	return nil
 }
 
+type metadataUpdate struct {
+	SetParent bool
+	ParentID  string
+	SetName   bool
+	Name      string
+}
+
 func (s *Store) Move(ctx context.Context, ownerID string, id string, parentID string) (File, error) {
+	return s.updateMetadata(ctx, ownerID, []string{id}, metadataUpdate{SetParent: true, ParentID: parentID})
+}
+
+func (s *Store) MoveMany(ctx context.Context, ownerID string, ids []string, parentID string) error {
+	_, err := s.updateMetadata(ctx, ownerID, ids, metadataUpdate{SetParent: true, ParentID: parentID})
+	return err
+}
+
+func (s *Store) Rename(ctx context.Context, ownerID string, id string, name string) (File, error) {
+	return s.updateMetadata(ctx, ownerID, []string{id}, metadataUpdate{SetName: true, Name: name})
+}
+
+func (s *Store) updateMetadata(ctx context.Context, ownerID string, ids []string, update metadataUpdate) (File, error) {
+	if len(ids) == 0 {
+		return File{}, ErrNotFound
+	}
+
+	normalizedName := ""
+	if update.SetName {
+		normalizedName = normalizeName(update.Name)
+		if normalizedName == "" || len(normalizedName) > 255 {
+			return File{}, ErrInvalidName
+		}
+	}
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return File{}, err
 	}
 	defer tx.Rollback()
 
-	file, err := scanFile(tx.QueryRowContext(ctx, `
-SELECT id, owner_id, parent_id, name_plain, mime_type, plaintext_size, ciphertext_size, type, status, created_at, updated_at
-FROM files
-WHERE owner_id = $1
-  AND id = $2
-  AND deleted_at IS NULL
-FOR UPDATE`,
-		ownerID,
-		id,
-	))
-	if errors.Is(err, sql.ErrNoRows) {
-		return File{}, ErrNotFound
-	}
+	files, err := s.filesByIDsForUpdate(ctx, tx, ownerID, ids)
 	if err != nil {
 		return File{}, err
 	}
+	if len(files) == 0 {
+		return File{}, ErrNotFound
+	}
 
-	if parentID != "" {
-		if parentID == id {
-			return File{}, ErrInvalidMove
-		}
-		if err := ensureParentFolderTx(ctx, tx, ownerID, parentID); err != nil {
+	if update.SetParent && update.ParentID != "" {
+		if err := ensureParentFolderTx(ctx, tx, ownerID, update.ParentID); err != nil {
 			return File{}, err
 		}
-		if file.Type == TypeFolder {
-			descendant, err := isDescendantFolder(ctx, tx, ownerID, id, parentID)
+		for _, file := range files {
+			if file.Type != TypeFolder {
+				continue
+			}
+			if update.ParentID == file.ID {
+				return File{}, ErrInvalidMove
+			}
+			descendant, err := isDescendantFolder(ctx, tx, ownerID, file.ID, update.ParentID)
 			if err != nil {
 				return File{}, err
 			}
@@ -321,17 +363,25 @@ FOR UPDATE`,
 		}
 	}
 
-	moved, err := scanFile(tx.QueryRowContext(ctx, `
+	updated, err := scanFile(tx.QueryRowContext(ctx, `
+	WITH requested AS (
+    SELECT DISTINCT ids.id
+    FROM unnest($2::uuid[]) AS ids(id)
+)
 UPDATE files
-SET parent_id = NULLIF($3, '')::uuid,
+SET parent_id = CASE WHEN $3 THEN NULLIF($4, '')::uuid ELSE parent_id END,
+    name_plain = CASE WHEN $5 THEN $6 ELSE name_plain END,
     updated_at = now()
 WHERE owner_id = $1
-  AND id = $2
+  AND id IN (SELECT id FROM requested)
   AND deleted_at IS NULL
 RETURNING id, owner_id, parent_id, name_plain, mime_type, plaintext_size, ciphertext_size, type, status, created_at, updated_at`,
 		ownerID,
-		id,
-		parentID,
+		ids,
+		update.SetParent,
+		update.ParentID,
+		update.SetName,
+		normalizedName,
 	))
 	if err != nil {
 		return File{}, err
@@ -341,7 +391,38 @@ RETURNING id, owner_id, parent_id, name_plain, mime_type, plaintext_size, cipher
 		return File{}, err
 	}
 
-	return moved, nil
+	return updated, nil
+}
+
+func (s *Store) filesByIDsForUpdate(ctx context.Context, tx *sql.Tx, ownerID string, ids []string) ([]File, error) {
+	rows, err := tx.QueryContext(ctx, `
+SELECT id, owner_id, parent_id, name_plain, mime_type, plaintext_size, ciphertext_size, type, status, created_at, updated_at
+FROM files
+WHERE owner_id = $1
+  AND id = ANY($2::uuid[])
+  AND deleted_at IS NULL
+FOR UPDATE`,
+		ownerID,
+		ids,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var files []File
+	for rows.Next() {
+		file, err := scanFile(rows)
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, file)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return files, nil
 }
 
 func (s *Store) DownloadData(ctx context.Context, requesterID string, id string) (File, []FilePart, TelegramSession, error) {

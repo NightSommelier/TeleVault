@@ -43,6 +43,11 @@
       background: var(--primary);
       color: var(--primary-ink);
     }
+    button.danger {
+      border-color: var(--danger);
+      background: var(--danger);
+      color: #fff;
+    }
     button.link {
       border: 0;
       background: transparent;
@@ -126,6 +131,28 @@
     }
     .actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
     .row-actions { justify-content: flex-end; }
+    .row-actions {
+      flex-wrap: nowrap;
+      gap: 4px;
+    }
+    .row-actions button {
+      min-height: 28px;
+      padding: 0 8px;
+      white-space: nowrap;
+      font-size: 12px;
+    }
+    .selection-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 10px 14px 0;
+    }
+    .selection-summary {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 600;
+    }
     .segmented {
       display: inline-flex;
       border: 1px solid var(--line);
@@ -184,6 +211,25 @@
       align-items: center;
       gap: 8px;
       min-width: 0;
+    }
+    .file-cell {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+      max-width: 100%;
+    }
+    .file-select {
+      flex: 0 0 auto;
+      display: inline-flex;
+      align-items: center;
+    }
+    .file-select input {
+      margin: 0;
+    }
+    .file-label {
+      min-width: 0;
+      overflow-wrap: anywhere;
     }
     .folder-mark {
       width: 24px;
@@ -260,6 +306,11 @@
       color: var(--muted);
       font-weight: 650;
       background: #fbfcfe;
+    }
+    .files-table th:last-child,
+    .files-table td:last-child {
+      width: 1%;
+      white-space: nowrap;
     }
     .table tr:last-child td { border-bottom: 0; }
     .compact-table th, .compact-table td {
@@ -488,8 +539,16 @@
               <button id="refreshBtn">Refresh</button>
             </div>
           </div>
+          <div id="selectionBar" class="selection-bar hidden">
+            <div id="selectionSummary" class="selection-summary"></div>
+            <div class="actions">
+              <button id="selectAllVisibleBtn">Select all</button>
+              <button id="deleteSelectedBtn" class="danger">Delete selected</button>
+              <button id="clearSelectionBtn">Clear</button>
+            </div>
+          </div>
           <div id="filePanel" class="panel-body file-drop-target">
-            <table class="table">
+            <table class="table files-table">
               <thead>
                 <tr>
                   <th>Name</th>
@@ -604,6 +663,13 @@
         <div class="modal-body stack">
           <div class="details-grid">
             <div class="field">
+              <label for="detailsFileNameInput">Name</label>
+              <div class="copy-field">
+                <input id="detailsFileNameInput" type="text" maxlength="255" autocomplete="off">
+                <button id="saveDetailsFileNameBtn" class="primary">Save</button>
+              </div>
+            </div>
+            <div class="field">
               <label for="detailsFileID">File ID</label>
               <div class="copy-field">
                 <input id="detailsFileID" type="text" readonly>
@@ -632,7 +698,8 @@
       folderStack: [],
       view: 'own',
       droppedFiles: [],
-      draggingItem: null,
+      selectedFileIds: new Set(),
+      draggingItems: [],
       shareFile: null,
       detailsFile: null,
       detailsRequestID: 0,
@@ -656,6 +723,11 @@
       sharedFilesBtn: document.getElementById('sharedFilesBtn'),
       upBtn: document.getElementById('upBtn'),
       breadcrumbs: document.getElementById('breadcrumbs'),
+      selectionBar: document.getElementById('selectionBar'),
+      selectionSummary: document.getElementById('selectionSummary'),
+      selectAllVisibleBtn: document.getElementById('selectAllVisibleBtn'),
+      deleteSelectedBtn: document.getElementById('deleteSelectedBtn'),
+      clearSelectionBtn: document.getElementById('clearSelectionBtn'),
       filesBody: document.getElementById('filesBody'),
       filePanel: document.getElementById('filePanel'),
       folderNameInput: document.getElementById('folderNameInput'),
@@ -684,6 +756,8 @@
       detailsModal: document.getElementById('detailsModal'),
       closeDetailsBtn: document.getElementById('closeDetailsBtn'),
       detailsFileName: document.getElementById('detailsFileName'),
+      detailsFileNameInput: document.getElementById('detailsFileNameInput'),
+      saveDetailsFileNameBtn: document.getElementById('saveDetailsFileNameBtn'),
       detailsFileID: document.getElementById('detailsFileID'),
       copyDetailsFileIDBtn: document.getElementById('copyDetailsFileIDBtn'),
       detailsBody: document.getElementById('detailsBody'),
@@ -739,7 +813,8 @@
       state.folderStack = [];
       state.view = 'own';
       state.droppedFiles = [];
-      state.draggingItem = null;
+      state.selectedFileIds = new Set();
+      state.draggingItems = [];
       state.shareFile = null;
       state.detailsFile = null;
       state.uploadQueue = [];
@@ -828,9 +903,17 @@
     }
 
     function renderFiles(files) {
+      if (state.view !== 'own') {
+        state.selectedFileIds = new Set();
+      } else {
+        const visible = new Set(files.map((file) => file.id));
+        state.selectedFileIds = new Set(Array.from(state.selectedFileIds).filter((id) => visible.has(id)));
+      }
+      renderSelectionBar(files);
       if (!files.length) {
         const message = state.view === 'shared' ? 'No shared files.' : 'No files in this folder.';
         el.filesBody.innerHTML = `<tr><td colspan="4" class="muted">${message}</td></tr>`;
+        if (state.view === 'own') wireFileSelectionHandlers([]);
         return;
       }
       el.filesBody.innerHTML = files.map((file) => `
@@ -841,6 +924,7 @@
           <td><div class="actions row-actions">${renderFileActions(file)}</div></td>
         </tr>
       `).join('');
+      wireFileSelectionHandlers(files);
       el.filesBody.querySelectorAll('[data-open-folder]').forEach((button) => {
         button.addEventListener('click', () => {
           const folder = files.find((file) => file.id === button.dataset.openFolder);
@@ -867,33 +951,55 @@
           openDetailsDialog(file);
         });
       });
-      if (state.view === 'own') wireFileRowDragHandlers();
+      if (state.view === 'own') wireFileRowDragHandlers(files);
     }
 
-    function wireFileRowDragHandlers() {
+    function wireFileSelectionHandlers(files) {
+      el.filesBody.querySelectorAll('[data-select-file]').forEach((input) => {
+        input.addEventListener('change', () => {
+          const id = input.dataset.selectFile;
+          if (!id) return;
+          if (input.checked) {
+            state.selectedFileIds.add(id);
+          } else {
+            state.selectedFileIds.delete(id);
+          }
+          renderSelectionBar(files);
+        });
+      });
+    }
+
+    function wireFileRowDragHandlers(files) {
       el.filesBody.querySelectorAll('tr[data-file-id]').forEach((row) => {
         row.addEventListener('dragstart', (event) => {
-          state.draggingItem = {
-            id: row.dataset.fileId,
-            type: row.dataset.fileType,
-            name: row.dataset.fileName,
-          };
+          const selected = Array.from(state.selectedFileIds);
+          const rowID = row.dataset.fileId;
+          const wasSelected = state.selectedFileIds.has(rowID);
+          if (!wasSelected) {
+            state.selectedFileIds = new Set([rowID]);
+          }
+          state.draggingItems = wasSelected && selected.length > 1
+            ? selected
+            : [rowID];
+          renderSelectionBar(files);
+          syncSelectionCheckboxes();
           event.dataTransfer.effectAllowed = 'move';
+          event.dataTransfer.setData('application/x-televault-file-ids', JSON.stringify(state.draggingItems));
           event.dataTransfer.setData('application/x-televault-file-id', row.dataset.fileId);
           event.dataTransfer.setData('text/plain', row.dataset.fileId);
         });
         row.addEventListener('dragend', () => {
-          state.draggingItem = null;
+          state.draggingItems = [];
           el.filesBody.querySelectorAll('.drag-over').forEach((item) => item.classList.remove('drag-over'));
           el.breadcrumbs.querySelectorAll('.drag-over').forEach((item) => item.classList.remove('drag-over'));
           el.upBtn.classList.remove('drag-over');
         });
         if (row.dataset.fileType !== 'folder') return;
         row.addEventListener('dragover', (event) => {
-          if (state.draggingItem && state.draggingItem.id === row.dataset.fileId) return;
-          if (!state.draggingItem && !hasExternalFiles(event.dataTransfer)) return;
+          if (state.draggingItems.includes(row.dataset.fileId)) return;
+          if (!state.draggingItems.length && !hasExternalFiles(event.dataTransfer)) return;
           event.preventDefault();
-          event.dataTransfer.dropEffect = state.draggingItem ? 'move' : 'copy';
+          event.dataTransfer.dropEffect = state.draggingItems.length ? 'move' : 'copy';
           row.classList.add('drag-over');
         });
         row.addEventListener('dragleave', () => row.classList.remove('drag-over'));
@@ -901,9 +1007,10 @@
           event.preventDefault();
           event.stopPropagation();
           row.classList.remove('drag-over');
-          if (state.draggingItem) {
-            if (state.draggingItem.id === row.dataset.fileId) return;
-            await moveFile(state.draggingItem.id, row.dataset.fileId);
+          if (state.draggingItems.length) {
+            const ids = state.draggingItems.filter((id) => id !== row.dataset.fileId);
+            if (!ids.length) return;
+            await moveFiles(ids, row.dataset.fileId);
             return;
           }
           await uploadDroppedFilesToFolder(event.dataTransfer.files, row.dataset.fileId);
@@ -924,8 +1031,25 @@
 
     function renderFileName(file) {
       const name = escapeHTML(file.name || 'Untitled');
-      if (file.type !== 'folder') return name;
-      return `<button class="link folder-name" data-open-folder="${file.id}"><span class="folder-mark" aria-hidden="true"></span>${name}</button>`;
+      const select = `<label class="file-select"><input type="checkbox" data-select-file="${file.id}" ${state.selectedFileIds.has(file.id) ? 'checked' : ''}></label>`;
+      const label = file.type !== 'folder'
+        ? `<span class="file-label">${name}</span>`
+        : `<button class="link folder-name file-label" data-open-folder="${file.id}"><span class="folder-mark" aria-hidden="true"></span>${name}</button>`;
+      return `<span class="file-cell">${select}${label}</span>`;
+    }
+
+    function renderSelectionBar(files) {
+      const selectedCount = state.selectedFileIds.size;
+      const visibleCount = files.length;
+      const shouldShow = state.view === 'own' && selectedCount > 0;
+      el.selectionBar.classList.toggle('hidden', !shouldShow);
+      el.selectionSummary.textContent = selectedCount === 1
+        ? '1 item selected.'
+        : `${selectedCount} items selected.`;
+      el.deleteSelectedBtn.disabled = selectedCount === 0;
+      el.clearSelectionBtn.disabled = selectedCount === 0;
+      el.selectAllVisibleBtn.disabled = visibleCount === 0;
+      el.selectAllVisibleBtn.textContent = selectedCount === visibleCount && visibleCount > 0 ? 'Deselect all' : 'Select all';
     }
 
     function renderBreadcrumbs() {
@@ -946,19 +1070,19 @@
     function wireAncestorDropTargets() {
       el.breadcrumbs.querySelectorAll('[data-crumb-index]').forEach((button) => {
         button.addEventListener('dragover', (event) => {
-          if (!state.draggingItem || state.view !== 'own') return;
+          if (!state.draggingItems.length || state.view !== 'own') return;
           event.preventDefault();
           event.dataTransfer.dropEffect = 'move';
           button.classList.add('drag-over');
         });
         button.addEventListener('dragleave', () => button.classList.remove('drag-over'));
         button.addEventListener('drop', async (event) => {
-          if (!state.draggingItem || state.view !== 'own') return;
+          if (!state.draggingItems.length || state.view !== 'own') return;
           event.preventDefault();
           button.classList.remove('drag-over');
           const index = Number(button.dataset.crumbIndex);
           const targetID = index < 0 ? '' : (state.folderStack[index] ? state.folderStack[index].id : '');
-          await moveFile(state.draggingItem.id, targetID);
+          await moveFiles(state.draggingItems, targetID);
         });
       });
     }
@@ -1101,7 +1225,7 @@
           }),
         });
         el.folderNameInput.value = '';
-        await refreshFiles();
+        await applyRoute();
       } catch (err) {
         setUploadStatus(err.message, true);
       } finally {
@@ -1111,26 +1235,74 @@
 
     async function deleteFile(id) {
       if (!id || !window.confirm('Delete this item?')) return;
+      await deleteFiles([id], false);
+    }
+
+    async function deleteFiles(ids, confirmDelete = true) {
+      const normalized = Array.from(new Set((ids || []).map((id) => String(id).trim()).filter(Boolean)));
+      if (!normalized.length) return;
+      if (confirmDelete && !window.confirm(`Delete ${normalized.length} selected item${normalized.length === 1 ? '' : 's'}?`)) return;
       try {
-        await api(`/files/${id}`, { method: 'DELETE', csrf: true });
-        await refreshFiles();
+        if (normalized.length === 1) {
+          await api(`/files/${normalized[0]}`, { method: 'DELETE', csrf: true });
+        } else {
+          await api('/files/bulk-delete', {
+            method: 'POST',
+            csrf: true,
+            body: JSON.stringify({ ids: normalized }),
+          });
+        }
+        state.selectedFileIds.clear();
+        state.draggingItems = [];
+        await applyRoute();
       } catch (err) {
         setUploadStatus(err.message, true);
       }
     }
 
     async function moveFile(id, parentID) {
-      if (!id) return;
+      await moveFiles([id], parentID);
+    }
+
+    async function moveFiles(ids, parentID) {
+      const normalized = Array.from(new Set((ids || []).map((id) => String(id).trim()).filter(Boolean)));
+      if (!normalized.length) return;
+      try {
+        await api('/files/bulk-move', {
+          method: 'PATCH',
+          csrf: true,
+          body: JSON.stringify({
+            ids: normalized,
+            parent_id: parentID || '',
+          }),
+        });
+        setUploadStatus('Item moved.');
+        state.selectedFileIds.clear();
+        state.draggingItems = [];
+        await applyRoute();
+      } catch (err) {
+        setUploadStatus(err.message, true);
+      }
+    }
+
+    async function renameFile(id, name) {
+      const normalized = String(name || '').trim();
+      if (!id || !normalized) return;
       try {
         await api(`/files/${id}`, {
           method: 'PATCH',
           csrf: true,
-          body: JSON.stringify({ parent_id: parentID || '' }),
+          body: JSON.stringify({ name: normalized }),
         });
-        setUploadStatus('Item moved.');
-        await refreshFiles();
+        setDetailsStatus('Item renamed.');
+        if (state.detailsFile && state.detailsFile.id === id) {
+          state.detailsFile.name = normalized;
+        }
+        el.detailsFileName.textContent = normalized;
+        el.detailsFileNameInput.value = normalized;
+        await applyRoute();
       } catch (err) {
-        setUploadStatus(err.message, true);
+        setDetailsStatus(err.message, true);
       }
     }
 
@@ -1312,10 +1484,17 @@
         el.detailsBody.innerHTML = '';
         el.detailsFileName.textContent = '';
         el.detailsFileID.value = '';
+        el.detailsFileNameInput.value = '';
+        el.detailsFileNameInput.disabled = true;
+        el.saveDetailsFileNameBtn.disabled = true;
         return;
       }
       el.detailsFileName.textContent = file.name || 'Untitled';
       el.detailsFileID.value = file.id || '';
+      el.detailsFileNameInput.value = file.name || '';
+      const editable = Boolean(state.user && file.owner_id === state.user.id);
+      el.detailsFileNameInput.disabled = !editable;
+      el.saveDetailsFileNameBtn.disabled = !editable;
       const rows = [];
       const ownerLabel = state.user && file.owner_id === state.user.id ? 'You' : 'Shared owner';
       rows.push(['Type', file.type || '-']);
@@ -1753,6 +1932,37 @@
       el.detailsStatus.classList.toggle('error', error);
     }
 
+    function visibleFileIDs() {
+      return Array.from(el.filesBody.querySelectorAll('[data-select-file]'))
+        .map((input) => input.dataset.selectFile)
+        .filter(Boolean);
+    }
+
+    function clearSelection() {
+      state.selectedFileIds.clear();
+      renderSelectionBar(visibleFileIDs().map((id) => ({ id })));
+      syncSelectionCheckboxes();
+    }
+
+    function toggleVisibleSelection() {
+      const visibleIDs = visibleFileIDs();
+      if (!visibleIDs.length) return;
+      const visibleSelected = visibleIDs.every((id) => state.selectedFileIds.has(id));
+      if (visibleSelected) {
+        visibleIDs.forEach((id) => state.selectedFileIds.delete(id));
+      } else {
+        visibleIDs.forEach((id) => state.selectedFileIds.add(id));
+      }
+      syncSelectionCheckboxes();
+      renderSelectionBar(visibleIDs.map((id) => ({ id })));
+    }
+
+    function syncSelectionCheckboxes() {
+      el.filesBody.querySelectorAll('[data-select-file]').forEach((input) => {
+        input.checked = state.selectedFileIds.has(input.dataset.selectFile);
+      });
+    }
+
     el.startQrBtn.addEventListener('click', startQR);
     el.logoutBtn.addEventListener('click', logout);
     el.refreshBtn.addEventListener('click', refreshFiles);
@@ -1760,23 +1970,26 @@
     el.sharedFilesBtn.addEventListener('click', () => setView('shared'));
     el.upBtn.addEventListener('click', goUp);
     el.upBtn.addEventListener('dragover', (event) => {
-      if (!state.draggingItem || state.view !== 'own' || !state.currentFolderId) return;
+      if (!state.draggingItems.length || state.view !== 'own' || !state.currentFolderId) return;
       event.preventDefault();
       event.dataTransfer.dropEffect = 'move';
       el.upBtn.classList.add('drag-over');
     });
     el.upBtn.addEventListener('dragleave', () => el.upBtn.classList.remove('drag-over'));
     el.upBtn.addEventListener('drop', async (event) => {
-      if (!state.draggingItem || state.view !== 'own' || !state.currentFolderId) return;
+      if (!state.draggingItems.length || state.view !== 'own' || !state.currentFolderId) return;
       event.preventDefault();
       el.upBtn.classList.remove('drag-over');
       const parent = state.folderStack[state.folderStack.length - 2];
-      await moveFile(state.draggingItem.id, parent ? parent.id : '');
+      await moveFiles(state.draggingItems, parent ? parent.id : '');
     });
     el.createFolderBtn.addEventListener('click', createFolder);
     el.folderNameInput.addEventListener('keydown', (event) => {
       if (event.key === 'Enter') createFolder();
     });
+    el.selectAllVisibleBtn.addEventListener('click', toggleVisibleSelection);
+    el.deleteSelectedBtn.addEventListener('click', () => deleteFiles(Array.from(state.selectedFileIds)));
+    el.clearSelectionBtn.addEventListener('click', clearSelection);
     el.dropZone.addEventListener('click', () => el.fileInput.click());
     el.dropZone.addEventListener('keydown', (event) => {
       if (event.key === 'Enter' || event.key === ' ') el.fileInput.click();
@@ -1798,7 +2011,7 @@
       acceptDroppedFiles(event.dataTransfer.files);
     });
     el.filePanel.addEventListener('dragover', (event) => {
-      if (state.draggingItem || state.view !== 'own') return;
+      if (state.draggingItems.length || state.view !== 'own') return;
       if (!hasExternalFiles(event.dataTransfer)) return;
       event.preventDefault();
       el.filePanel.classList.add('dragging');
@@ -1807,7 +2020,7 @@
       if (!el.filePanel.contains(event.relatedTarget)) el.filePanel.classList.remove('dragging');
     });
     el.filePanel.addEventListener('drop', (event) => {
-      if (state.draggingItem || state.view !== 'own') return;
+      if (state.draggingItems.length || state.view !== 'own') return;
       if (!hasExternalFiles(event.dataTransfer)) return;
       event.preventDefault();
       el.filePanel.classList.remove('dragging');
@@ -1824,6 +2037,10 @@
     el.importRecoveryBtn.addEventListener('click', startRecoveryImport);
     el.recoveryFileInput.addEventListener('change', importRecoveryFile);
     el.closeDetailsBtn.addEventListener('click', closeDetailsDialog);
+    el.saveDetailsFileNameBtn.addEventListener('click', () => {
+      if (!state.detailsFile) return;
+      renameFile(state.detailsFile.id, el.detailsFileNameInput.value);
+    });
     el.copyDetailsFileIDBtn.addEventListener('click', async () => {
       if (!el.detailsFileID.value) return;
       try {
@@ -1844,6 +2061,12 @@
     });
     el.detailsModal.addEventListener('click', (event) => {
       if (event.target === el.detailsModal) closeDetailsDialog();
+    });
+    el.detailsFileNameInput.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        if (state.detailsFile) renameFile(state.detailsFile.id, el.detailsFileNameInput.value);
+      }
     });
     document.addEventListener('keydown', (event) => {
       if (event.key !== 'Escape') return;

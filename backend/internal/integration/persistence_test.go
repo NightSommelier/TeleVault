@@ -111,11 +111,65 @@ func TestFilesUploadsPersistenceOwnerIsolationAndCompletion(t *testing.T) {
 	if !movedFolder.ParentID.Valid || movedFolder.ParentID.String != targetFolder.ID {
 		t.Fatalf("Move(folder) parent = %+v, want %s", movedFolder.ParentID, targetFolder.ID)
 	}
+	renamedFolder, err := fileStore.Rename(ctx, owner.ID, folder.ID, "integration-folder-renamed")
+	if err != nil {
+		t.Fatalf("Rename(folder) error = %v", err)
+	}
+	if !renamedFolder.NamePlain.Valid || renamedFolder.NamePlain.String != "integration-folder-renamed" {
+		t.Fatalf("Rename(folder) name = %+v, want integration-folder-renamed", renamedFolder.NamePlain)
+	}
 	if _, err := fileStore.Move(ctx, other.ID, folder.ID, ""); !errors.Is(err, files.ErrNotFound) {
 		t.Fatalf("cross-owner move error = %v, want files.ErrNotFound", err)
 	}
 	if _, err := fileStore.Move(ctx, owner.ID, targetFolder.ID, folder.ID); !errors.Is(err, files.ErrInvalidMove) {
 		t.Fatalf("cycle move error = %v, want files.ErrInvalidMove", err)
+	}
+	bulkMoveOne, err := fileStore.CreateFolder(ctx, owner.ID, "", "integration-bulk-move-one")
+	if err != nil {
+		t.Fatalf("CreateFolder(bulk one) error = %v", err)
+	}
+	bulkMoveTwo, err := fileStore.CreateFolder(ctx, owner.ID, "", "integration-bulk-move-two")
+	if err != nil {
+		t.Fatalf("CreateFolder(bulk two) error = %v", err)
+	}
+	if err := fileStore.MoveMany(ctx, owner.ID, []string{bulkMoveOne.ID, bulkMoveTwo.ID}, targetFolder.ID); err != nil {
+		t.Fatalf("MoveMany() error = %v", err)
+	}
+	for _, bulkID := range []string{bulkMoveOne.ID, bulkMoveTwo.ID} {
+		moved, err := fileStore.GetByID(ctx, owner.ID, bulkID)
+		if err != nil {
+			t.Fatalf("GetByID(%s) after MoveMany() error = %v", bulkID, err)
+		}
+		if !moved.ParentID.Valid || moved.ParentID.String != targetFolder.ID {
+			t.Fatalf("MoveMany() parent for %s = %+v, want %s", bulkID, moved.ParentID, targetFolder.ID)
+		}
+	}
+	if err := fileStore.MoveMany(ctx, owner.ID, []string{bulkMoveOne.ID}, ""); err != nil {
+		t.Fatalf("MoveMany(root) error = %v", err)
+	}
+	rolledBack, err := fileStore.GetByID(ctx, owner.ID, bulkMoveOne.ID)
+	if err != nil {
+		t.Fatalf("GetByID(root move) error = %v", err)
+	}
+	if rolledBack.ParentID.Valid {
+		t.Fatalf("MoveMany(root) parent = %+v, want NULL", rolledBack.ParentID)
+	}
+	bulkDeleteOne, err := fileStore.CreateFolder(ctx, owner.ID, "", "integration-bulk-delete-one")
+	if err != nil {
+		t.Fatalf("CreateFolder(delete one) error = %v", err)
+	}
+	bulkDeleteTwo, err := fileStore.CreateFolder(ctx, owner.ID, "", "integration-bulk-delete-two")
+	if err != nil {
+		t.Fatalf("CreateFolder(delete two) error = %v", err)
+	}
+	if err := fileStore.SoftDeleteMany(ctx, owner.ID, []string{bulkDeleteOne.ID, bulkDeleteTwo.ID}, time.Now()); err != nil {
+		t.Fatalf("SoftDeleteMany() error = %v", err)
+	}
+	if _, err := fileStore.GetByID(ctx, owner.ID, bulkDeleteOne.ID); !errors.Is(err, files.ErrNotFound) {
+		t.Fatalf("bulk delete one get error = %v, want files.ErrNotFound", err)
+	}
+	if _, err := fileStore.GetByID(ctx, owner.ID, bulkDeleteTwo.ID); !errors.Is(err, files.ErrNotFound) {
+		t.Fatalf("bulk delete two get error = %v, want files.ErrNotFound", err)
 	}
 
 	upload, err := uploadStore.Create(ctx, uploads.CreateUploadParams{

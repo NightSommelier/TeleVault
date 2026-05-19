@@ -84,6 +84,8 @@ func (s *Server) routes() {
 	s.mux.Handle("GET /files/{id}", authHandler.RequireAuth(http.HandlerFunc(filesHandler.Get)))
 	s.mux.Handle("PATCH /files/{id}", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(filesHandler.Patch))))
 	s.mux.Handle("DELETE /files/{id}", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(filesHandler.Delete))))
+	s.mux.Handle("PATCH /files/bulk-move", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(filesHandler.BulkMove))))
+	s.mux.Handle("POST /files/bulk-delete", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(filesHandler.BulkDelete))))
 	s.mux.Handle("GET /files/{id}/download", authHandler.RequireAuth(http.HandlerFunc(filesHandler.Download)))
 	s.mux.Handle("GET /files/{id}/shares", authHandler.RequireAuth(http.HandlerFunc(filesHandler.ListShares)))
 	s.mux.Handle("POST /files/{id}/shares", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(filesHandler.CreateShare))))

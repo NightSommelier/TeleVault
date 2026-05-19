@@ -260,13 +260,30 @@ func (h *Handler) Patch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	file, err := h.store.Move(r.Context(), user.ID, id, strings.TrimSpace(request.ParentID))
+	update := metadataUpdate{}
+	if request.ParentID != nil {
+		update.SetParent = true
+		update.ParentID = strings.TrimSpace(*request.ParentID)
+	}
+	if request.Name != nil {
+		update.SetName = true
+		update.Name = strings.TrimSpace(*request.Name)
+	}
+	if !update.SetParent && !update.SetName {
+		writeError(w, http.StatusBadRequest, "file_update_required")
+		return
+	}
+	file, err := h.store.updateMetadata(r.Context(), user.ID, []string{id}, update)
 	if errors.Is(err, ErrNotFound) {
 		writeError(w, http.StatusNotFound, "file_not_found")
 		return
 	}
 	if errors.Is(err, ErrInvalidMove) {
 		writeError(w, http.StatusBadRequest, "invalid_file_move")
+		return
+	}
+	if errors.Is(err, ErrInvalidName) {
+		writeError(w, http.StatusBadRequest, "invalid_file_name")
 		return
 	}
 	if err != nil {
@@ -277,6 +294,73 @@ func (h *Handler) Patch(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"file": fileResponse(file),
 	})
+}
+
+func (h *Handler) BulkMove(w http.ResponseWriter, r *http.Request) {
+	user, ok := auth.UserFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "missing_authenticated_user")
+		return
+	}
+
+	var request bulkFilesRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_json")
+		return
+	}
+
+	ids := normalizeFileIDs(request.IDs)
+	if len(ids) == 0 {
+		writeError(w, http.StatusBadRequest, "file_ids_required")
+		return
+	}
+
+	parentID := ""
+	if request.ParentID != nil {
+		parentID = strings.TrimSpace(*request.ParentID)
+	}
+	if err := h.store.MoveMany(r.Context(), user.ID, ids, parentID); errors.Is(err, ErrNotFound) {
+		writeError(w, http.StatusNotFound, "file_not_found")
+		return
+	} else if errors.Is(err, ErrInvalidMove) {
+		writeError(w, http.StatusBadRequest, "invalid_file_move")
+		return
+	} else if err != nil {
+		writeError(w, http.StatusInternalServerError, "file_move_failed")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) BulkDelete(w http.ResponseWriter, r *http.Request) {
+	user, ok := auth.UserFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "missing_authenticated_user")
+		return
+	}
+
+	var request bulkFilesRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_json")
+		return
+	}
+
+	ids := normalizeFileIDs(request.IDs)
+	if len(ids) == 0 {
+		writeError(w, http.StatusBadRequest, "file_ids_required")
+		return
+	}
+
+	if err := h.store.SoftDeleteMany(r.Context(), user.ID, ids, time.Now().UTC()); errors.Is(err, ErrNotFound) {
+		writeError(w, http.StatusNotFound, "file_not_found")
+		return
+	} else if err != nil {
+		writeError(w, http.StatusInternalServerError, "file_delete_failed")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *Handler) ListShares(w http.ResponseWriter, r *http.Request) {
@@ -633,7 +717,13 @@ type createFolderRequest struct {
 }
 
 type patchFileRequest struct {
-	ParentID string `json:"parent_id"`
+	ParentID *string `json:"parent_id"`
+	Name     *string `json:"name"`
+}
+
+type bulkFilesRequest struct {
+	IDs      []string `json:"ids"`
+	ParentID *string  `json:"parent_id"`
 }
 
 type createShareRequest struct {
@@ -648,6 +738,23 @@ type createPublicLinkRequest struct {
 
 func normalizeName(name string) string {
 	return strings.TrimSpace(strings.ReplaceAll(name, "/", ""))
+}
+
+func normalizeFileIDs(ids []string) []string {
+	seen := make(map[string]struct{}, len(ids))
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
 }
 
 func filesResponse(files []File) []map[string]any {
