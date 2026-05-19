@@ -1,0 +1,42 @@
+# git
+.git
+.gitignore
+
+# env
+.env
+.env.*
+config.env
+
+# docker
+docker-compose.yml
+
+# docs
+docs/
+
+# secrets
+t2d-age.*
+*.pem
+*.key
+*.p12
+
+# build/cache
+tmp/
+dist/
+build/
+bin/
+
+# logs
+*.log
+
+# editors
+.idea/
+.vscode/
+
+# os
+.DS_Store
+
+# tests
+test.png
+
+# local notes
+TeleVault-plan.md
