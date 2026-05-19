@@ -100,6 +100,23 @@ func TestFilesUploadsPersistenceOwnerIsolationAndCompletion(t *testing.T) {
 	if _, err := fileStore.GetByID(ctx, other.ID, folder.ID); !errors.Is(err, files.ErrNotFound) {
 		t.Fatalf("cross-owner folder read error = %v, want files.ErrNotFound", err)
 	}
+	targetFolder, err := fileStore.CreateFolder(ctx, owner.ID, "", "integration-target-folder")
+	if err != nil {
+		t.Fatalf("CreateFolder(target) error = %v", err)
+	}
+	movedFolder, err := fileStore.Move(ctx, owner.ID, folder.ID, targetFolder.ID)
+	if err != nil {
+		t.Fatalf("Move(folder) error = %v", err)
+	}
+	if !movedFolder.ParentID.Valid || movedFolder.ParentID.String != targetFolder.ID {
+		t.Fatalf("Move(folder) parent = %+v, want %s", movedFolder.ParentID, targetFolder.ID)
+	}
+	if _, err := fileStore.Move(ctx, other.ID, folder.ID, ""); !errors.Is(err, files.ErrNotFound) {
+		t.Fatalf("cross-owner move error = %v, want files.ErrNotFound", err)
+	}
+	if _, err := fileStore.Move(ctx, owner.ID, targetFolder.ID, folder.ID); !errors.Is(err, files.ErrInvalidMove) {
+		t.Fatalf("cycle move error = %v, want files.ErrInvalidMove", err)
+	}
 
 	upload, err := uploadStore.Create(ctx, uploads.CreateUploadParams{
 		OwnerID:       owner.ID,
@@ -702,13 +719,13 @@ func ensureLatestMigration(t *testing.T, database *sql.DB) {
 SELECT EXISTS (
     SELECT 1
     FROM schema_migrations
-			WHERE version = '000015'
+			WHERE version = '000016'
 )`).Scan(&exists)
 	if err != nil {
 		t.Fatalf("schema migration check failed: %v", err)
 	}
 	if !exists {
-		t.Fatalf("TEST_DATABASE_URL database is not migrated through 000015; run go run ./cmd/migrate up first")
+		t.Fatalf("TEST_DATABASE_URL database is not migrated through 000016; run go run ./cmd/migrate up first")
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 var (
 	ErrNotFound         = errors.New("file not found")
 	ErrPasswordRequired = errors.New("public link password required")
+	ErrInvalidMove      = errors.New("invalid file move")
 )
 
 const (
@@ -242,6 +243,71 @@ SELECT COUNT(*) FROM updated`,
 	}
 
 	return nil
+}
+
+func (s *Store) Move(ctx context.Context, ownerID string, id string, parentID string) (File, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return File{}, err
+	}
+	defer tx.Rollback()
+
+	file, err := scanFile(tx.QueryRowContext(ctx, `
+SELECT id, owner_id, parent_id, name_plain, mime_type, plaintext_size, ciphertext_size, type, status, created_at, updated_at
+FROM files
+WHERE owner_id = $1
+  AND id = $2
+  AND deleted_at IS NULL
+FOR UPDATE`,
+		ownerID,
+		id,
+	))
+	if errors.Is(err, sql.ErrNoRows) {
+		return File{}, ErrNotFound
+	}
+	if err != nil {
+		return File{}, err
+	}
+
+	if parentID != "" {
+		if parentID == id {
+			return File{}, ErrInvalidMove
+		}
+		if err := ensureParentFolderTx(ctx, tx, ownerID, parentID); err != nil {
+			return File{}, err
+		}
+		if file.Type == TypeFolder {
+			descendant, err := isDescendantFolder(ctx, tx, ownerID, id, parentID)
+			if err != nil {
+				return File{}, err
+			}
+			if descendant {
+				return File{}, ErrInvalidMove
+			}
+		}
+	}
+
+	moved, err := scanFile(tx.QueryRowContext(ctx, `
+UPDATE files
+SET parent_id = NULLIF($3, '')::uuid,
+    updated_at = now()
+WHERE owner_id = $1
+  AND id = $2
+  AND deleted_at IS NULL
+RETURNING id, owner_id, parent_id, name_plain, mime_type, plaintext_size, ciphertext_size, type, status, created_at, updated_at`,
+		ownerID,
+		id,
+		parentID,
+	))
+	if err != nil {
+		return File{}, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return File{}, err
+	}
+
+	return moved, nil
 }
 
 func (s *Store) DownloadData(ctx context.Context, requesterID string, id string) (File, []FilePart, TelegramSession, error) {
@@ -671,8 +737,16 @@ RETURNING id, owner_id, parent_id, name_plain, mime_type, plaintext_size, cipher
 }
 
 func (s *Store) ensureParentFolder(ctx context.Context, ownerID string, parentID string) error {
+	return ensureParentFolderTx(ctx, s.db, ownerID, parentID)
+}
+
+type queryer interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+func ensureParentFolderTx(ctx context.Context, q queryer, ownerID string, parentID string) error {
 	var exists bool
-	err := s.db.QueryRowContext(ctx, `
+	err := q.QueryRowContext(ctx, `
 SELECT EXISTS (
     SELECT 1
     FROM files
@@ -692,6 +766,30 @@ SELECT EXISTS (
 	}
 
 	return nil
+}
+
+func isDescendantFolder(ctx context.Context, tx *sql.Tx, ownerID string, rootID string, candidateID string) (bool, error) {
+	var descendant bool
+	err := tx.QueryRowContext(ctx, `
+WITH RECURSIVE descendants AS (
+    SELECT id
+    FROM files
+    WHERE owner_id = $1
+      AND parent_id = $2
+      AND deleted_at IS NULL
+    UNION ALL
+    SELECT child.id
+    FROM files child
+    JOIN descendants parent ON child.parent_id = parent.id
+    WHERE child.owner_id = $1
+      AND child.deleted_at IS NULL
+)
+SELECT EXISTS (SELECT 1 FROM descendants WHERE id = $3)`,
+		ownerID,
+		rootID,
+		candidateID,
+	).Scan(&descendant)
+	return descendant, err
 }
 
 type rowScanner interface {

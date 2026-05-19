@@ -229,6 +229,14 @@
       background: var(--soft);
       color: var(--primary);
     }
+    .file-drop-target.dragging {
+      outline: 2px dashed var(--primary);
+      outline-offset: -8px;
+      background: var(--soft);
+    }
+    tr.drag-over td {
+      background: var(--soft);
+    }
     .table {
       width: 100%;
       border-collapse: collapse;
@@ -380,7 +388,7 @@
               </div>
             </div>
             <div id="dropZone" class="dropzone" tabindex="0">Drop file here or click to choose</div>
-            <input id="fileInput" class="hidden-input" type="file">
+            <input id="fileInput" class="hidden-input" type="file" multiple>
             <button id="uploadBtn" class="primary">Upload</button>
             <div id="uploadStatus" class="status"></div>
             <progress id="uploadProgress" value="0" max="100"></progress>
@@ -417,7 +425,7 @@
               <button id="refreshBtn">Refresh</button>
             </div>
           </div>
-          <div class="panel-body">
+          <div id="filePanel" class="panel-body file-drop-target">
             <table class="table">
               <thead>
                 <tr>
@@ -531,7 +539,8 @@
       currentFolderId: '',
       folderStack: [],
       view: 'own',
-      droppedFile: null,
+      droppedFiles: [],
+      draggingItem: null,
       shareFile: null,
       applyingRoute: false,
     };
@@ -551,6 +560,7 @@
       upBtn: document.getElementById('upBtn'),
       breadcrumbs: document.getElementById('breadcrumbs'),
       filesBody: document.getElementById('filesBody'),
+      filePanel: document.getElementById('filePanel'),
       folderNameInput: document.getElementById('folderNameInput'),
       createFolderBtn: document.getElementById('createFolderBtn'),
       dropZone: document.getElementById('dropZone'),
@@ -623,7 +633,8 @@
       state.currentFolderId = '';
       state.folderStack = [];
       state.view = 'own';
-      state.droppedFile = null;
+      state.droppedFiles = [];
+      state.draggingItem = null;
       state.shareFile = null;
       el.loginView.classList.remove('hidden');
       el.appView.classList.add('hidden');
@@ -712,7 +723,7 @@
         return;
       }
       el.filesBody.innerHTML = files.map((file) => `
-        <tr>
+        <tr draggable="${state.view === 'own' ? 'true' : 'false'}" data-file-id="${file.id}" data-file-type="${file.type}" data-file-name="${escapeHTML(file.name || 'Untitled')}">
           <td>${renderFileName(file)}</td>
           <td><span class="badge ${file.status === 'ready' ? 'ok' : 'warn'}">${escapeHTML(file.status)}</span></td>
           <td>${file.type === 'folder' ? '-' : formatBytes(file.plaintext_size || 0)}</td>
@@ -737,6 +748,46 @@
         button.addEventListener('click', () => {
           const file = files.find((item) => item.id === button.dataset.share);
           openShareDialog(file);
+        });
+      });
+      if (state.view === 'own') wireFileRowDragHandlers();
+    }
+
+    function wireFileRowDragHandlers() {
+      el.filesBody.querySelectorAll('tr[data-file-id]').forEach((row) => {
+        row.addEventListener('dragstart', (event) => {
+          state.draggingItem = {
+            id: row.dataset.fileId,
+            type: row.dataset.fileType,
+            name: row.dataset.fileName,
+          };
+          event.dataTransfer.effectAllowed = 'move';
+          event.dataTransfer.setData('application/x-televault-file-id', row.dataset.fileId);
+          event.dataTransfer.setData('text/plain', row.dataset.fileId);
+        });
+        row.addEventListener('dragend', () => {
+          state.draggingItem = null;
+          el.filesBody.querySelectorAll('.drag-over').forEach((item) => item.classList.remove('drag-over'));
+        });
+        if (row.dataset.fileType !== 'folder') return;
+        row.addEventListener('dragover', (event) => {
+          if (state.draggingItem && state.draggingItem.id === row.dataset.fileId) return;
+          if (!state.draggingItem && !hasExternalFiles(event.dataTransfer)) return;
+          event.preventDefault();
+          event.dataTransfer.dropEffect = state.draggingItem ? 'move' : 'copy';
+          row.classList.add('drag-over');
+        });
+        row.addEventListener('dragleave', () => row.classList.remove('drag-over'));
+        row.addEventListener('drop', async (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          row.classList.remove('drag-over');
+          if (state.draggingItem) {
+            if (state.draggingItem.id === row.dataset.fileId) return;
+            await moveFile(state.draggingItem.id, row.dataset.fileId);
+            return;
+          }
+          await uploadDroppedFilesToFolder(event.dataTransfer.files, row.dataset.fileId);
         });
       });
     }
@@ -811,7 +862,7 @@
 
     function setView(view) {
       state.view = view;
-      state.droppedFile = null;
+      state.droppedFiles = [];
       setHashRoute(view === 'shared' ? '#/shared' : (state.currentFolderId ? folderRoute(state.currentFolderId) : '#/'));
     }
 
@@ -834,14 +885,14 @@
         const route = parseHashRoute();
         if (route.view === 'shared') {
           state.view = 'shared';
-          state.droppedFile = null;
+          state.droppedFiles = [];
           renderBreadcrumbs();
           await refreshFiles();
           return;
         }
 
         state.view = 'own';
-        state.droppedFile = null;
+        state.droppedFiles = [];
         if (!route.folderId) {
           state.currentFolderId = '';
           state.folderStack = [];
@@ -922,6 +973,21 @@
       if (!id || !window.confirm('Delete this item?')) return;
       try {
         await api(`/files/${id}`, { method: 'DELETE', csrf: true });
+        await refreshFiles();
+      } catch (err) {
+        setUploadStatus(err.message, true);
+      }
+    }
+
+    async function moveFile(id, parentID) {
+      if (!id || !parentID) return;
+      try {
+        await api(`/files/${id}`, {
+          method: 'PATCH',
+          csrf: true,
+          body: JSON.stringify({ parent_id: parentID }),
+        });
+        setUploadStatus('Item moved.');
         await refreshFiles();
       } catch (err) {
         setUploadStatus(err.message, true);
@@ -1111,35 +1177,18 @@
     }
 
     async function uploadSelected() {
-      const file = state.droppedFile || el.fileInput.files[0];
-      if (!file) return;
+      const files = selectedUploadFiles();
+      if (!files.length) return;
       if (state.view !== 'own') {
         setUploadStatus('Switch to Own files to upload.', true);
         return;
       }
       el.uploadBtn.disabled = true;
       el.uploadProgress.value = 0;
-      setUploadStatus('Hashing file...');
       try {
-        const checksum = await sha256Hex(file);
-        const created = await api('/uploads', {
-          method: 'POST',
-          csrf: true,
-          body: JSON.stringify({
-            name: file.name,
-            parent_id: state.currentFolderId || undefined,
-            mime_type: file.type || 'application/octet-stream',
-            plaintext_size: file.size,
-            checksum,
-          }),
-        });
-        await uploadParts(created.upload, file);
-        await waitUntilReady(created.upload.id);
-        await api(`/uploads/${created.upload.id}/complete`, { method: 'POST', csrf: true });
-        setUploadStatus('Upload complete.');
-        el.uploadProgress.value = 100;
+        await uploadFiles(files, state.currentFolderId || '');
         el.fileInput.value = '';
-        state.droppedFile = null;
+        state.droppedFiles = [];
         updateDropZone();
         await refreshFiles();
       } catch (err) {
@@ -1149,9 +1198,63 @@
       }
     }
 
+    function selectedUploadFiles() {
+      return state.droppedFiles.length ? state.droppedFiles : Array.from(el.fileInput.files || []);
+    }
+
+    async function uploadDroppedFilesToFolder(fileList, parentID) {
+      const files = Array.from(fileList || []).filter((file) => file && file.size >= 0);
+      if (!files.length) return;
+      el.uploadBtn.disabled = true;
+      el.uploadProgress.value = 0;
+      try {
+        await uploadFiles(files, parentID);
+        await refreshFiles();
+      } catch (err) {
+        setUploadStatus(err.message, true);
+      } finally {
+        el.uploadBtn.disabled = false;
+      }
+    }
+
+    async function uploadFiles(files, parentID) {
+      for (let index = 0; index < files.length; index += 1) {
+        await uploadOneFile(files[index], index + 1, files.length, parentID);
+      }
+      setUploadStatus(files.length === 1 ? 'Upload complete.' : `Uploaded ${files.length} files.`);
+    }
+
+    async function uploadOneFile(file, index, total, parentID) {
+      const prefix = total > 1 ? `${index}/${total}: ` : '';
+      el.uploadProgress.value = 0;
+      setUploadStatus(`${prefix}Hashing ${file.name}...`);
+      const checksum = await sha256Hex(file);
+      const created = await api('/uploads', {
+        method: 'POST',
+        csrf: true,
+        body: JSON.stringify({
+          name: file.name,
+          parent_id: parentID || undefined,
+          mime_type: file.type || 'application/octet-stream',
+          plaintext_size: file.size,
+          checksum,
+        }),
+      });
+      await uploadParts(created.upload, file, prefix);
+      await waitUntilReady(created.upload.id, prefix);
+      await api(`/uploads/${created.upload.id}/complete`, { method: 'POST', csrf: true });
+      el.uploadProgress.value = 100;
+    }
+
     function updateDropZone() {
-      const file = state.droppedFile || el.fileInput.files[0];
-      el.dropZone.textContent = file ? file.name : 'Drop file here or click to choose';
+      const files = selectedUploadFiles();
+      if (!files.length) {
+        el.dropZone.textContent = 'Drop files here or click to choose';
+      } else if (files.length === 1) {
+        el.dropZone.textContent = files[0].name;
+      } else {
+        el.dropZone.textContent = `${files.length} files selected`;
+      }
     }
 
     function saveFolderState() {
@@ -1174,13 +1277,13 @@
       }
     }
 
-    async function uploadParts(upload, file) {
+    async function uploadParts(upload, file, prefix = '') {
       const partSize = upload.part_size;
       const count = upload.part_count;
       for (let part = 1; part <= count; part++) {
         const start = (part - 1) * partSize;
         const end = Math.min(start + partSize, file.size);
-        setUploadStatus(`Staging part ${part} of ${count}...`);
+        setUploadStatus(`${prefix}Staging part ${part} of ${count}...`);
         const response = await fetch(`/uploads/${upload.id}/parts/${part}`, {
           method: 'POST',
           credentials: 'same-origin',
@@ -1202,7 +1305,7 @@
       }
     }
 
-    async function waitUntilReady(uploadID) {
+    async function waitUntilReady(uploadID, prefix = '') {
       clearInterval(state.uploadTimer);
       while (true) {
         const data = await api(`/uploads/${uploadID}`);
@@ -1213,7 +1316,7 @@
         const leased = progress.leased_parts;
         if (progress.failed_parts > 0) throw new Error('upload_part_failed');
         if (progress.ready_to_complete) return;
-        setUploadStatus(`Telegram drain: ${done}/${total} complete, ${leased} active, ${queued} queued`);
+        setUploadStatus(`${prefix}Telegram drain: ${done}/${total} complete, ${leased} active, ${queued} queued`);
         el.uploadProgress.value = 50 + Math.round((done / Math.max(total, 1)) * 45);
         await delay(2000);
       }
@@ -1313,6 +1416,10 @@
       return new Promise((resolve) => setTimeout(resolve, ms));
     }
 
+    function hasExternalFiles(dataTransfer) {
+      return dataTransfer && Array.from(dataTransfer.types || []).includes('Files');
+    }
+
     el.startQrBtn.addEventListener('click', startQR);
     el.logoutBtn.addEventListener('click', logout);
     el.refreshBtn.addEventListener('click', refreshFiles);
@@ -1328,7 +1435,7 @@
       if (event.key === 'Enter' || event.key === ' ') el.fileInput.click();
     });
     el.fileInput.addEventListener('change', () => {
-      state.droppedFile = null;
+      state.droppedFiles = [];
       updateDropZone();
     });
     el.dropZone.addEventListener('dragover', (event) => {
@@ -1341,10 +1448,29 @@
     el.dropZone.addEventListener('drop', (event) => {
       event.preventDefault();
       el.dropZone.classList.remove('dragging');
-      state.droppedFile = event.dataTransfer.files[0] || null;
+      acceptDroppedFiles(event.dataTransfer.files);
+    });
+    el.filePanel.addEventListener('dragover', (event) => {
+      if (state.draggingItem || state.view !== 'own') return;
+      if (!hasExternalFiles(event.dataTransfer)) return;
+      event.preventDefault();
+      el.filePanel.classList.add('dragging');
+    });
+    el.filePanel.addEventListener('dragleave', (event) => {
+      if (!el.filePanel.contains(event.relatedTarget)) el.filePanel.classList.remove('dragging');
+    });
+    el.filePanel.addEventListener('drop', (event) => {
+      if (state.draggingItem || state.view !== 'own') return;
+      if (!hasExternalFiles(event.dataTransfer)) return;
+      event.preventDefault();
+      el.filePanel.classList.remove('dragging');
+      acceptDroppedFiles(event.dataTransfer.files);
+    });
+    function acceptDroppedFiles(fileList) {
+      state.droppedFiles = Array.from(fileList || []).filter((file) => file && file.size >= 0);
       el.fileInput.value = '';
       updateDropZone();
-    });
+    }
     el.uploadBtn.addEventListener('click', uploadSelected);
     el.exportRecoveryBtn.addEventListener('click', exportRecovery);
     el.importRecoveryBtn.addEventListener('click', startRecoveryImport);

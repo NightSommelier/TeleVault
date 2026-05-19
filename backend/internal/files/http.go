@@ -214,6 +214,44 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (h *Handler) Patch(w http.ResponseWriter, r *http.Request) {
+	user, ok := auth.UserFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "missing_authenticated_user")
+		return
+	}
+
+	id := strings.TrimSpace(r.PathValue("id"))
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "file_id_required")
+		return
+	}
+
+	var request patchFileRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_json")
+		return
+	}
+
+	file, err := h.store.Move(r.Context(), user.ID, id, strings.TrimSpace(request.ParentID))
+	if errors.Is(err, ErrNotFound) {
+		writeError(w, http.StatusNotFound, "file_not_found")
+		return
+	}
+	if errors.Is(err, ErrInvalidMove) {
+		writeError(w, http.StatusBadRequest, "invalid_file_move")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "file_patch_failed")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"file": fileResponse(file),
+	})
+}
+
 func (h *Handler) ListShares(w http.ResponseWriter, r *http.Request) {
 	user, ok := auth.UserFromContext(r.Context())
 	if !ok {
@@ -557,6 +595,10 @@ func (h *Handler) streamDownload(w http.ResponseWriter, r *http.Request, file Fi
 
 type createFolderRequest struct {
 	Name     string `json:"name"`
+	ParentID string `json:"parent_id"`
+}
+
+type patchFileRequest struct {
 	ParentID string `json:"parent_id"`
 }
 
