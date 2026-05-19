@@ -17,7 +17,7 @@ import (
 	"github.com/gotd/td/telegram/uploader"
 	"github.com/gotd/td/tg"
 
-	"gitrepo.pp.ua/Sommelier/TeleDriveVault/backend/internal/auth"
+	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/auth"
 )
 
 type Client struct {

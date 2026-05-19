@@ -18,8 +18,8 @@ import (
 	"filippo.io/age"
 	"golang.org/x/crypto/argon2"
 
-	"gitrepo.pp.ua/Sommelier/TeleDriveVault/backend/internal/auth"
-	"gitrepo.pp.ua/Sommelier/TeleDriveVault/backend/internal/crypto/agefile"
+	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/auth"
+	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/crypto/agefile"
 )
 
 const (

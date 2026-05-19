@@ -17,12 +17,12 @@ import (
 	"strings"
 	"time"
 
-	"gitrepo.pp.ua/Sommelier/TeleDriveVault/backend/internal/auth"
-	appconfig "gitrepo.pp.ua/Sommelier/TeleDriveVault/backend/internal/config"
-	"gitrepo.pp.ua/Sommelier/TeleDriveVault/backend/internal/crypto/secrets"
-	"gitrepo.pp.ua/Sommelier/TeleDriveVault/backend/internal/db"
-	"gitrepo.pp.ua/Sommelier/TeleDriveVault/backend/internal/telegramauth"
-	"gitrepo.pp.ua/Sommelier/TeleDriveVault/backend/internal/uploads"
+	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/auth"
+	appconfig "gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/config"
+	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/crypto/secrets"
+	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/db"
+	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/telegramauth"
+	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/uploads"
 )
 
 const smokeWorkerID = "smoke-worker"

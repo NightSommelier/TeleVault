@@ -12,13 +12,13 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"gitrepo.pp.ua/Sommelier/TeleDriveVault/backend/internal/adminusers"
-	"gitrepo.pp.ua/Sommelier/TeleDriveVault/backend/internal/auth"
-	"gitrepo.pp.ua/Sommelier/TeleDriveVault/backend/internal/config"
-	"gitrepo.pp.ua/Sommelier/TeleDriveVault/backend/internal/crypto/secrets"
-	"gitrepo.pp.ua/Sommelier/TeleDriveVault/backend/internal/db"
-	"gitrepo.pp.ua/Sommelier/TeleDriveVault/backend/internal/telegramauth"
-	"gitrepo.pp.ua/Sommelier/TeleDriveVault/backend/internal/telegramprobe"
+	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/adminusers"
+	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/auth"
+	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/config"
+	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/crypto/secrets"
+	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/db"
+	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/telegramauth"
+	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/telegramprobe"
 )
 
 func main() {

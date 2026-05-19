@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"gitrepo.pp.ua/Sommelier/TeleDriveVault/backend/internal/config"
+	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/config"
 	"rsc.io/qr"
 )
 

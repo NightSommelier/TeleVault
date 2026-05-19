@@ -5,7 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"gitrepo.pp.ua/Sommelier/TeleDriveVault/backend/internal/config"
+	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/config"
 )
 
 func TestSetCSRFCookieIsReadableByClient(t *testing.T) {

@@ -10,15 +10,15 @@ import (
 	"net/http"
 
 	"filippo.io/age"
-	"gitrepo.pp.ua/Sommelier/TeleDriveVault/backend/internal/adminsettings"
-	"gitrepo.pp.ua/Sommelier/TeleDriveVault/backend/internal/auth"
-	"gitrepo.pp.ua/Sommelier/TeleDriveVault/backend/internal/config"
-	"gitrepo.pp.ua/Sommelier/TeleDriveVault/backend/internal/crypto/secrets"
-	"gitrepo.pp.ua/Sommelier/TeleDriveVault/backend/internal/db"
-	"gitrepo.pp.ua/Sommelier/TeleDriveVault/backend/internal/files"
-	"gitrepo.pp.ua/Sommelier/TeleDriveVault/backend/internal/recovery"
-	"gitrepo.pp.ua/Sommelier/TeleDriveVault/backend/internal/uploads"
-	"gitrepo.pp.ua/Sommelier/TeleDriveVault/backend/internal/valkey"
+	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/adminsettings"
+	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/auth"
+	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/config"
+	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/crypto/secrets"
+	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/db"
+	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/files"
+	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/recovery"
+	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/uploads"
+	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/valkey"
 )
 
 //go:embed static/*

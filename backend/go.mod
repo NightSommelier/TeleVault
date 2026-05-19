@@ -1,4 +1,4 @@
-module gitrepo.pp.ua/Sommelier/TeleDriveVault/backend
+module gitrepo.pp.ua/Sommelier/TeleVault/backend
 
 go 1.26.2
 

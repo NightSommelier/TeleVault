@@ -298,6 +298,41 @@
       gap: 10px;
       align-items: center;
     }
+    .queue-list {
+      display: grid;
+      gap: 8px;
+      max-height: 280px;
+      overflow: auto;
+    }
+    .queue-item {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 8px;
+      background: #fbfcfe;
+      display: grid;
+      gap: 6px;
+    }
+    .queue-head {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .queue-name {
+      font-weight: 600;
+      overflow-wrap: anywhere;
+    }
+    .queue-meta {
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .queue-status {
+      font-size: 12px;
+    }
+    .queue-empty {
+      color: var(--muted);
+      font-size: 13px;
+    }
     .login-view {
       display: grid;
       place-items: center;
@@ -389,9 +424,18 @@
             </div>
             <div id="dropZone" class="dropzone" tabindex="0">Drop file here or click to choose</div>
             <input id="fileInput" class="hidden-input" type="file" multiple>
-            <button id="uploadBtn" class="primary">Upload</button>
+            <button id="uploadBtn" class="primary">Add to queue</button>
             <div id="uploadStatus" class="status"></div>
-            <progress id="uploadProgress" value="0" max="100"></progress>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-head">
+            <div class="panel-title">Upload queue</div>
+          </div>
+          <div class="panel-body stack">
+            <div id="uploadQueue" class="queue-list">
+              <div class="queue-empty">Queue is empty.</div>
+            </div>
           </div>
         </div>
         <div class="panel">
@@ -543,6 +587,9 @@
       draggingItem: null,
       shareFile: null,
       applyingRoute: false,
+      uploadQueue: [],
+      uploadQueueRunning: false,
+      nextUploadQueueID: 1,
     };
 
     const el = {
@@ -567,7 +614,7 @@
       fileInput: document.getElementById('fileInput'),
       uploadBtn: document.getElementById('uploadBtn'),
       uploadStatus: document.getElementById('uploadStatus'),
-      uploadProgress: document.getElementById('uploadProgress'),
+      uploadQueue: document.getElementById('uploadQueue'),
       shareModal: document.getElementById('shareModal'),
       closeShareBtn: document.getElementById('closeShareBtn'),
       shareFileName: document.getElementById('shareFileName'),
@@ -636,6 +683,10 @@
       state.droppedFiles = [];
       state.draggingItem = null;
       state.shareFile = null;
+      state.uploadQueue = [];
+      state.uploadQueueRunning = false;
+      state.nextUploadQueueID = 1;
+      renderUploadQueue();
       el.loginView.classList.remove('hidden');
       el.appView.classList.add('hidden');
       el.userbar.classList.add('hidden');
@@ -1183,19 +1234,12 @@
         setUploadStatus('Switch to Own files to upload.', true);
         return;
       }
-      el.uploadBtn.disabled = true;
-      el.uploadProgress.value = 0;
-      try {
-        await uploadFiles(files, state.currentFolderId || '');
-        el.fileInput.value = '';
-        state.droppedFiles = [];
-        updateDropZone();
-        await refreshFiles();
-      } catch (err) {
-        setUploadStatus(err.message, true);
-      } finally {
-        el.uploadBtn.disabled = false;
-      }
+      enqueueFiles(files, state.currentFolderId || '');
+      el.fileInput.value = '';
+      state.droppedFiles = [];
+      updateDropZone();
+      setUploadStatus(`Queued ${files.length} file${files.length === 1 ? '' : 's'}.`);
+      runUploadQueue();
     }
 
     function selectedUploadFiles() {
@@ -1205,45 +1249,79 @@
     async function uploadDroppedFilesToFolder(fileList, parentID) {
       const files = Array.from(fileList || []).filter((file) => file && file.size >= 0);
       if (!files.length) return;
-      el.uploadBtn.disabled = true;
-      el.uploadProgress.value = 0;
+      enqueueFiles(files, parentID || '');
+      setUploadStatus(`Queued ${files.length} file${files.length === 1 ? '' : 's'} for this folder.`);
+      runUploadQueue();
+    }
+
+    function enqueueFiles(files, parentID) {
+      for (const file of files) {
+        state.uploadQueue.push({
+          id: state.nextUploadQueueID,
+          file,
+          parentID: parentID || '',
+          status: 'queued',
+          progress: 0,
+          message: 'Waiting',
+          error: '',
+        });
+        state.nextUploadQueueID += 1;
+      }
+      renderUploadQueue();
+    }
+
+    function updateQueueItem(id, patch) {
+      const index = state.uploadQueue.findIndex((item) => item.id === id);
+      if (index < 0) return;
+      state.uploadQueue[index] = { ...state.uploadQueue[index], ...patch };
+      renderUploadQueue();
+    }
+
+    async function runUploadQueue() {
+      if (state.uploadQueueRunning) return;
+      state.uploadQueueRunning = true;
       try {
-        await uploadFiles(files, parentID);
-        await refreshFiles();
-      } catch (err) {
-        setUploadStatus(err.message, true);
+        while (true) {
+          const next = state.uploadQueue.find((item) => item.status === 'queued');
+          if (!next) break;
+          try {
+            await uploadQueueItem(next);
+          } catch (err) {
+            updateQueueItem(next.id, {
+              status: 'failed',
+              message: err.message || 'Upload failed',
+              error: err.message || 'Upload failed',
+            });
+            setUploadStatus(`Failed: ${next.file.name} (${err.message || 'upload error'})`, true);
+          }
+        }
       } finally {
-        el.uploadBtn.disabled = false;
+        state.uploadQueueRunning = false;
       }
     }
 
-    async function uploadFiles(files, parentID) {
-      for (let index = 0; index < files.length; index += 1) {
-        await uploadOneFile(files[index], index + 1, files.length, parentID);
-      }
-      setUploadStatus(files.length === 1 ? 'Upload complete.' : `Uploaded ${files.length} files.`);
-    }
-
-    async function uploadOneFile(file, index, total, parentID) {
-      const prefix = total > 1 ? `${index}/${total}: ` : '';
-      el.uploadProgress.value = 0;
-      setUploadStatus(`${prefix}Hashing ${file.name}...`);
-      const checksum = await sha256Hex(file);
+    async function uploadQueueItem(item) {
+      updateQueueItem(item.id, { status: 'hashing', progress: 1, message: 'Hashing...' });
+      const checksum = await sha256Hex(item.file);
+      updateQueueItem(item.id, { status: 'staging', progress: 5, message: 'Creating upload...' });
       const created = await api('/uploads', {
         method: 'POST',
         csrf: true,
         body: JSON.stringify({
-          name: file.name,
-          parent_id: parentID || undefined,
-          mime_type: file.type || 'application/octet-stream',
-          plaintext_size: file.size,
+          name: item.file.name,
+          parent_id: item.parentID || undefined,
+          mime_type: item.file.type || 'application/octet-stream',
+          plaintext_size: item.file.size,
           checksum,
         }),
       });
-      await uploadParts(created.upload, file, prefix);
-      await waitUntilReady(created.upload.id, prefix);
+      await uploadParts(created.upload, item);
+      await waitUntilReady(created.upload.id, item);
+      updateQueueItem(item.id, { status: 'completing', progress: 96, message: 'Completing...' });
       await api(`/uploads/${created.upload.id}/complete`, { method: 'POST', csrf: true });
-      el.uploadProgress.value = 100;
+      updateQueueItem(item.id, { status: 'complete', progress: 100, message: 'Complete', error: '' });
+      setUploadStatus(`Uploaded ${item.file.name}`);
+      await refreshFiles();
     }
 
     function updateDropZone() {
@@ -1277,13 +1355,17 @@
       }
     }
 
-    async function uploadParts(upload, file, prefix = '') {
+    async function uploadParts(upload, item) {
       const partSize = upload.part_size;
       const count = upload.part_count;
       for (let part = 1; part <= count; part++) {
         const start = (part - 1) * partSize;
-        const end = Math.min(start + partSize, file.size);
-        setUploadStatus(`${prefix}Staging part ${part} of ${count}...`);
+        const end = Math.min(start + partSize, item.file.size);
+        updateQueueItem(item.id, {
+          status: 'staging',
+          message: `Staging part ${part}/${count}`,
+          progress: 5 + Math.round((part / Math.max(count, 1)) * 45),
+        });
         const response = await fetch(`/uploads/${upload.id}/parts/${part}`, {
           method: 'POST',
           credentials: 'same-origin',
@@ -1291,7 +1373,7 @@
             'Content-Type': 'application/octet-stream',
             'X-CSRF-Token': csrfToken(),
           },
-          body: file.slice(start, end),
+          body: item.file.slice(start, end),
         });
         if (!response.ok && response.status !== 202) {
           let message = response.statusText;
@@ -1301,11 +1383,10 @@
           } catch (_) {}
           throw new Error(message);
         }
-        el.uploadProgress.value = Math.round((part / count) * 50);
       }
     }
 
-    async function waitUntilReady(uploadID, prefix = '') {
+    async function waitUntilReady(uploadID, item) {
       clearInterval(state.uploadTimer);
       while (true) {
         const data = await api(`/uploads/${uploadID}`);
@@ -1316,10 +1397,34 @@
         const leased = progress.leased_parts;
         if (progress.failed_parts > 0) throw new Error('upload_part_failed');
         if (progress.ready_to_complete) return;
-        setUploadStatus(`${prefix}Telegram drain: ${done}/${total} complete, ${leased} active, ${queued} queued`);
-        el.uploadProgress.value = 50 + Math.round((done / Math.max(total, 1)) * 45);
+        updateQueueItem(item.id, {
+          status: 'telegram',
+          message: `Telegram ${done}/${total} complete, ${leased} active, ${queued} queued`,
+          progress: 50 + Math.round((done / Math.max(total, 1)) * 45),
+        });
         await delay(2000);
       }
+    }
+
+    function renderUploadQueue() {
+      if (!state.uploadQueue.length) {
+        el.uploadQueue.innerHTML = '<div class="queue-empty">Queue is empty.</div>';
+        return;
+      }
+      el.uploadQueue.innerHTML = state.uploadQueue.map((item) => {
+        const statusClass = item.status === 'failed' ? 'error' : (item.status === 'complete' ? 'ok' : 'warn');
+        const label = item.status === 'failed' ? (item.error || item.message || 'Failed') : item.message;
+        return `
+          <div class="queue-item">
+            <div class="queue-head">
+              <div class="queue-name">${escapeHTML(item.file.name)}</div>
+              <div class="queue-meta">${formatBytes(item.file.size || 0)}</div>
+            </div>
+            <div class="queue-status"><span class="badge ${statusClass}">${escapeHTML(item.status)}</span> ${escapeHTML(label || '')}</div>
+            <progress value="${Math.max(0, Math.min(100, Number(item.progress || 0)))}" max="100"></progress>
+          </div>
+        `;
+      }).join('');
     }
 
     function setUploadStatus(message, error = false) {

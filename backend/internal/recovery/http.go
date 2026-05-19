@@ -7,8 +7,8 @@ import (
 	"net/http"
 	"time"
 
-	"gitrepo.pp.ua/Sommelier/TeleDriveVault/backend/internal/auth"
-	"gitrepo.pp.ua/Sommelier/TeleDriveVault/backend/internal/crypto/secrets"
+	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/auth"
+	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/crypto/secrets"
 )
 
 type Handler struct {

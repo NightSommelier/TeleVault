@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"time"
 
-	"gitrepo.pp.ua/Sommelier/TeleDriveVault/backend/internal/auth"
+	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/auth"
 )
 
 const (
