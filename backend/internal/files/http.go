@@ -38,7 +38,7 @@ var publicLinkPageTemplate = template.Must(template.New("public-link").Parse(`<!
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{{.Name}} - TeleDrive Vault</title>
+  <title>{{.Name}} - TeleVault</title>
   <style>
     body { margin: 0; font: 14px/1.45 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #1b1f24; background: #f7f8fa; }
     main { min-height: 100vh; display: grid; place-items: center; padding: 24px; }

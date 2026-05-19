@@ -1,4 +1,4 @@
-# TeleDrive 2.0 Threat Model
+# TeleVault Threat Model
 
 Status: initial MVP baseline
 Date: 2026-05-15

@@ -1,18 +1,18 @@
-# TeleDrive Vault Project Plan
+# TeleVault Project Plan
 
-This document defines the plan for building TeleDrive Vault, a security-first encrypted file storage service that uses Telegram as a storage transport while keeping application sessions, metadata, staging, queues, and access control under the service's control.
+This document defines the plan for building TeleVault, a security-first encrypted file storage service that uses Telegram as a storage transport while keeping application sessions, metadata, staging, queues, and access control under the service's control.
 
-Current reference project directory: `/Users/sommelier/teledrive`
+Current reference project directory: `/home/sommelier/tgenvault`
 
 New project directory: `/Users/sommelier/teledrive-2`.
 
-Working product name: `TeleDrive Vault`.
+Working product name: `TeleVault`.
 
-Repository and local directory names can remain technical while the product name stabilizes. User-facing docs, UI copy, and architecture documents should use `TeleDrive Vault` unless the project is renamed again later.
+Repository and local directory names can remain technical while the product name stabilizes. User-facing docs, UI copy, and architecture documents should use `TeleVault` unless the project is renamed again later.
 
 ## 1. Goal
 
-Build a new, security-first TeleDrive Vault implementation:
+Build a new, security-first TeleVault implementation:
 
 - Store files in Telegram only as encrypted ciphertext.
 - Avoid putting Telegram sessions into JWTs or client-visible tokens.
@@ -79,6 +79,7 @@ Accepted MVP decisions:
 - MVP encryption: server-side streaming age-compatible encryption.
 - MVP metadata: keep filenames plaintext, while preserving schema room for encrypted names later.
 - Telegram artifact metadata: do not upload parts to Telegram with the original user filename; use opaque artifact names such as `<upload_part_id>.bin` and restore the original filename only when serving downloads.
+- Privacy masking: when Telegram-side metadata needs to be less obvious, consider decoy document names, mime types, and headers that resemble music, video, archives, or documents; keep the real user filename and mime type in service metadata only.
 - MVP sharing: no public links or user-to-user sharing in the first usable version.
 - MVP upload path: stage upload data on the server first, then drain it to Telegram through a durable queue with bounded worker concurrency and retry/backoff.
 - MVP frontend: reuse/adapt the existing React UI only after the backend encrypted owner-only flow is stable.
@@ -662,6 +663,14 @@ teledrive-2/
 ## 13.2 Deferred Portability Work
 
 - Add optional database backends beyond PostgreSQL, such as SQLite and MariaDB. This is intentionally deferred until the MVP schema and query patterns stabilize.
+- Add an optional FUSE mount mode so the service can expose a mounted drive on systems that support it. Treat FUSE as optional deployment capability, not a hard runtime dependency for containerized installs.
+- Add an exportable per-user file and folder structure map so instance migration and disaster recovery can reconstruct hierarchy even if the live database is lost.
+- Define a restore flow that can rebuild folder trees and metadata from the exported structure map together with the PostgreSQL backup.
+
+## 13.3 Deferred Privacy Work
+
+- Add stronger Telegram-side header and mime camouflage for uploaded artifacts when privacy mode is enabled.
+- Keep the user-facing filename and type as service metadata, but let Telegram-side artifacts look like ordinary media or archive documents where that does not break retrieval.
 
 ## 14. Reference Files in Current Project
 
