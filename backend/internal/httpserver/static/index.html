@@ -1065,7 +1065,7 @@
       const selectLabel = state.view === 'own' ? ` data-select-label="${file.id}" role="button" tabindex="0"` : '';
       const label = file.type !== 'folder'
         ? `<span class="file-label"${selectLabel}>${name}</span>`
-        : `<span class="folder-name file-label"${selectLabel}><span class="folder-mark" aria-hidden="true"></span>${name}</span>`;
+        : `<button class="link folder-name file-label" data-open-folder="${file.id}"><span class="folder-mark" aria-hidden="true"></span>${name}</button>`;
       return `<span class="file-cell">${select}${label}</span>`;
     }
 
