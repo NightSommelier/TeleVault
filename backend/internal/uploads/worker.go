@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"os"
 	"regexp"
@@ -35,6 +36,7 @@ type WorkerSettings struct {
 	RetryBaseDelay time.Duration
 	RetryMaxDelay  time.Duration
 	UploadTimeout  time.Duration
+	Logger         *slog.Logger
 	Now            func() time.Time
 }
 
@@ -74,6 +76,9 @@ func NewDrainWorker(store WorkStore, spool *LocalSpool, sessionCrypto auth.Teleg
 	if settings.Now == nil {
 		settings.Now = time.Now
 	}
+	if settings.Logger == nil {
+		settings.Logger = slog.Default()
+	}
 
 	return &DrainWorker{
 		store:         store,
@@ -87,6 +92,7 @@ func NewDrainWorker(store WorkStore, spool *LocalSpool, sessionCrypto auth.Teleg
 func (w *DrainWorker) DrainOne(ctx context.Context) (bool, error) {
 	work, err := w.claimQueuedPartWork(ctx)
 	if errors.Is(err, ErrUploadPartNotFound) {
+		w.settings.Logger.Debug("worker queue empty")
 		return false, nil
 	}
 	if err != nil {
@@ -200,6 +206,14 @@ func (w *DrainWorker) claimQueuedPartWork(ctx context.Context) (QueuedPartWork, 
 
 func (w *DrainWorker) drainClaimedWork(ctx context.Context, work QueuedPartWork) error {
 	part := work.Part
+	w.settings.Logger.Debug(
+		"upload part drain started",
+		"part_id", part.ID,
+		"upload_id", part.UploadID,
+		"part_number", part.PartNumber,
+		"attempts", part.Attempts,
+		"storage_backend", nullableString(part.StorageBackend),
+	)
 	if !part.StorageBackend.Valid || part.StorageBackend.String != LocalStagingBackend {
 		err := fmt.Errorf("unsupported storage backend %q", nullableString(part.StorageBackend))
 		_ = w.store.FailQueuedPart(ctx, part.ID, err)
@@ -246,6 +260,7 @@ func (w *DrainWorker) drainClaimedWork(ctx context.Context, work QueuedPartWork)
 		wrappedBody,
 	)
 	if err != nil {
+		w.settings.Logger.Debug("telegram upload part failed", "part_id", part.ID, "upload_id", part.UploadID, "error", err)
 		return w.retryPart(ctx, part, err)
 	}
 
@@ -261,6 +276,15 @@ func (w *DrainWorker) drainClaimedWork(ctx context.Context, work QueuedPartWork)
 		return err
 	}
 
+	w.settings.Logger.Debug(
+		"upload part drain completed",
+		"part_id", part.ID,
+		"upload_id", part.UploadID,
+		"part_number", part.PartNumber,
+		"telegram_peer", result.Peer,
+		"telegram_message_id", result.MessageID,
+		"duration_ms", w.settings.Now().Sub(startedAt).Milliseconds(),
+	)
 	return w.throttleAfterUpload(ctx, work, startedAt)
 }
 

@@ -12,12 +12,13 @@ import (
 	"strings"
 	"time"
 
+	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/applog"
 	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/config"
 	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/db"
 )
 
 func main() {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	logger := applog.New(os.Getenv("LOG_LEVEL"))
 
 	if len(os.Args) != 2 {
 		logger.Error("usage: migrate up|down|status")

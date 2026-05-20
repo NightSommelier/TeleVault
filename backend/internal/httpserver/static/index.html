@@ -91,6 +91,11 @@
     }
     h1 { font-size: 17px; margin: 0; font-weight: 650; }
     .userbar { display: flex; align-items: center; gap: 10px; color: var(--muted); min-width: 0; }
+    .version-pill {
+      font-size: 12px;
+      color: var(--muted);
+      white-space: nowrap;
+    }
     main {
       display: grid;
       grid-template-columns: 280px minmax(0, 1fr);
@@ -493,6 +498,7 @@
       <div class="brand">
         <div class="mark">TV</div>
         <h1>TeleVault</h1>
+        <span id="appVersion" class="version-pill"></span>
       </div>
       <div id="userbar" class="userbar hidden">
         <span id="userName"></span>
@@ -750,7 +756,9 @@
       uploadQueue: [],
       uploadQueueRunning: false,
       nextUploadQueueID: 1,
-      uploadDebugEnabled: uploadDebugEnabledFromLocation(),
+      appInfo: null,
+      uploadDebugAllowed: false,
+      uploadDebugEnabled: false,
       uploadDebugLines: [],
     };
 
@@ -758,6 +766,7 @@
       loginView: document.getElementById('loginView'),
       appView: document.getElementById('appView'),
       userbar: document.getElementById('userbar'),
+      appVersion: document.getElementById('appVersion'),
       userName: document.getElementById('userName'),
       startQrBtn: document.getElementById('startQrBtn'),
       qrImage: document.getElementById('qrImage'),
@@ -877,10 +886,25 @@
 
     async function loadMe() {
       try {
+        await loadAppInfo();
         const data = await api('/me');
         showApp(data.user);
       } catch (_) {
         showLogin();
+      }
+    }
+
+    async function loadAppInfo() {
+      try {
+        const info = await api('/app-info');
+        state.appInfo = info;
+        const version = info && info.build && info.build.version ? info.build.version : '';
+        el.appVersion.textContent = version ? `v${version}` : '';
+        state.uploadDebugAllowed = Boolean(info && info.debug);
+        setUploadDebugEnabled(state.uploadDebugAllowed);
+      } catch (_) {
+        state.uploadDebugAllowed = false;
+        setUploadDebugEnabled(false);
       }
     }
 
@@ -1900,9 +1924,10 @@
         });
         if (progress.failed_parts > 0) throw new Error('upload_part_failed');
         if (progress.ready_to_complete) return;
+        const eta = formatETA(progress.telegram_eta_seconds);
         updateQueueItem(item.id, {
           status: 'telegram',
-          message: `Telegram ${done}/${total} complete, ${leased} active, ${queued} queued`,
+          message: `Telegram ${done}/${total} complete, ${leased} active, ${queued} queued, ETA ${eta}`,
           progress: 50 + Math.round((done / Math.max(total, 1)) * 45),
         });
         await delay(2000);
@@ -1996,20 +2021,13 @@
       el.uploadStatus.classList.toggle('error', error);
     }
 
-    function uploadDebugEnabledFromLocation() {
-      const params = new URLSearchParams(window.location.search);
-      const explicit = params.get('upload_debug');
-      if (explicit !== null) return explicit !== '0' && explicit !== 'false';
-      return localStorage.getItem('tdv.uploadDebug') === '1';
-    }
-
     function setUploadDebugEnabled(enabled) {
-      state.uploadDebugEnabled = enabled;
-      localStorage.setItem('tdv.uploadDebug', enabled ? '1' : '0');
-      el.uploadDebugToggle.checked = enabled;
-      el.uploadDebugLog.classList.toggle('hidden', !enabled);
+      state.uploadDebugEnabled = state.uploadDebugAllowed && enabled;
+      el.uploadDebugToggle.checked = state.uploadDebugEnabled;
+      el.uploadDebugToggle.closest('label').classList.toggle('hidden', !state.uploadDebugAllowed);
+      el.uploadDebugLog.classList.toggle('hidden', !state.uploadDebugEnabled);
       renderUploadDebugLog();
-      if (enabled) debugUpload('debug:enabled', { source: window.location.search.includes('upload_debug') ? 'url' : 'toggle' });
+      if (state.uploadDebugEnabled) debugUpload('debug:enabled', { source: 'APP_DEBUG' });
     }
 
     function debugUpload(eventName, details = {}) {
@@ -2264,6 +2282,17 @@
     function formatPartCount(count) {
       if (!Number.isInteger(count) || count < 0) return '-';
       return `${count} part${count === 1 ? '' : 's'}`;
+    }
+
+    function formatETA(seconds) {
+      if (!Number.isFinite(Number(seconds)) || Number(seconds) <= 0) return 'unknown';
+      seconds = Math.ceil(Number(seconds));
+      const hours = Math.floor(seconds / 3600);
+      const minutes = Math.floor((seconds % 3600) / 60);
+      const rest = seconds % 60;
+      if (hours > 0) return `${hours}h ${minutes}m`;
+      if (minutes > 0) return `${minutes}m ${rest}s`;
+      return `${rest}s`;
     }
 
     function escapeHTML(value) {

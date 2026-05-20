@@ -2,6 +2,10 @@
 
 FROM golang:1.26.2-alpine AS builder
 
+ARG APP_VERSION=0.1.0-dev
+ARG APP_COMMIT=unknown
+ARG APP_BUILD_DATE=unknown
+
 WORKDIR /src
 RUN apk add --no-cache git ca-certificates
 
@@ -14,7 +18,7 @@ RUN set -eux; \
     mkdir -p /out; \
     for bin in api worker cleanup migrate smoke admin; do \
         CGO_ENABLED=0 GOOS=linux go build \
-            -ldflags="-s -w" \
+            -ldflags="-s -w -X 'gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/buildinfo.Version=${APP_VERSION}' -X 'gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/buildinfo.Commit=${APP_COMMIT}' -X 'gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/buildinfo.Date=${APP_BUILD_DATE}'" \
             -trimpath \
             -o "/out/${bin}" "./cmd/${bin}"; \
     done

@@ -172,9 +172,10 @@ func TestUploadProgressResponseSummarizesQueueState(t *testing.T) {
 			WorkerID:       sql.NullString{String: "worker-b", Valid: true},
 		},
 		{
-			PartNumber:  3,
-			Status:      StatusPending,
-			AvailableAt: now.Add(30 * time.Second),
+			PartNumber:    3,
+			Status:        StatusPending,
+			PlaintextSize: sql.NullInt64{Int64: 10, Valid: true},
+			AvailableAt:   now.Add(30 * time.Second),
 		},
 	}
 
@@ -194,6 +195,8 @@ func TestUploadProgressResponseSummarizesQueueState(t *testing.T) {
 		progress["plaintext_complete_size"] != int64(10) ||
 		progress["ciphertext_staged_size"] != int64(17) ||
 		progress["ciphertext_complete_size"] != int64(18) ||
+		progress["telegram_remaining_bytes"] != int64(27) ||
+		progress["telegram_eta_seconds"] != int64(2) ||
 		progress["ready_to_complete"] != false {
 		t.Fatalf("uploadProgressResponse() = %+v", progress)
 	}

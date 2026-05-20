@@ -60,6 +60,15 @@ func (s *Server) requestLogger(next http.Handler) http.Handler {
 			"user_agent", r.UserAgent(),
 			"remote_addr", r.RemoteAddr,
 		)
+		if s.cfg.AppDebug {
+			s.logger.Debug(
+				"http request debug",
+				"method", r.Method,
+				"path", r.URL.Path,
+				"query", r.URL.RawQuery,
+				"headers", redactHeaders(r.Header),
+			)
+		}
 	})
 }
 

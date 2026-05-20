@@ -9,7 +9,9 @@ import (
 	"syscall"
 	"time"
 
+	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/applog"
 	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/auth"
+	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/buildinfo"
 	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/config"
 	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/crypto/secrets"
 	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/db"
@@ -28,15 +30,15 @@ func main() {
 	flag.DurationVar(&flags.retryMaxDelay, "retry-max-delay", 30*time.Minute, "maximum retry delay for transient upload failures")
 	flag.Parse()
 
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelInfo,
-	}))
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
 	cfg, err := config.Load()
 	if err != nil {
 		logger.Error("configuration validation failed", "error", err)
 		os.Exit(1)
 	}
+	logger = applog.New(cfg.LogLevel)
+	logger.Info("worker starting", "worker_id", flags.workerID, "debug", cfg.AppDebug, "version", buildinfo.Version, "commit", buildinfo.Commit)
 
 	telegramSessionKey, err := secrets.ParseBase64Key(cfg.TelegramSessionKey)
 	if err != nil {
@@ -79,6 +81,7 @@ func main() {
 			RetryBaseDelay: flags.retryBaseDelay,
 			RetryMaxDelay:  flags.retryMaxDelay,
 			UploadTimeout:  flags.uploadTimeout,
+			Logger:         logger,
 		},
 	)
 	if err != nil {

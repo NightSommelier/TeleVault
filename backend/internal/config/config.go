@@ -26,6 +26,8 @@ const (
 
 type Config struct {
 	Env                 string
+	AppDebug            bool
+	LogLevel            string
 	HTTPAddr            string
 	DatabaseURL         string
 	ValkeyAddr          string
@@ -58,6 +60,7 @@ type DatabaseConfig struct {
 func Load() (Config, error) {
 	cfg := Config{
 		Env:                getEnv("APP_ENV", EnvDevelopment),
+		AppDebug:           parseBoolDefault(os.Getenv("APP_DEBUG"), false),
 		HTTPAddr:           getEnv("HTTP_ADDR", ":8080"),
 		DatabaseURL:        os.Getenv("DATABASE_URL"),
 		ValkeyAddr:         getEnv("VALKEY_ADDR", getEnv("REDIS_ADDR", "localhost:6379")),
@@ -70,6 +73,7 @@ func Load() (Config, error) {
 		CookieSameSite:     getEnv("COOKIE_SAME_SITE", "Lax"),
 		UploadStagingDir:   getEnv("UPLOAD_STAGING_DIR", DefaultUploadStagingDir),
 	}
+	cfg.LogLevel = strings.ToLower(strings.TrimSpace(getEnv("LOG_LEVEL", defaultLogLevel(cfg.AppDebug))))
 
 	var err error
 	if cfg.UploadPartSizeBytes, err = parseInt64Default(os.Getenv("UPLOAD_PART_SIZE_BYTES"), DefaultUploadPartSizeBytes); err != nil {
@@ -136,6 +140,11 @@ func (cfg Config) Validate() error {
 
 	if cfg.HTTPAddr == "" {
 		problems = append(problems, "HTTP_ADDR is required")
+	}
+	switch cfg.LogLevel {
+	case "debug", "info", "warn", "warning", "error":
+	default:
+		problems = append(problems, "LOG_LEVEL must be debug, info, warn, or error")
 	}
 
 	if cfg.DatabaseURL == "" {
@@ -230,6 +239,13 @@ func getEnv(key string, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func defaultLogLevel(debug bool) string {
+	if debug {
+		return "debug"
+	}
+	return "info"
 }
 
 func splitCSV(value string) []string {

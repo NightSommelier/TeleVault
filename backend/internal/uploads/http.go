@@ -554,6 +554,8 @@ func uploadProgressResponse(upload Upload, parts []UploadPart, settings Effectiv
 		expectedParts = int64(len(uploadPartPlan(upload.ID, nullableInt64(upload.PlaintextSize), upload.PartSize)))
 	}
 	receivedParts := 0
+	remainingTelegramBytes := int64(0)
+	remainingTelegramParts := 0
 	progress := map[string]any{
 		"expected_parts":           expectedParts,
 		"received_parts":           0,
@@ -566,6 +568,8 @@ func uploadProgressResponse(upload Upload, parts []UploadPart, settings Effectiv
 		"ciphertext_staged_size":   int64(0),
 		"ciphertext_complete_size": int64(0),
 		"next_retry_at":            nil,
+		"telegram_eta_seconds":     nil,
+		"telegram_remaining_bytes": int64(0),
 		"active_workers":           []string{},
 		"ready_to_complete":        false,
 		"upload_policy":            uploadPolicyResponse(settings),
@@ -596,6 +600,12 @@ func uploadProgressResponse(upload Upload, parts []UploadPart, settings Effectiv
 		case "failed":
 			progress["failed_parts"] = progress["failed_parts"].(int) + 1
 		default:
+			remainingTelegramParts++
+			if part.CiphertextSize.Valid {
+				remainingTelegramBytes += part.CiphertextSize.Int64
+			} else if part.PlaintextSize.Valid {
+				remainingTelegramBytes += part.PlaintextSize.Int64
+			}
 			if part.LeasedUntil.Valid && part.LeasedUntil.Time.After(currentTime) {
 				progress["leased_parts"] = progress["leased_parts"].(int) + 1
 				if part.WorkerID.Valid {
@@ -613,6 +623,15 @@ func uploadProgressResponse(upload Upload, parts []UploadPart, settings Effectiv
 
 	if nextRetry.Valid {
 		progress["next_retry_at"] = nextRetry.Time
+	}
+	progress["telegram_remaining_bytes"] = remainingTelegramBytes
+	if settings.TargetUploadBytesPerSecond > 0 && remainingTelegramBytes > 0 {
+		transferSeconds := (remainingTelegramBytes + settings.TargetUploadBytesPerSecond - 1) / settings.TargetUploadBytesPerSecond
+		cooldownSeconds := int64(0)
+		if settings.CooldownBetweenPartsMillisec > 0 && remainingTelegramParts > 0 {
+			cooldownSeconds = int64(remainingTelegramParts*settings.CooldownBetweenPartsMillisec+999) / 1000
+		}
+		progress["telegram_eta_seconds"] = transferSeconds + cooldownSeconds
 	}
 	workers := make([]string, 0, len(activeWorkers))
 	for workerID := range activeWorkers {

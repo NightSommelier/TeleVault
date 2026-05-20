@@ -21,6 +21,18 @@ func TestValidateAcceptsDevelopmentConfig(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsInvalidLogLevel(t *testing.T) {
+	cfg := validConfig()
+	cfg.LogLevel = "verbose"
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("Validate() error = nil, want log level error")
+	}
+
+	assertErrorContains(t, err, "LOG_LEVEL must be debug, info, warn, or error")
+}
+
 func TestValidateRequiresSecrets(t *testing.T) {
 	cfg := validConfig()
 	cfg.AppSessionSecret = ""
@@ -150,6 +162,7 @@ func TestDatabaseConfigRequiresDatabaseURL(t *testing.T) {
 func validConfig() Config {
 	return Config{
 		Env:                 EnvDevelopment,
+		LogLevel:            "info",
 		HTTPAddr:            ":8080",
 		DatabaseURL:         validDatabaseURL,
 		ValkeyAddr:          "localhost:6379",

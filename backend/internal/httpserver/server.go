@@ -12,6 +12,7 @@ import (
 	"filippo.io/age"
 	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/adminsettings"
 	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/auth"
+	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/buildinfo"
 	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/config"
 	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/crypto/secrets"
 	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/db"
@@ -62,6 +63,7 @@ func (s *Server) routes() {
 
 	s.mux.HandleFunc("GET /healthz", s.healthz)
 	s.mux.HandleFunc("GET /readyz", s.readyz)
+	s.mux.HandleFunc("GET /app-info", s.appInfo)
 
 	telegramSessionCrypto := auth.NewTelegramSessionCrypto(s.secrets)
 	var rateLimitStore auth.RateLimitStore
@@ -127,6 +129,14 @@ func (s *Server) routes() {
 	s.mux.Handle("GET /admin/settings", authHandler.RequireAuth(authHandler.RequireAdmin(http.HandlerFunc(adminHandler.GetSettings))))
 	s.mux.Handle("PATCH /admin/settings/upload", authHandler.RequireAuth(authHandler.RequireAdmin(authHandler.RequireCSRF(http.HandlerFunc(adminHandler.PatchUploadSettings)))))
 	s.mux.Handle("PATCH /admin/telegram-accounts/{user_id}/limits", authHandler.RequireAuth(authHandler.RequireAdmin(authHandler.RequireCSRF(http.HandlerFunc(adminHandler.PatchTelegramAccountLimit)))))
+}
+
+func (s *Server) appInfo(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"name":  "TeleVault",
+		"debug": s.cfg.AppDebug,
+		"build": buildinfo.Info(),
+	})
 }
 
 func (s *Server) mountStatic() {
