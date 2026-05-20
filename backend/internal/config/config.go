@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -41,6 +42,7 @@ type Config struct {
 	SecureCookie        bool
 	CookieSameSite      string
 	CredentialsCORSMode bool
+	ContainerRuntime    bool
 
 	UploadPartSizeBytes        int64
 	TelegramDocumentLimitBytes int64
@@ -71,6 +73,7 @@ func Load() (Config, error) {
 		TelegramAPIID:      os.Getenv("TELEGRAM_API_ID"),
 		TelegramAPIHash:    os.Getenv("TELEGRAM_API_HASH"),
 		CookieSameSite:     getEnv("COOKIE_SAME_SITE", "Lax"),
+		ContainerRuntime:   parseBoolDefault(os.Getenv("TELEVAULT_CONTAINER"), false),
 		UploadStagingDir:   getEnv("UPLOAD_STAGING_DIR", DefaultUploadStagingDir),
 	}
 	cfg.LogLevel = strings.ToLower(strings.TrimSpace(getEnv("LOG_LEVEL", defaultLogLevel(cfg.AppDebug))))
@@ -187,6 +190,9 @@ func (cfg Config) Validate() error {
 	}
 	if strings.TrimSpace(cfg.UploadStagingDir) == "" {
 		problems = append(problems, "UPLOAD_STAGING_DIR is required")
+	}
+	if cfg.ContainerRuntime && !filepath.IsAbs(cfg.UploadStagingDir) {
+		problems = append(problems, "UPLOAD_STAGING_DIR must be an absolute shared volume path in container runtime, for example /data/upload-staging")
 	}
 	if cfg.UploadPartSizeBytes > 0 && cfg.TelegramDocumentLimitBytes > 0 && cfg.UploadSafetyMarginBytes >= 0 {
 		if cfg.UploadPartSizeBytes > cfg.TelegramDocumentLimitBytes-cfg.UploadSafetyMarginBytes {

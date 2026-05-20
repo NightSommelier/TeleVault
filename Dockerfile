@@ -26,6 +26,7 @@ RUN set -eux; \
 
 FROM alpine:3.23
 WORKDIR /app/backend
+ENV TELEVAULT_CONTAINER=1
 
 RUN apk add --no-cache ca-certificates tzdata
 RUN addgroup -g 10001 -S app && \

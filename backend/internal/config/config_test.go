@@ -121,6 +121,19 @@ func TestValidateRequiresUploadStagingDir(t *testing.T) {
 	assertErrorContains(t, err, "UPLOAD_STAGING_DIR is required")
 }
 
+func TestValidateRejectsRelativeUploadStagingDirInContainer(t *testing.T) {
+	cfg := validConfig()
+	cfg.ContainerRuntime = true
+	cfg.UploadStagingDir = "data/upload-staging"
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("Validate() error = nil, want container staging dir error")
+	}
+
+	assertErrorContains(t, err, "UPLOAD_STAGING_DIR must be an absolute shared volume path in container runtime")
+}
+
 func TestValidateRejectsInvalidEnabledRateLimits(t *testing.T) {
 	cfg := validConfig()
 	cfg.AuthRateLimitEnabled = true
