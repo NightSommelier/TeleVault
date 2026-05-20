@@ -9,13 +9,13 @@ services:
     image: postgres:16-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_DB: televaultdb
-      POSTGRES_USER: televaultuser
-      POSTGRES_PASSWORD: televaultpass
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB is required}
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U televaultuser -d televaultdb"]
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -35,8 +35,6 @@ services:
     <<: *app
     command: ["migrate", "up"]
     env_file: .env
-    environment:
-      DATABASE_URL: postgres://televaultuser:televaultpass@postgres:5432/televaultdb?sslmode=disable
     restart: "no"
     depends_on:
       postgres:
@@ -46,10 +44,6 @@ services:
     <<: *app
     command: ["api"]
     env_file: .env
-    environment:
-      DATABASE_URL: postgres://televaultuser:televaultpass@postgres:5432/televaultdb?sslmode=disable
-      VALKEY_ADDR: valkey:6379
-      UPLOAD_STAGING_DIR: /data/upload-staging
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -69,10 +63,6 @@ services:
     <<: *app
     command: ["worker"]
     env_file: .env
-    environment:
-      DATABASE_URL: postgres://televaultuser:televaultpass@postgres:5432/televaultdb?sslmode=disable
-      VALKEY_ADDR: valkey:6379
-      UPLOAD_STAGING_DIR: /data/upload-staging
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -90,10 +80,6 @@ services:
       - -c
       - while true; do cleanup; sleep "$${CLEANUP_INTERVAL_SECONDS:-300}"; done
     env_file: .env
-    environment:
-      DATABASE_URL: postgres://televaultuser:televaultpass@postgres:5432/televaultdb?sslmode=disable
-      VALKEY_ADDR: valkey:6379
-      UPLOAD_STAGING_DIR: /data/upload-staging
     depends_on:
       migrate:
         condition: service_completed_successfully
