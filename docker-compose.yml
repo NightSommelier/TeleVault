@@ -27,7 +27,7 @@ services:
 
   migrate:
     build: .
-    image: televault-vault:latest
+    image: televault:latest
     command: ["migrate", "up"]
     env_file: .env
     environment:
@@ -39,7 +39,7 @@ services:
 
   api:
     build: .
-    image: televault-vault:latest
+    image: televault:latest
     command: ["api"]
     env_file: .env
     environment:
@@ -64,7 +64,7 @@ services:
 
   worker:
     build: .
-    image: televault-vault:latest
+    image: televault:latest
     command: ["worker"]
     env_file: .env
     environment:
@@ -84,7 +84,7 @@ services:
 
   cleanup:
     build: .
-    image: televault-vault:latest
+    image: televault:latest
     command:
       - sh
       - -c
