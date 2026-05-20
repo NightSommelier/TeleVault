@@ -47,6 +47,7 @@ func TestDrainWorkerUploadsStagedPartAndDeletesLocalCopy(t *testing.T) {
 				StorageKey:     sql.NullString{String: "upload-1/part-1.age", Valid: true},
 				Attempts:       1,
 			},
+			OwnerID:          "owner-1",
 			OwnerTelegramID:  12345,
 			EncryptedSession: encryptedSession,
 			StoragePeer:      sql.NullString{String: "self", Valid: true},
@@ -82,8 +83,71 @@ func TestDrainWorkerUploadsStagedPartAndDeletesLocalCopy(t *testing.T) {
 	if store.marked.PartID != "part-1" || store.marked.TelegramPeer != "self" || store.marked.MessageID != 77 {
 		t.Fatalf("MarkStagedPartUploaded() params = %+v", store.marked)
 	}
+	if store.completed.OwnerID != "owner-1" || store.completed.UploadID != "upload-1" || !store.completed.Now.Equal(time.Unix(1000, 0)) {
+		t.Fatalf("CompleteUpload() params = %+v", store.completed)
+	}
 	if _, err := spool.Open("upload-1/part-1.age"); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("spool.Open() after drain error = %v, want os.ErrNotExist", err)
+	}
+}
+
+func TestDrainWorkerIgnoresIncompleteAutoComplete(t *testing.T) {
+	ctx := context.Background()
+	const artifactSize = int64(4 * 1024 * 1024)
+	spool, err := NewLocalSpool(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewLocalSpool() error = %v", err)
+	}
+	if err := spool.Write(ctx, "upload-1/part-1.age", func(w io.Writer) error {
+		_, err := w.Write([]byte("ciphertext"))
+		return err
+	}); err != nil {
+		t.Fatalf("spool.Write() error = %v", err)
+	}
+
+	crypto := testSessionCrypto(t)
+	encryptedSession, err := crypto.Encrypt("telegram:12345", "telegram-session")
+	if err != nil {
+		t.Fatalf("Encrypt() error = %v", err)
+	}
+
+	store := &fakeWorkStore{
+		work: QueuedPartWork{
+			Part: UploadPart{
+				ID:             "part-1",
+				UploadID:       "upload-1",
+				PartNumber:     1,
+				PlaintextSize:  sql.NullInt64{Int64: artifactSize, Valid: true},
+				StorageBackend: sql.NullString{String: LocalStagingBackend, Valid: true},
+				StorageKey:     sql.NullString{String: "upload-1/part-1.age", Valid: true},
+				Attempts:       1,
+			},
+			OwnerID:          "owner-1",
+			OwnerTelegramID:  12345,
+			EncryptedSession: encryptedSession,
+		},
+		completeErr: ErrUploadIncomplete,
+	}
+	telegram := &fakeWorkerTelegram{messageID: 77}
+
+	worker, err := NewDrainWorker(store, spool, crypto, telegram, WorkerSettings{
+		WorkerID:      "worker-a",
+		LeaseDuration: time.Minute,
+		Now:           func() time.Time { return time.Unix(1000, 0) },
+	})
+	if err != nil {
+		t.Fatalf("NewDrainWorker() error = %v", err)
+	}
+
+	worked, err := worker.DrainOne(ctx)
+	if err != nil {
+		t.Fatalf("DrainOne() error = %v", err)
+	}
+	if !worked {
+		t.Fatalf("DrainOne() worked = false, want true")
+	}
+	if store.completed.UploadID != "upload-1" {
+		t.Fatalf("CompleteUpload() params = %+v", store.completed)
 	}
 }
 
@@ -344,12 +408,14 @@ func testSessionCrypto(t *testing.T) auth.TelegramSessionCrypto {
 }
 
 type fakeWorkStore struct {
-	work      QueuedPartWork
-	claimed   bool
-	marked    MarkStagedPartUploadedParams
-	retry     RetryPartParams
-	failedID  string
-	failedErr error
+	work        QueuedPartWork
+	claimed     bool
+	marked      MarkStagedPartUploadedParams
+	completed   CompleteUploadParams
+	completeErr error
+	retry       RetryPartParams
+	failedID    string
+	failedErr   error
 }
 
 func (s *fakeWorkStore) ClaimQueuedPartWork(context.Context, ClaimQueuedPartParams) (QueuedPartWork, error) {
@@ -367,6 +433,14 @@ func (s *fakeWorkStore) MarkStagedPartUploaded(_ context.Context, params MarkSta
 	part.TelegramPeer = sql.NullString{String: params.TelegramPeer, Valid: params.TelegramPeer != ""}
 	part.MessageID = sql.NullInt64{Int64: params.MessageID, Valid: params.MessageID != 0}
 	return part, nil
+}
+
+func (s *fakeWorkStore) CompleteUpload(_ context.Context, params CompleteUploadParams) (File, error) {
+	s.completed = params
+	if s.completeErr != nil {
+		return File{}, s.completeErr
+	}
+	return File{ID: "file-1"}, nil
 }
 
 func (s *fakeWorkStore) RetryQueuedPart(_ context.Context, params RetryPartParams) error {
@@ -415,9 +489,10 @@ func (t *fakeWorkerTelegram) DeleteEncryptedPart(context.Context, string, string
 }
 
 type sequenceWorkStore struct {
-	mu    sync.Mutex
-	works []QueuedPartWork
-	next  int
+	mu        sync.Mutex
+	works     []QueuedPartWork
+	next      int
+	completed []CompleteUploadParams
 }
 
 func (s *sequenceWorkStore) ClaimQueuedPartWork(context.Context, ClaimQueuedPartParams) (QueuedPartWork, error) {
@@ -446,6 +521,13 @@ func (s *sequenceWorkStore) MarkStagedPartUploaded(_ context.Context, params Mar
 	return UploadPart{}, ErrUploadPartNotFound
 }
 
+func (s *sequenceWorkStore) CompleteUpload(_ context.Context, params CompleteUploadParams) (File, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.completed = append(s.completed, params)
+	return File{ID: params.UploadID + "-file"}, nil
+}
+
 func (s *sequenceWorkStore) RetryQueuedPart(context.Context, RetryPartParams) error { return nil }
 
 func (s *sequenceWorkStore) FailQueuedPart(context.Context, string, error) error { return nil }
@@ -460,6 +542,7 @@ func testQueuedWork(partID string, uploadID string, storageKey string, encrypted
 			StorageBackend: sql.NullString{String: LocalStagingBackend, Valid: true},
 			StorageKey:     sql.NullString{String: storageKey, Valid: true},
 		},
+		OwnerID:            "owner-1",
 		OwnerTelegramID:    12345,
 		EncryptedSession:   encryptedSession,
 		StoragePeer:        sql.NullString{String: "self", Valid: true},

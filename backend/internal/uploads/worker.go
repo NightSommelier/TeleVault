@@ -26,6 +26,7 @@ var floodWaitPattern = regexp.MustCompile(`(?i)FLOOD_WAIT_?(\d+)`)
 type WorkStore interface {
 	ClaimQueuedPartWork(ctx context.Context, params ClaimQueuedPartParams) (QueuedPartWork, error)
 	MarkStagedPartUploaded(ctx context.Context, params MarkStagedPartUploadedParams) (UploadPart, error)
+	CompleteUpload(ctx context.Context, params CompleteUploadParams) (File, error)
 	RetryQueuedPart(ctx context.Context, params RetryPartParams) error
 	FailQueuedPart(ctx context.Context, partID string, failure error) error
 }
@@ -275,6 +276,9 @@ func (w *DrainWorker) drainClaimedWork(ctx context.Context, work QueuedPartWork)
 	if err := w.spool.Delete(part.StorageKey.String); err != nil {
 		return err
 	}
+	if err := w.tryCompleteUpload(ctx, work); err != nil {
+		return err
+	}
 
 	w.settings.Logger.Debug(
 		"upload part drain completed",
@@ -286,6 +290,46 @@ func (w *DrainWorker) drainClaimedWork(ctx context.Context, work QueuedPartWork)
 		"duration_ms", w.settings.Now().Sub(startedAt).Milliseconds(),
 	)
 	return w.throttleAfterUpload(ctx, work, startedAt)
+}
+
+func (w *DrainWorker) tryCompleteUpload(ctx context.Context, work QueuedPartWork) error {
+	file, err := w.store.CompleteUpload(ctx, CompleteUploadParams{
+		OwnerID:  work.OwnerID,
+		UploadID: work.Part.UploadID,
+		Now:      w.settings.Now(),
+	})
+	if errors.Is(err, ErrUploadIncomplete) {
+		w.settings.Logger.Debug(
+			"upload auto-complete waiting for remaining parts",
+			"upload_id", work.Part.UploadID,
+			"part_id", work.Part.ID,
+		)
+		return nil
+	}
+	if errors.Is(err, ErrUploadNotFound) || errors.Is(err, ErrUploadExpired) {
+		w.settings.Logger.Debug(
+			"upload auto-complete skipped",
+			"upload_id", work.Part.UploadID,
+			"part_id", work.Part.ID,
+			"error", err,
+		)
+		return nil
+	}
+	if errors.Is(err, ErrUploadSizeMismatch) || errors.Is(err, ErrUploadChecksumMismatch) {
+		_ = w.store.FailQueuedPart(ctx, work.Part.ID, err)
+		return err
+	}
+	if err != nil {
+		return err
+	}
+
+	w.settings.Logger.Info(
+		"upload auto-completed",
+		"upload_id", work.Part.UploadID,
+		"file_id", file.ID,
+		"owner_id", work.OwnerID,
+	)
+	return nil
 }
 
 func (w *DrainWorker) retryPart(ctx context.Context, part UploadPart, cause error) error {
