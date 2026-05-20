@@ -96,6 +96,9 @@
       color: var(--muted);
       white-space: nowrap;
     }
+    .admin-btn.hidden {
+      display: none;
+    }
     main {
       display: grid;
       grid-template-columns: 280px minmax(0, 1fr);
@@ -274,6 +277,27 @@
       overflow-wrap: anywhere;
     }
     .status.error { color: var(--danger); }
+    .tab-safety {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 24px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .safety-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      background: var(--ok);
+      box-shadow: 0 0 0 3px rgba(22, 127, 59, .12);
+      flex: 0 0 auto;
+    }
+    .tab-safety.unsafe .safety-dot {
+      background: var(--danger);
+      box-shadow: 0 0 0 3px rgba(180, 35, 24, .12);
+    }
     .dropzone {
       display: grid;
       place-items: center;
@@ -502,6 +526,7 @@
       </div>
       <div id="userbar" class="userbar hidden">
         <span id="userName"></span>
+        <button id="adminBtn" class="admin-btn hidden">Admin</button>
         <button id="logoutBtn">Log out</button>
       </div>
     </header>
@@ -537,6 +562,10 @@
             <input id="fileInput" class="hidden-input" type="file" multiple>
             <button id="uploadBtn" class="primary">Add to queue</button>
             <div id="uploadStatus" class="status"></div>
+            <div id="tabSafetyIndicator" class="tab-safety">
+              <span class="safety-dot" aria-hidden="true"></span>
+              <span id="tabSafetyText">No browser uploads running.</span>
+            </div>
             <label class="actions muted">
               <input id="uploadDebugToggle" type="checkbox">
               Upload debug
@@ -735,6 +764,72 @@
         </div>
       </div>
     </div>
+
+    <div id="adminModal" class="modal-backdrop hidden">
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="adminTitle">
+        <div class="modal-head">
+          <div>
+            <div id="adminTitle" class="panel-title">Admin settings</div>
+            <div class="muted">Global upload policy</div>
+          </div>
+          <button id="closeAdminBtn">Close</button>
+        </div>
+        <div class="modal-body stack">
+          <div class="field-row">
+            <div class="field">
+              <label for="adminPartSizeInput">Part size bytes</label>
+              <input id="adminPartSizeInput" type="number" min="1048576" step="1048576">
+            </div>
+            <div class="field">
+              <label for="adminParallelInput">Parallel uploads</label>
+              <input id="adminParallelInput" type="number" min="1" max="16" step="1">
+            </div>
+          </div>
+          <div class="field-row">
+            <div class="field">
+              <label for="adminDocumentLimitInput">Telegram document limit bytes</label>
+              <input id="adminDocumentLimitInput" type="number" min="1048576" step="1048576">
+            </div>
+            <div class="field">
+              <label for="adminSafetyMarginInput">Safety margin bytes</label>
+              <input id="adminSafetyMarginInput" type="number" min="0" step="1048576">
+            </div>
+          </div>
+          <div class="field-row">
+            <div class="field">
+              <label for="adminRateInput">Target bytes per second</label>
+              <input id="adminRateInput" type="number" min="0" step="1048576">
+            </div>
+            <div class="field">
+              <label for="adminCooldownInput">Cooldown ms</label>
+              <input id="adminCooldownInput" type="number" min="0" step="100">
+            </div>
+          </div>
+          <div class="actions">
+            <button id="saveAdminUploadSettingsBtn" class="primary">Save upload policy</button>
+          </div>
+          <div id="adminStatus" class="status"></div>
+          <div class="subhead">
+            <div>
+              <div class="panel-title">Account overrides</div>
+              <div class="muted">Configured Telegram account limits.</div>
+            </div>
+          </div>
+          <table class="table compact-table">
+            <thead>
+              <tr>
+                <th>User</th>
+                <th>Limit</th>
+                <th>Policy</th>
+              </tr>
+            </thead>
+            <tbody id="adminLimitsBody">
+              <tr><td colspan="3" class="muted">No account overrides.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
   </div>
 
   <script>
@@ -768,6 +863,7 @@
       userbar: document.getElementById('userbar'),
       appVersion: document.getElementById('appVersion'),
       userName: document.getElementById('userName'),
+      adminBtn: document.getElementById('adminBtn'),
       startQrBtn: document.getElementById('startQrBtn'),
       qrImage: document.getElementById('qrImage'),
       loginStatus: document.getElementById('loginStatus'),
@@ -790,6 +886,8 @@
       fileInput: document.getElementById('fileInput'),
       uploadBtn: document.getElementById('uploadBtn'),
       uploadStatus: document.getElementById('uploadStatus'),
+      tabSafetyIndicator: document.getElementById('tabSafetyIndicator'),
+      tabSafetyText: document.getElementById('tabSafetyText'),
       uploadDebugToggle: document.getElementById('uploadDebugToggle'),
       uploadDebugLog: document.getElementById('uploadDebugLog'),
       uploadQueue: document.getElementById('uploadQueue'),
@@ -822,6 +920,17 @@
       importRecoveryBtn: document.getElementById('importRecoveryBtn'),
       recoveryFileInput: document.getElementById('recoveryFileInput'),
       recoveryStatus: document.getElementById('recoveryStatus'),
+      adminModal: document.getElementById('adminModal'),
+      closeAdminBtn: document.getElementById('closeAdminBtn'),
+      adminPartSizeInput: document.getElementById('adminPartSizeInput'),
+      adminDocumentLimitInput: document.getElementById('adminDocumentLimitInput'),
+      adminSafetyMarginInput: document.getElementById('adminSafetyMarginInput'),
+      adminParallelInput: document.getElementById('adminParallelInput'),
+      adminRateInput: document.getElementById('adminRateInput'),
+      adminCooldownInput: document.getElementById('adminCooldownInput'),
+      saveAdminUploadSettingsBtn: document.getElementById('saveAdminUploadSettingsBtn'),
+      adminStatus: document.getElementById('adminStatus'),
+      adminLimitsBody: document.getElementById('adminLimitsBody'),
     };
 
     function csrfToken() {
@@ -858,6 +967,7 @@
       el.appView.classList.remove('hidden');
       el.userbar.classList.remove('hidden');
       el.userName.textContent = user.displayName || user.username || `Telegram ${user.telegram_id}`;
+      el.adminBtn.classList.toggle('hidden', user.role !== 'admin');
       restoreFolderState();
       if (!window.location.hash) window.location.hash = state.currentFolderId ? folderRoute(state.currentFolderId) : '#/';
       applyRoute();
@@ -881,7 +991,9 @@
       el.loginView.classList.remove('hidden');
       el.appView.classList.add('hidden');
       el.userbar.classList.add('hidden');
+      el.adminBtn.classList.add('hidden');
       el.loginStatus.textContent = message || 'Not signed in.';
+      updateTabSafetyIndicator();
     }
 
     async function loadMe() {
@@ -1700,6 +1812,7 @@
           progress: 0,
           message: 'Waiting',
           error: '',
+          safeToClose: false,
         });
         state.nextUploadQueueID += 1;
       }
@@ -1780,11 +1893,24 @@
         plan: (created.upload.part_plan || []).map((part) => `${part.part_number}:${formatBytes(part.size || (part.end - part.start))}`).join(', '),
       });
       await uploadParts(created.upload, item);
-      await waitUntilReady(created.upload.id, item);
-      updateQueueItem(item.id, { status: 'completing', progress: 96, message: 'Completing...' });
-      debugUpload('upload:complete-request', { upload_id: created.upload.id });
-      await api(`/uploads/${created.upload.id}/complete`, { method: 'POST', csrf: true });
-      debugUpload('upload:complete-ok', { upload_id: created.upload.id });
+      updateQueueItem(item.id, {
+        status: 'telegram',
+        progress: 50,
+        message: 'Server received. Tab can close.',
+        safeToClose: true,
+      });
+      const readyState = await waitUntilReady(created.upload.id, item);
+      if (readyState !== 'complete') {
+        updateQueueItem(item.id, { status: 'completing', progress: 96, message: 'Completing...', safeToClose: true });
+        debugUpload('upload:complete-request', { upload_id: created.upload.id });
+        try {
+          await api(`/uploads/${created.upload.id}/complete`, { method: 'POST', csrf: true });
+        } catch (err) {
+          if (err.message !== 'upload_not_found') throw err;
+          debugUpload('upload:complete-race', { upload_id: created.upload.id, message: err.message });
+        }
+        debugUpload('upload:complete-ok', { upload_id: created.upload.id });
+      }
       updateQueueItem(item.id, { status: 'complete', progress: 100, message: 'Complete', error: '' });
       setUploadStatus(`Uploaded ${item.file.name}`);
       await refreshFiles();
@@ -1909,6 +2035,7 @@
       while (true) {
         const data = await api(`/uploads/${uploadID}`);
         const progress = data.progress;
+        if (data.upload && data.upload.status === 'complete') return 'complete';
         const done = progress.complete_parts;
         const total = progress.expected_parts;
         const queued = progress.queued_parts;
@@ -1923,11 +2050,12 @@
           next_retry_at: progress.next_retry_at || null,
         });
         if (progress.failed_parts > 0) throw new Error('upload_part_failed');
-        if (progress.ready_to_complete) return;
+        if (progress.ready_to_complete) return 'ready';
         const eta = formatETA(progress.telegram_eta_seconds);
         updateQueueItem(item.id, {
           status: 'telegram',
           message: `Telegram ${done}/${total} complete, ${leased} active, ${queued} queued, ETA ${eta}`,
+          safeToClose: true,
           progress: 50 + Math.round((done / Math.max(total, 1)) * 45),
         });
         await delay(2000);
@@ -1961,6 +2089,7 @@
       if (!state.uploadQueue.length) {
         el.uploadQueue.innerHTML = '<div class="queue-empty">Queue is empty.</div>';
         el.clearCompletedQueueBtn.classList.add('hidden');
+        updateTabSafetyIndicator();
         return;
       }
       el.clearCompletedQueueBtn.classList.toggle('hidden', !queueHasCompletedItems());
@@ -1980,6 +2109,15 @@
         `;
       }).join('');
       wireUploadQueueActions();
+      updateTabSafetyIndicator();
+    }
+
+    function updateTabSafetyIndicator() {
+      const unsafe = state.uploadQueue.some((item) => !item.safeToClose && !['complete', 'failed'].includes(item.status));
+      el.tabSafetyIndicator.classList.toggle('unsafe', unsafe);
+      el.tabSafetyText.textContent = unsafe
+        ? 'Keep this tab open until server receive finishes.'
+        : 'Tab can close. Server/worker can continue.';
     }
 
     function wireUploadQueueActions() {
@@ -1999,6 +2137,7 @@
         progress: 0,
         message: 'Waiting',
         error: '',
+        safeToClose: false,
       });
       setUploadStatus(`Retry queued: ${item.file.name}`);
       runUploadQueue();
@@ -2309,6 +2448,91 @@
       return dataTransfer && Array.from(dataTransfer.types || []).includes('Files');
     }
 
+    function setAdminStatus(message, error = false) {
+      el.adminStatus.textContent = message;
+      el.adminStatus.classList.toggle('error', error);
+    }
+
+    async function openAdminPanel() {
+      if (!state.user || state.user.role !== 'admin') return;
+      el.adminModal.classList.remove('hidden');
+      setAdminStatus('Loading...');
+      try {
+        const data = await api('/admin/settings');
+        fillAdminUploadSettings(data.upload_settings || {});
+        renderAdminAccountLimits(data.telegram_account_limits || []);
+        setAdminStatus('Loaded.');
+      } catch (err) {
+        setAdminStatus(err.message, true);
+      }
+    }
+
+    function closeAdminPanel() {
+      el.adminModal.classList.add('hidden');
+    }
+
+    function fillAdminUploadSettings(settings) {
+      el.adminPartSizeInput.value = settings.upload_part_size_bytes || '';
+      el.adminDocumentLimitInput.value = settings.telegram_document_limit_bytes || '';
+      el.adminSafetyMarginInput.value = settings.upload_safety_margin_bytes || 0;
+      el.adminParallelInput.value = settings.max_parallel_uploads || 1;
+      el.adminRateInput.value = settings.target_upload_bytes_per_second || 0;
+      el.adminCooldownInput.value = settings.cooldown_between_parts_ms || 0;
+    }
+
+    function adminNumber(input, name) {
+      const value = Number(input.value);
+      if (!Number.isFinite(value) || value < 0) throw new Error(`${name} is invalid`);
+      return Math.floor(value);
+    }
+
+    async function saveAdminUploadSettings() {
+      if (!state.user || state.user.role !== 'admin') return;
+      setAdminStatus('Saving...');
+      el.saveAdminUploadSettingsBtn.disabled = true;
+      try {
+        const payload = {
+          upload_part_size_bytes: adminNumber(el.adminPartSizeInput, 'Part size'),
+          telegram_document_limit_bytes: adminNumber(el.adminDocumentLimitInput, 'Telegram document limit'),
+          upload_safety_margin_bytes: adminNumber(el.adminSafetyMarginInput, 'Safety margin'),
+          max_parallel_uploads: adminNumber(el.adminParallelInput, 'Parallel uploads'),
+          target_upload_bytes_per_second: adminNumber(el.adminRateInput, 'Target rate'),
+          cooldown_between_parts_ms: adminNumber(el.adminCooldownInput, 'Cooldown'),
+        };
+        const data = await api('/admin/settings/upload', {
+          method: 'PATCH',
+          csrf: true,
+          body: JSON.stringify(payload),
+        });
+        fillAdminUploadSettings(data.upload_settings || payload);
+        setAdminStatus('Upload policy saved.');
+      } catch (err) {
+        setAdminStatus(err.message, true);
+      } finally {
+        el.saveAdminUploadSettingsBtn.disabled = false;
+      }
+    }
+
+    function renderAdminAccountLimits(limits) {
+      if (!limits.length) {
+        el.adminLimitsBody.innerHTML = '<tr><td colspan="3" class="muted">No account overrides.</td></tr>';
+        return;
+      }
+      el.adminLimitsBody.innerHTML = limits.map((limit) => {
+        const user = limit.display_name || limit.username || `Telegram ${limit.telegram_id}`;
+        const speed = Number(limit.target_upload_bytes_per_second || 0);
+        const cooldown = Number(limit.cooldown_between_parts_ms || 0);
+        const parallel = limit.max_parallel_uploads || '-';
+        return `
+          <tr>
+            <td>${escapeHTML(user)}</td>
+            <td>${escapeHTML(formatBytes(Number(limit.telegram_document_limit_bytes || 0)))}</td>
+            <td>${escapeHTML(`${parallel} parallel, ${speed ? `${formatBytes(speed)}/s` : 'unlimited'}, ${cooldown} ms`)}</td>
+          </tr>
+        `;
+      }).join('');
+    }
+
     function setDetailsStatus(message, error = false) {
       el.detailsStatus.textContent = message;
       el.detailsStatus.classList.toggle('error', error);
@@ -2347,6 +2571,7 @@
 
     el.startQrBtn.addEventListener('click', startQR);
     el.logoutBtn.addEventListener('click', logout);
+    el.adminBtn.addEventListener('click', openAdminPanel);
     el.refreshBtn.addEventListener('click', refreshFiles);
     el.ownFilesBtn.addEventListener('click', () => setView('own'));
     el.sharedFilesBtn.addEventListener('click', () => setView('shared'));
@@ -2439,6 +2664,11 @@
     el.createShareBtn.addEventListener('click', createShare);
     el.createPublicLinkBtn.addEventListener('click', createPublicLink);
     el.copyPublicLinkBtn.addEventListener('click', copyPublicLink);
+    el.closeAdminBtn.addEventListener('click', closeAdminPanel);
+    el.saveAdminUploadSettingsBtn.addEventListener('click', saveAdminUploadSettings);
+    el.adminModal.addEventListener('click', (event) => {
+      if (event.target === el.adminModal) closeAdminPanel();
+    });
     el.shareModal.addEventListener('click', (event) => {
       if (event.target === el.shareModal) closeShareDialog();
     });
@@ -2455,6 +2685,10 @@
       if (event.key !== 'Escape') return;
       if (!el.detailsModal.classList.contains('hidden')) {
         closeDetailsDialog();
+        return;
+      }
+      if (!el.adminModal.classList.contains('hidden')) {
+        closeAdminPanel();
         return;
       }
       if (!el.shareModal.classList.contains('hidden')) closeShareDialog();
