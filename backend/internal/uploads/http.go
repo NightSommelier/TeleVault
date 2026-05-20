@@ -225,8 +225,23 @@ func (h *Handler) UploadPart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	plannedPart, err := h.store.UploadPlannedPart(r.Context(), user.ID, uploadID, partNumber)
+	if errors.Is(err, ErrUploadPartNotFound) {
+		writeError(w, http.StatusNotFound, "upload_part_not_found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "upload_part_plan_failed")
+		return
+	}
+	artifactSize, err := uploadPartPlaintextSize(plannedPart)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "upload_part_size_invalid")
+		return
+	}
+
 	if h.staging != nil {
-		h.stageUploadPart(w, r, user.ID, uploadID, partNumber, upload, now)
+		h.stageUploadPart(w, r, user.ID, uploadID, partNumber, upload, plannedPart, artifactSize, now)
 		return
 	}
 
@@ -247,7 +262,7 @@ func (h *Handler) UploadPart(w http.ResponseWriter, r *http.Request) {
 	}
 
 	peer := nullableString(telegramSession.StoragePeer)
-	artifactSpec := telegramartifact.SpecForArtifactID(uploadPartArtifactID(uploadID, partNumber))
+	artifactSpec := telegramArtifactSpec(uploadPartArtifactID(uploadID, partNumber), artifactSize)
 	artifactName := artifactSpec.Name()
 	plaintextHash, err := agefile.NewSHA256FromState(upload.ChecksumState)
 	if err != nil {
@@ -267,7 +282,7 @@ func (h *Handler) UploadPart(w http.ResponseWriter, r *http.Request) {
 		_ = writer.Close()
 		resultCh <- encryptResult{result: result}
 	}()
-	wrappedReader := telegramartifact.WrapReader(uploadPartArtifactID(uploadID, partNumber), reader)
+	wrappedReader := telegramartifact.WrapReaderForSize(uploadPartArtifactID(uploadID, partNumber), artifactSize, reader)
 
 	telegramResult, err := h.telegram.UploadEncryptedPart(r.Context(), session, peer, artifactName, artifactSpec.MIMEType(), wrappedReader)
 	if err != nil {
@@ -324,7 +339,7 @@ func (h *Handler) UploadPart(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (h *Handler) stageUploadPart(w http.ResponseWriter, r *http.Request, ownerID string, uploadID string, partNumber int, upload Upload, now time.Time) {
+func (h *Handler) stageUploadPart(w http.ResponseWriter, r *http.Request, ownerID string, uploadID string, partNumber int, upload Upload, plannedPart UploadPart, artifactSize int64, now time.Time) {
 	plaintextHash, err := agefile.NewSHA256FromState(upload.ChecksumState)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "upload_checksum_state_invalid")
@@ -390,7 +405,7 @@ func (h *Handler) stageUploadPart(w http.ResponseWriter, r *http.Request, ownerI
 		"queue": map[string]any{
 			"status":      "queued",
 			"storage_key": storageKey,
-			"name":        telegramArtifactName(part.ID),
+			"name":        telegramArtifactName(part.ID, artifactSize),
 		},
 	})
 }
@@ -759,12 +774,23 @@ func uploadPartArtifactID(uploadID string, partNumber int) string {
 	return uploadID + "-part-" + strconv.Itoa(partNumber)
 }
 
-func telegramArtifactName(artifactID string) string {
-	return telegramartifact.SpecForArtifactID(artifactID).Name()
+func telegramArtifactSpec(artifactID string, size int64) telegramartifact.ArtifactSpec {
+	return telegramartifact.SpecForArtifactIDAndSize(artifactID, size)
 }
 
-func telegramArtifactMimeType(artifactID string) string {
-	return telegramartifact.SpecForArtifactID(artifactID).MIMEType()
+func telegramArtifactName(artifactID string, size int64) string {
+	return telegramArtifactSpec(artifactID, size).Name()
+}
+
+func telegramArtifactMimeType(artifactID string, size int64) string {
+	return telegramArtifactSpec(artifactID, size).MIMEType()
+}
+
+func uploadPartPlaintextSize(part UploadPart) (int64, error) {
+	if !part.PlaintextSize.Valid {
+		return 0, errors.New("upload part plaintext size is missing")
+	}
+	return part.PlaintextSize.Int64, nil
 }
 
 func nullableString(value sql.NullString) string {

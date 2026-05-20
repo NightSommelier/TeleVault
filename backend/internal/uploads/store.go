@@ -1176,6 +1176,29 @@ WHERE id = $1
 	return upload, nil
 }
 
+func (s *Store) UploadPlannedPart(ctx context.Context, ownerID string, uploadID string, partNumber int) (UploadPart, error) {
+	part, err := scanUploadPart(s.db.QueryRowContext(ctx, `
+SELECT p.id, p.upload_id, p.part_number, p.plaintext_start, p.plaintext_end, p.plaintext_size, p.ciphertext_size, p.checksum,
+       p.telegram_peer, p.telegram_message_id, p.status, p.storage_backend, p.storage_key, p.available_at,
+       p.leased_until, p.attempts, p.last_error, p.worker_id, p.created_at, p.updated_at
+FROM upload_parts p
+JOIN uploads u ON u.id = p.upload_id
+WHERE p.upload_id = $1
+  AND u.owner_id = $2
+  AND p.part_number = $3`,
+		uploadID,
+		ownerID,
+		partNumber,
+	))
+	if errors.Is(err, sql.ErrNoRows) {
+		return UploadPart{}, ErrUploadPartNotFound
+	}
+	if err != nil {
+		return UploadPart{}, err
+	}
+	return part, nil
+}
+
 func (s *Store) TelegramSession(ctx context.Context, ownerID string) (TelegramSession, error) {
 	var session TelegramSession
 	err := s.db.QueryRowContext(ctx, `

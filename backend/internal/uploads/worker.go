@@ -230,14 +230,19 @@ func (w *DrainWorker) drainClaimedWork(ctx context.Context, work QueuedPartWork)
 	uploadCtx, cancel := context.WithTimeout(ctx, w.settings.UploadTimeout)
 	defer cancel()
 	startedAt := w.settings.Now()
-	wrappedBody := telegramartifact.WrapReader(part.ID, body)
+	artifactSize, err := uploadPartPlaintextSize(part)
+	if err != nil {
+		_ = w.store.FailQueuedPart(ctx, part.ID, err)
+		return err
+	}
+	wrappedBody := telegramartifact.WrapReaderForSize(part.ID, artifactSize, body)
 
 	result, err := w.telegram.UploadEncryptedPart(
 		uploadCtx,
 		session,
 		nullableString(work.StoragePeer),
-		telegramArtifactName(part.ID),
-		telegramArtifactMimeType(part.ID),
+		telegramArtifactName(part.ID, artifactSize),
+		telegramArtifactMimeType(part.ID, artifactSize),
 		wrappedBody,
 	)
 	if err != nil {

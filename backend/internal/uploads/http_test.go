@@ -135,11 +135,12 @@ func TestUploadPartResponseIncludesChecksumHex(t *testing.T) {
 }
 
 func TestTelegramArtifactNameDoesNotUseOriginalFilename(t *testing.T) {
-	spec := telegramartifact.SpecForArtifactID("6c851bbf-57f2-46ea-a216-ee029365750f")
-	if got := telegramArtifactName(spec.ArtifactID); got != spec.Name() {
+	const mediumSize = int64(32 * 1024 * 1024)
+	spec := telegramartifact.SpecForArtifactIDAndSize("6c851bbf-57f2-46ea-a216-ee029365750f", mediumSize)
+	if got := telegramArtifactName(spec.ArtifactID, mediumSize); got != spec.Name() {
 		t.Fatalf("telegramArtifactName() = %q, want %q", got, spec.Name())
 	}
-	if got := telegramArtifactMimeType(spec.ArtifactID); got != spec.MIMEType() {
+	if got := telegramArtifactMimeType(spec.ArtifactID, mediumSize); got != spec.MIMEType() {
 		t.Fatalf("telegramArtifactMimeType() = %q, want %q", got, spec.MIMEType())
 	}
 	if got := uploadPartArtifactID("upload-1", 2); got != "upload-1-part-2" {

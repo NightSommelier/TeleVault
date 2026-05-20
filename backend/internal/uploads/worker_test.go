@@ -18,6 +18,7 @@ import (
 
 func TestDrainWorkerUploadsStagedPartAndDeletesLocalCopy(t *testing.T) {
 	ctx := context.Background()
+	const artifactSize = int64(4 * 1024 * 1024)
 	spool, err := NewLocalSpool(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewLocalSpool() error = %v", err)
@@ -41,6 +42,7 @@ func TestDrainWorkerUploadsStagedPartAndDeletesLocalCopy(t *testing.T) {
 				ID:             "part-1",
 				UploadID:       "upload-1",
 				PartNumber:     1,
+				PlaintextSize:  sql.NullInt64{Int64: artifactSize, Valid: true},
 				StorageBackend: sql.NullString{String: LocalStagingBackend, Valid: true},
 				StorageKey:     sql.NullString{String: "upload-1/part-1.age", Valid: true},
 				Attempts:       1,
@@ -68,9 +70,9 @@ func TestDrainWorkerUploadsStagedPartAndDeletesLocalCopy(t *testing.T) {
 	if !worked {
 		t.Fatalf("DrainOne() worked = false, want true")
 	}
-	wantName := telegramArtifactName("part-1")
-	wantMIME := telegramArtifactMimeType("part-1")
-	wantBody, err := io.ReadAll(telegramartifact.WrapReader("part-1", bytes.NewReader([]byte("ciphertext"))))
+	wantName := telegramArtifactName("part-1", artifactSize)
+	wantMIME := telegramArtifactMimeType("part-1", artifactSize)
+	wantBody, err := io.ReadAll(telegramartifact.WrapReaderForSize("part-1", artifactSize, bytes.NewReader([]byte("ciphertext"))))
 	if err != nil {
 		t.Fatalf("ReadAll(WrapReader()) error = %v", err)
 	}
@@ -87,6 +89,7 @@ func TestDrainWorkerUploadsStagedPartAndDeletesLocalCopy(t *testing.T) {
 
 func TestDrainWorkerRetriesFloodWait(t *testing.T) {
 	ctx := context.Background()
+	const artifactSize = int64(4 * 1024 * 1024)
 	spool, err := NewLocalSpool(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewLocalSpool() error = %v", err)
@@ -110,6 +113,7 @@ func TestDrainWorkerRetriesFloodWait(t *testing.T) {
 				ID:             "part-1",
 				UploadID:       "upload-1",
 				PartNumber:     1,
+				PlaintextSize:  sql.NullInt64{Int64: artifactSize, Valid: true},
 				StorageBackend: sql.NullString{String: LocalStagingBackend, Valid: true},
 				StorageKey:     sql.NullString{String: "upload-1/part-1.age", Valid: true},
 				Attempts:       3,
@@ -172,6 +176,7 @@ func TestDrainLoopRespectsConfiguredConcurrency(t *testing.T) {
 					ID:             "part-a",
 					UploadID:       "upload-a",
 					PartNumber:     1,
+					PlaintextSize:  sql.NullInt64{Int64: 4 * 1024 * 1024, Valid: true},
 					StorageBackend: sql.NullString{String: LocalStagingBackend, Valid: true},
 					StorageKey:     sql.NullString{String: "upload-a/part-1.age", Valid: true},
 				},
@@ -185,6 +190,7 @@ func TestDrainLoopRespectsConfiguredConcurrency(t *testing.T) {
 					ID:             "part-b",
 					UploadID:       "upload-b",
 					PartNumber:     1,
+					PlaintextSize:  sql.NullInt64{Int64: 4 * 1024 * 1024, Valid: true},
 					StorageBackend: sql.NullString{String: LocalStagingBackend, Valid: true},
 					StorageKey:     sql.NullString{String: "upload-b/part-1.age", Valid: true},
 				},
@@ -450,6 +456,7 @@ func testQueuedWork(partID string, uploadID string, storageKey string, encrypted
 			ID:             partID,
 			UploadID:       uploadID,
 			PartNumber:     1,
+			PlaintextSize:  sql.NullInt64{Int64: 4 * 1024 * 1024, Valid: true},
 			StorageBackend: sql.NullString{String: LocalStagingBackend, Valid: true},
 			StorageKey:     sql.NullString{String: storageKey, Valid: true},
 		},

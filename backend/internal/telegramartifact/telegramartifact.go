@@ -11,10 +11,12 @@ import (
 )
 
 const (
-	wrapperMagic        = "TVW1"
-	wrapperVersionPlain = 0x01
-	wrapperVersionXOR   = 0x02
-	ageMagicPrefix      = "age-encryption.org/v1"
+	wrapperMagic                = "TVW1"
+	wrapperVersionPlain         = 0x01
+	wrapperVersionXOR           = 0x02
+	ageMagicPrefix              = "age-encryption.org/v1"
+	smallArtifactMaxSize  int64 = 8 * 1024 * 1024
+	mediumArtifactMaxSize int64 = 128 * 1024 * 1024
 )
 
 type DecoyProfile struct {
@@ -30,72 +32,53 @@ type ArtifactSpec struct {
 	Profile      DecoyProfile
 }
 
-var profiles = []DecoyProfile{
-	{
-		Name:      "audio-mpeg",
-		Extension: ".mp3",
-		MIMEType:  "audio/mpeg",
-		Prefix:    []byte("ID3\x04\x00\x00\x00\x00\x00\x00"),
-	},
-	{
-		Name:      "video-mp4",
-		Extension: ".mp4",
-		MIMEType:  "video/mp4",
-		Prefix:    []byte{0x00, 0x00, 0x00, 0x18, 'f', 't', 'y', 'p', 'm', 'p', '4', '2', 0x00, 0x00, 0x00, 0x00, 'm', 'p', '4', '2', 'i', 's', 'o', 'm'},
-	},
-	{
-		Name:      "video-m4v",
-		Extension: ".m4v",
-		MIMEType:  "video/x-m4v",
-		Prefix:    []byte{0x00, 0x00, 0x00, 0x18, 'f', 't', 'y', 'p', 'M', '4', 'V', ' ', 0x00, 0x00, 0x00, 0x00, 'M', '4', 'V', ' ', 'i', 's', 'o', 'm'},
-	},
-	{
-		Name:      "video-avi",
-		Extension: ".avi",
-		MIMEType:  "video/x-msvideo",
-		Prefix:    []byte("RIFF\x00\x00\x00\x00AVI "),
-	},
-	{
-		Name:      "video-3gp",
-		Extension: ".3gp",
-		MIMEType:  "video/3gpp",
-		Prefix:    []byte{0x00, 0x00, 0x00, 0x18, 'f', 't', 'y', 'p', '3', 'g', 'p', '5', 0x00, 0x00, 0x00, 0x00, '3', 'g', 'p', '5', 'i', 's', 'o', 'm'},
-	},
-	{
-		Name:      "image-jpeg",
-		Extension: ".jpg",
-		MIMEType:  "image/jpeg",
-		Prefix:    []byte{0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 'J', 'F', 'I', 'F', 0x00, 0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00},
-	},
-	{
-		Name:      "image-jpeg-alt",
-		Extension: ".jpeg",
-		MIMEType:  "image/jpeg",
-		Prefix:    []byte{0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 'J', 'F', 'I', 'F', 0x00, 0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00},
-	},
-	{
-		Name:      "archive-zip",
-		Extension: ".zip",
-		MIMEType:  "application/zip",
-		Prefix:    []byte("PK\x03\x04\x14\x00\x00\x00\x08\x00"),
-	},
-	{
-		Name:      "document-pdf",
-		Extension: ".pdf",
-		MIMEType:  "application/pdf",
-		Prefix:    []byte("%PDF-1.7\n%TeleVault\n"),
-	},
+func makeProfile(name, extension, mimeType string, prefix []byte) DecoyProfile {
+	return DecoyProfile{Name: name, Extension: extension, MIMEType: mimeType, Prefix: prefix}
+}
+
+var smallProfiles = []DecoyProfile{
+	makeProfile("image-jpeg", ".jpg", "image/jpeg", []byte{0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 'J', 'F', 'I', 'F', 0x00, 0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00}),
+	makeProfile("image-jpeg-alt", ".jpeg", "image/jpeg", []byte{0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 'J', 'F', 'I', 'F', 0x00, 0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00}),
+	makeProfile("image-png", ".png", "image/png", []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A}),
+	makeProfile("image-gif", ".gif", "image/gif", []byte("GIF89a")),
+	makeProfile("image-webp", ".webp", "image/webp", []byte{'R', 'I', 'F', 'F', 0x00, 0x00, 0x00, 0x00, 'W', 'E', 'B', 'P'}),
+	makeProfile("document-pdf", ".pdf", "application/pdf", []byte("%PDF-1.7\n%TeleVault\n")),
+}
+
+var mediumProfiles = []DecoyProfile{
+	makeProfile("audio-mpeg", ".mp3", "audio/mpeg", []byte("ID3\x04\x00\x00\x00\x00\x00\x00")),
+	makeProfile("audio-m4a", ".m4a", "audio/mp4", []byte{0x00, 0x00, 0x00, 0x18, 'f', 't', 'y', 'p', 'M', '4', 'A', ' ', 0x00, 0x00, 0x00, 0x00, 'M', '4', 'A', ' ', 'i', 's', 'o', 'm'}),
+	makeProfile("document-docx", ".docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", []byte("PK\x03\x04\x14\x00\x00\x00\x08\x00")),
+	makeProfile("document-xlsx", ".xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", []byte("PK\x03\x04\x14\x00\x00\x00\x08\x00")),
+	makeProfile("document-pptx", ".pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation", []byte("PK\x03\x04\x14\x00\x00\x00\x08\x00")),
+	makeProfile("archive-zip", ".zip", "application/zip", []byte("PK\x03\x04\x14\x00\x00\x00\x08\x00")),
+	makeProfile("archive-rar", ".rar", "application/vnd.rar", []byte("Rar!\x1A\x07\x00")),
+}
+
+var largeProfiles = []DecoyProfile{
+	makeProfile("video-mp4", ".mp4", "video/mp4", []byte{0x00, 0x00, 0x00, 0x18, 'f', 't', 'y', 'p', 'm', 'p', '4', '2', 0x00, 0x00, 0x00, 0x00, 'm', 'p', '4', '2', 'i', 's', 'o', 'm'}),
+	makeProfile("video-m4v", ".m4v", "video/x-m4v", []byte{0x00, 0x00, 0x00, 0x18, 'f', 't', 'y', 'p', 'M', '4', 'V', ' ', 0x00, 0x00, 0x00, 0x00, 'M', '4', 'V', ' ', 'i', 's', 'o', 'm'}),
+	makeProfile("video-mkv", ".mkv", "video/x-matroska", []byte{0x1A, 0x45, 0xDF, 0xA3, 0x93, 0x42, 0x86, 'm', 'a', 't', 'r', 'o', 's', 'k', 'a'}),
+	makeProfile("video-avi", ".avi", "video/x-msvideo", []byte("RIFF\x00\x00\x00\x00AVI ")),
+	makeProfile("video-3gp", ".3gp", "video/3gpp", []byte{0x00, 0x00, 0x00, 0x18, 'f', 't', 'y', 'p', '3', 'g', 'p', '5', 0x00, 0x00, 0x00, 0x00, '3', 'g', 'p', '5', 'i', 's', 'o', 'm'}),
+	makeProfile("archive-7z", ".7z", "application/x-7z-compressed", []byte{0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C}),
+	makeProfile("archive-bin", ".bin", "application/octet-stream", []byte("TVBIN\x01\x00")),
 }
 
 func SpecForArtifactID(artifactID string) ArtifactSpec {
-	if len(profiles) == 0 {
+	return SpecForArtifactIDAndSize(artifactID, 0)
+}
+
+func SpecForArtifactIDAndSize(artifactID string, size int64) ArtifactSpec {
+	candidates := profilesForSize(size)
+	if len(candidates) == 0 {
 		return ArtifactSpec{ArtifactID: artifactID}
 	}
-	idx := stableIndex(artifactID, len(profiles))
+	idx := stableIndex(artifactID, len(candidates))
 	return ArtifactSpec{
 		ArtifactID:   artifactID,
 		ProfileIndex: idx,
-		Profile:      profiles[idx],
+		Profile:      candidates[idx],
 	}
 }
 
@@ -114,7 +97,11 @@ func (s ArtifactSpec) MIMEType() string {
 }
 
 func WrapReader(artifactID string, src io.Reader) io.Reader {
-	spec := SpecForArtifactID(artifactID)
+	return WrapReaderForSize(artifactID, 0, src)
+}
+
+func WrapReaderForSize(artifactID string, size int64, src io.Reader) io.Reader {
+	spec := SpecForArtifactIDAndSize(artifactID, size)
 	return io.MultiReader(
 		bytes.NewReader(spec.Profile.Prefix),
 		bytes.NewReader(wrapperHeader(spec.ProfileIndex, wrapperVersionXOR)),
@@ -149,7 +136,7 @@ func UnwrapReader(src io.Reader) (io.Reader, error) {
 }
 
 func matchWrappedSpec(peek []byte) (ArtifactSpec, byte, bool) {
-	for idx, profile := range profiles {
+	for idx, profile := range allProfiles() {
 		spec := ArtifactSpec{ProfileIndex: idx, Profile: profile}
 		for _, version := range []byte{wrapperVersionXOR, wrapperVersionPlain} {
 			header := wrapperHeader(idx, version)
@@ -178,13 +165,32 @@ func stableIndex(key string, modulo int) int {
 
 func maxDetectBytes() int {
 	maxLen := len(ageMagicPrefix)
-	for _, profile := range profiles {
+	for _, profile := range allProfiles() {
 		length := len(profile.Prefix) + len(wrapperHeader(0, wrapperVersionXOR))
 		if length > maxLen {
 			maxLen = length
 		}
 	}
 	return maxLen
+}
+
+func profilesForSize(size int64) []DecoyProfile {
+	switch {
+	case size <= 0, size <= smallArtifactMaxSize:
+		return smallProfiles
+	case size <= mediumArtifactMaxSize:
+		return mediumProfiles
+	default:
+		return largeProfiles
+	}
+}
+
+func allProfiles() []DecoyProfile {
+	profiles := make([]DecoyProfile, 0, len(smallProfiles)+len(mediumProfiles)+len(largeProfiles))
+	profiles = append(profiles, smallProfiles...)
+	profiles = append(profiles, mediumProfiles...)
+	profiles = append(profiles, largeProfiles...)
+	return profiles
 }
 
 type maskReader struct {

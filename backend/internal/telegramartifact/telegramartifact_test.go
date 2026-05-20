@@ -23,6 +23,23 @@ func TestSpecForArtifactIDIsDeterministic(t *testing.T) {
 	}
 }
 
+func TestSpecForArtifactIDAndSizeUsesSizeBuckets(t *testing.T) {
+	small := SpecForArtifactIDAndSize("part-small", 4*1024*1024)
+	if ext := small.Profile.Extension; ext != ".jpg" && ext != ".jpeg" && ext != ".png" && ext != ".gif" && ext != ".webp" && ext != ".pdf" {
+		t.Fatalf("small bucket extension = %q, want image/document decoy", ext)
+	}
+
+	medium := SpecForArtifactIDAndSize("part-medium", 32*1024*1024)
+	if ext := medium.Profile.Extension; ext != ".mp3" && ext != ".m4a" && ext != ".docx" && ext != ".xlsx" && ext != ".pptx" && ext != ".zip" && ext != ".rar" {
+		t.Fatalf("medium bucket extension = %q, want audio/document/archive decoy", ext)
+	}
+
+	large := SpecForArtifactIDAndSize("part-large", 256*1024*1024)
+	if ext := large.Profile.Extension; ext != ".mp4" && ext != ".m4v" && ext != ".mkv" && ext != ".avi" && ext != ".3gp" && ext != ".7z" && ext != ".bin" {
+		t.Fatalf("large bucket extension = %q, want video/archive/bin decoy", ext)
+	}
+}
+
 func TestWrapReaderAndUnwrapReaderRoundTrip(t *testing.T) {
 	identity, err := age.GenerateX25519Identity()
 	if err != nil {
