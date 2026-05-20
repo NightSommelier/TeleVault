@@ -1,4 +1,4 @@
-# Next Step: Upload Policy Visibility in Progress API
+# Next Step: Selected Move Folder Picker
 
 ## Agent Workflow Contract
 
@@ -18,71 +18,63 @@ This file is the handoff contract for the implementation agent.
 
 ## Goal
 
-Expose the effective upload policy in the upload status/progress API so the frontend can explain why parts are queued, leased, or deferred.
+Add an explicit folder picker for moving selected files and folders in the embedded web UI.
 
-The worker already drains with bounded concurrency and strict per-upload ordering. The next step is to surface the policy that controls that behavior instead of leaving the UI to infer it.
+The current UI supports drag-and-drop moves, including selected items, but bulk move still depends on drag-and-drop. The next step is to add a reliable button-driven move flow for selected items.
 
 ## Current State
 
-- `backend/internal/uploads/http.go` already returns queue progress, active workers, retry timing, and completion readiness.
-- `backend/internal/uploads/store.go` already resolves the effective upload policy fields for claimed work:
-  - `max_parallel_uploads`;
-  - `target_upload_bytes_per_second`;
-  - `cooldown_between_parts_ms`.
-- `backend/internal/adminsettings/` already stores the global and per-account policy values.
-- The frontend currently knows whether parts are queued or leased, but not why the instance is pacing uploads the way it is.
+- `PATCH /files/bulk-move` exists and accepts:
+  - `ids`;
+  - `parent_id`, where an empty string means root.
+- `POST /files/bulk-delete` exists for selected-item delete.
+- `PATCH /files/{id}` supports rename and single-item move.
+- The embedded UI has selected-item checkboxes, selected delete, compact row actions, details-based rename, and drag-to-folder/ancestor/root move.
+- `docs/development/files.md` documents the current file management API.
 
 ## Required Behavior
 
-1. Add the effective upload policy to the upload progress/status response.
-2. Keep the values aligned with the same policy resolution used by the worker.
-3. Make the response explicit enough for the frontend to explain:
-   - the current concurrency cap;
-   - the current target upload rate;
-   - the current cooldown between parts.
-4. Do not expose secrets, session material, Telegram peer ids, or internal database ids that the UI does not already need.
-5. Do not change the concurrency logic from the previous task.
+1. Add a `Move selected` control to the selection bar.
+2. Open a modal or compact picker that lets the user choose:
+   - root;
+   - the current folder's ancestors;
+   - visible folders in the current listing.
+3. Use `PATCH /files/bulk-move` for the selected IDs.
+4. Prevent invalid self moves in the UI when the selected set contains the target folder; keep backend validation as the final guard.
+5. Refresh the listing and clear selection after a successful move.
+6. Keep shared view read-only: the picker must only be available in the owner view.
+7. Do not change upload, sharing, recovery, or worker behavior in this task.
 
 ## Suggested Implementation
 
-Prefer a small API extension:
+Keep the first implementation small and local to the embedded UI:
 
-- extend the upload handler response with a dedicated policy object;
-- source the values from the same settings or policy resolution path already used by upload draining;
-- add tests for the response shape and the resolved values;
-- keep the frontend changes minimal and utilitarian.
+- extend the selection bar with a `Move selected` button;
+- add a modal that reuses `state.folderStack` and the currently rendered file list;
+- include root as a target;
+- list visible child folders as targets;
+- call the existing `moveFiles(ids, parentID)` helper;
+- disable targets that are part of the selected set.
 
-If the upload handler cannot access the effective policy cleanly, add a focused provider to the handler settings rather than duplicating store logic in HTTP code.
+If a full folder tree picker is too broad for this pass, document it as a later enhancement and keep this task scoped to current ancestors plus visible folders.
 
 ## Files To Inspect
 
-- `backend/internal/uploads/http.go`
-- `backend/internal/uploads/http_test.go`
-- `backend/internal/uploads/store.go`
-- `backend/internal/adminsettings/`
 - `backend/internal/httpserver/static/index.html`
-- `docs/development/uploads.md`
+- `backend/internal/files/http.go`
+- `backend/internal/files/store.go`
+- `docs/development/files.md`
 - `TeleVault-plan.md`
 
 ## Tests To Add Or Update
 
-Add focused tests for:
+Add focused coverage where practical:
 
-- the progress response includes the policy fields;
-- the values match the effective settings for the current user/account;
-- existing progress fields are unchanged;
-- no secret or low-level transport data is exposed.
+- embedded JavaScript syntax check;
+- Go tests if backend behavior changes;
+- update docs if the picker changes documented behavior.
 
-If the embedded web UI is updated, also validate the embedded JavaScript syntax.
-
-## Docs
-
-Update:
-
-- `docs/development/uploads.md`
-- `TeleVault-plan.md`
-
-Document that the upload status page now shows the effective policy driving queueing and pacing.
+Backend behavior should not need new tests if the task only wires the existing bulk move endpoint into the UI.
 
 ## Verification
 
@@ -93,20 +85,26 @@ cd backend
 go test ./... -count=1
 ```
 
-Then run:
+Then validate the embedded JavaScript syntax, for example:
+
+```sh
+awk '/<script>/{flag=1;next} /<\/script>/{flag=0} flag' backend/internal/httpserver/static/index.html > /tmp/televault-index.js
+node --check /tmp/televault-index.js
+```
+
+Finally run:
 
 ```sh
 git diff --check
 ```
 
-If the embedded web UI changes, also validate the JavaScript syntax.
-
 ## Acceptance Criteria
 
-- Upload progress/status responses include the effective upload policy.
-- The concurrency cap and pacing values match the effective policy.
-- Existing queue state fields still work.
-- No new sensitive data is exposed in the response.
-- Tests cover the new response fields and value resolution.
+- Selected owner-view items can be moved through a button-driven picker.
+- Root, ancestors, and visible child folders are available as targets.
+- Invalid selected-target moves are disabled or blocked in the UI.
+- Successful move refreshes the file list and clears selection.
+- Shared view does not expose owner-only move controls.
 - `go test ./... -count=1` passes.
+- Embedded JavaScript syntax check passes.
 - `git diff --check` passes.
