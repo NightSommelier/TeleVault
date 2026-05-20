@@ -1,4 +1,4 @@
-# Next Step: Selected Move Folder Picker
+# Next Step: User Upload Preferences
 
 ## Agent Workflow Contract
 
@@ -18,63 +18,113 @@ This file is the handoff contract for the implementation agent.
 
 ## Goal
 
-Add an explicit folder picker for moving selected files and folders in the embedded web UI.
+Add user-level upload preferences for size and pacing parameters while keeping administrator settings authoritative as safe defaults and hard bounds.
 
-The current UI supports drag-and-drop moves, including selected items, but bulk move still depends on drag-and-drop. The next step is to add a reliable button-driven move flow for selected items.
+The current system has:
 
-## Current State
+- global admin upload settings in `admin_settings`;
+- admin-managed per-account Telegram limits in `telegram_account_limits`;
+- detected Telegram document caps from probing;
+- an effective upload policy resolver used when an upload session is created.
 
-- `PATCH /files/bulk-move` exists and accepts:
-  - `ids`;
-  - `parent_id`, where an empty string means root.
-- `POST /files/bulk-delete` exists for selected-item delete.
-- `PATCH /files/{id}` supports rename and single-item move.
-- The embedded UI has selected-item checkboxes, selected delete, compact row actions, details-based rename, and drag-to-folder/ancestor/root move.
-- `docs/development/files.md` documents the current file management API.
+The missing piece is a normal user-facing preference layer. Users should be able to tune their own preferred upload behavior without being able to exceed admin/account safety limits.
+
+## Effective Policy Order
+
+Resolve upload settings in this order:
+
+1. built-in safe defaults;
+2. global admin defaults from `admin_settings`;
+3. admin per-account limits and detected Telegram caps from `telegram_account_limits`;
+4. user upload preferences, clamped to the effective admin/account bounds.
+
+User preferences must never:
+
+- raise `telegram_document_limit_bytes`;
+- bypass the effective safety margin;
+- create an application part larger than the effective document limit minus the effective safety margin;
+- set negative speed/cooldown values;
+- set invalid concurrency values.
 
 ## Required Behavior
 
-1. Add a `Move selected` control to the selection bar.
-2. Open a modal or compact picker that lets the user choose:
-   - root;
-   - the current folder's ancestors;
-   - visible folders in the current listing.
-3. Use `PATCH /files/bulk-move` for the selected IDs.
-4. Prevent invalid self moves in the UI when the selected set contains the target folder; keep backend validation as the final guard.
-5. Refresh the listing and clear selection after a successful move.
-6. Keep shared view read-only: the picker must only be available in the owner view.
-7. Do not change upload, sharing, recovery, or worker behavior in this task.
+1. Add persistent user upload preferences.
+2. Support nullable preference fields so a user can inherit the admin default for any individual field.
+3. Add authenticated owner endpoints for the current user's upload preferences:
+   - read current preferences plus the effective policy;
+   - update preferences;
+   - reset preferences back to inherited defaults.
+4. Include at least these fields:
+   - preferred max application part size bytes;
+   - preferred target upload bytes per second;
+   - preferred cooldown between parts in milliseconds;
+   - preferred max parallel uploads, clamped by admin policy if a hard cap exists.
+5. Keep admin/account document limit and safety margin authoritative.
+6. Use the user preferences in upload session creation and progress policy responses.
+7. Update docs to explain admin defaults vs user preferences.
+8. Do not change Telegram upload worker queue semantics beyond consuming the already resolved effective policy.
 
-## Suggested Implementation
+## Suggested Database Shape
 
-Keep the first implementation small and local to the embedded UI:
+Add a migration with a separate table, for example:
 
-- extend the selection bar with a `Move selected` button;
-- add a modal that reuses `state.folderStack` and the currently rendered file list;
-- include root as a target;
-- list visible child folders as targets;
-- call the existing `moveFiles(ids, parentID)` helper;
-- disable targets that are part of the selected set.
+```sql
+CREATE TABLE user_upload_preferences (
+    user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    preferred_upload_part_size_bytes BIGINT,
+    preferred_max_parallel_uploads INTEGER,
+    preferred_target_upload_bytes_per_second BIGINT,
+    preferred_cooldown_between_parts_ms INTEGER,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT user_upload_preferences_positive_part_size CHECK (
+        preferred_upload_part_size_bytes IS NULL OR preferred_upload_part_size_bytes > 0
+    ),
+    CONSTRAINT user_upload_preferences_positive_parallel CHECK (
+        preferred_max_parallel_uploads IS NULL OR preferred_max_parallel_uploads > 0
+    ),
+    CONSTRAINT user_upload_preferences_nonnegative_target_rate CHECK (
+        preferred_target_upload_bytes_per_second IS NULL OR preferred_target_upload_bytes_per_second >= 0
+    ),
+    CONSTRAINT user_upload_preferences_nonnegative_cooldown CHECK (
+        preferred_cooldown_between_parts_ms IS NULL OR preferred_cooldown_between_parts_ms >= 0
+    )
+);
+```
 
-If a full folder tree picker is too broad for this pass, document it as a later enhancement and keep this task scoped to current ancestors plus visible folders.
+Use the repo's migration style and numbering.
 
 ## Files To Inspect
 
+- `backend/migrations/`
+- `backend/internal/uploads/store.go`
+- `backend/internal/uploads/http.go`
+- `backend/internal/adminsettings/store.go`
+- `backend/internal/adminsettings/http.go`
+- `backend/internal/httpserver/router.go`
 - `backend/internal/httpserver/static/index.html`
-- `backend/internal/files/http.go`
-- `backend/internal/files/store.go`
-- `docs/development/files.md`
+- `docs/development/admin.md`
+- `docs/development/uploads.md`
 - `TeleVault-plan.md`
+
+## Implementation Notes
+
+- Prefer a small backend-first implementation. A minimal UI can be a simple settings section or modal if it fits cleanly; otherwise document the endpoint and leave richer UI as a follow-up.
+- Keep the API response explicit: return stored user preferences separately from the resolved effective policy so the UI can show inherited values clearly.
+- Clamp preferences at resolution time, not only at write time, because admin settings may change later.
+- Reject obviously invalid JSON values at write time with clear errors.
+- Avoid exposing Telegram peer/session secrets in policy responses.
 
 ## Tests To Add Or Update
 
-Add focused coverage where practical:
+Add focused coverage for:
 
-- embedded JavaScript syntax check;
-- Go tests if backend behavior changes;
-- update docs if the picker changes documented behavior.
+- migration-backed persistence if there is an existing integration test pattern;
+- effective policy resolution with no user preferences;
+- effective policy resolution with user preferences inside admin bounds;
+- clamping when user preferences exceed effective admin/account bounds;
+- invalid preference updates.
 
-Backend behavior should not need new tests if the task only wires the existing bulk move endpoint into the UI.
+If UI changes are included, also validate embedded JavaScript syntax.
 
 ## Verification
 
@@ -85,7 +135,7 @@ cd backend
 go test ./... -count=1
 ```
 
-Then validate the embedded JavaScript syntax, for example:
+If the embedded web UI changes, validate JavaScript syntax, for example:
 
 ```sh
 awk '/<script>/{flag=1;next} /<\/script>/{flag=0} flag' backend/internal/httpserver/static/index.html > /tmp/televault-index.js
@@ -100,11 +150,11 @@ git diff --check
 
 ## Acceptance Criteria
 
-- Selected owner-view items can be moved through a button-driven picker.
-- Root, ancestors, and visible child folders are available as targets.
-- Invalid selected-target moves are disabled or blocked in the UI.
-- Successful move refreshes the file list and clears selection.
-- Shared view does not expose owner-only move controls.
+- Users can store nullable upload preferences.
+- Upload creation uses resolved admin/account bounds plus user preferences.
+- Effective policy responses show the resolved result.
+- User preferences cannot bypass admin/account safety limits.
+- Existing admin settings and per-account limit behavior remains compatible.
+- Relevant docs explain the precedence model.
 - `go test ./... -count=1` passes.
-- Embedded JavaScript syntax check passes.
 - `git diff --check` passes.
