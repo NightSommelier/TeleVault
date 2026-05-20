@@ -66,6 +66,27 @@ func TestLocalSpoolDeleteIgnoresMissingFile(t *testing.T) {
 	}
 }
 
+func TestLocalSpoolDeleteRemovesEmptyUploadDirectory(t *testing.T) {
+	root := t.TempDir()
+	spool, err := NewLocalSpool(root)
+	if err != nil {
+		t.Fatalf("NewLocalSpool() error = %v", err)
+	}
+	if err := spool.Write(context.Background(), "upload-1/part-1.age", func(w io.Writer) error {
+		_, err := w.Write([]byte("ciphertext"))
+		return err
+	}); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+
+	if err := spool.Delete("upload-1/part-1.age"); err != nil {
+		t.Fatalf("Delete() error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "upload-1")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("upload dir stat error = %v, want os.ErrNotExist", err)
+	}
+}
+
 func TestCleanStorageKeyRejectsTraversal(t *testing.T) {
 	if _, err := cleanStorageKey("../secret"); err == nil {
 		t.Fatal("cleanStorageKey() accepted traversal")

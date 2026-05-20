@@ -48,6 +48,19 @@
       background: var(--danger);
       color: #fff;
     }
+    a.button-link {
+      display: inline-grid;
+      place-items: center;
+      min-height: 28px;
+      padding: 0 8px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--panel);
+      color: var(--ink);
+      text-decoration: none;
+      white-space: nowrap;
+      font-size: 12px;
+    }
     button.link {
       border: 0;
       background: transparent;
@@ -850,6 +863,7 @@
       applyingRoute: false,
       uploadQueue: [],
       uploadQueueRunning: false,
+      uploadMonitorRunning: false,
       nextUploadQueueID: 1,
       appInfo: null,
       uploadDebugAllowed: false,
@@ -969,8 +983,10 @@
       el.userName.textContent = user.displayName || user.username || `Telegram ${user.telegram_id}`;
       el.adminBtn.classList.toggle('hidden', user.role !== 'admin');
       restoreFolderState();
+      restoreUploadQueueState();
       if (!window.location.hash) window.location.hash = state.currentFolderId ? folderRoute(state.currentFolderId) : '#/';
       applyRoute();
+      monitorRestoredUploads();
     }
 
     function showLogin(message) {
@@ -985,7 +1001,9 @@
       state.detailsFile = null;
       state.uploadQueue = [];
       state.uploadQueueRunning = false;
+      state.uploadMonitorRunning = false;
       state.nextUploadQueueID = 1;
+      persistUploadQueueState();
       renderUploadQueue();
       closeDetailsDialog();
       el.loginView.classList.remove('hidden');
@@ -1230,14 +1248,15 @@
     }
 
     function renderFileActions(file) {
+      const downloadLink = `<a class="button-link" href="/files/${encodeURIComponent(file.id)}/download" download>Download</a>`;
       if (state.view === 'shared') {
-        return `<button data-download="${file.id}">Download</button><button data-details="${file.id}">Details</button>`;
+        return `${downloadLink}<button data-details="${file.id}">Details</button>`;
       }
       const deleteButton = `<button data-delete="${file.id}">Delete</button>`;
       if (file.type === 'folder') {
         return `<button data-open-folder="${file.id}">Open</button><button data-details="${file.id}">Details</button>${deleteButton}`;
       }
-      return `<button data-download="${file.id}">Download</button><button data-details="${file.id}">Details</button><button data-share="${file.id}">Share</button>${deleteButton}`;
+      return `${downloadLink}<button data-details="${file.id}">Details</button><button data-share="${file.id}">Share</button>${deleteButton}`;
     }
 
     function renderFileName(file) {
@@ -1823,6 +1842,7 @@
       const index = state.uploadQueue.findIndex((item) => item.id === id);
       if (index < 0) return;
       state.uploadQueue[index] = { ...state.uploadQueue[index], ...patch };
+      persistUploadQueueState();
       renderUploadQueue();
     }
 
@@ -1892,6 +1912,10 @@
         part_count: created.upload.part_count,
         plan: (created.upload.part_plan || []).map((part) => `${part.part_number}:${formatBytes(part.size || (part.end - part.start))}`).join(', '),
       });
+      updateQueueItem(item.id, {
+        uploadID: created.upload.id,
+        uploadCreatedAt: created.upload.created_at || new Date().toISOString(),
+      });
       await uploadParts(created.upload, item);
       updateQueueItem(item.id, {
         status: 'telegram',
@@ -1945,6 +1969,86 @@
         state.currentFolderId = '';
         state.folderStack = [];
       }
+    }
+
+    function persistUploadQueueState() {
+      const durable = state.uploadQueue.filter((item) => item.uploadID && item.safeToClose && !['complete', 'failed'].includes(item.status)).map((item) => ({
+        id: item.id,
+        uploadID: item.uploadID,
+        name: item.file && item.file.name ? item.file.name : 'Upload',
+        size: item.file && Number.isFinite(Number(item.file.size)) ? Number(item.file.size) : 0,
+        parentID: item.parentID || '',
+        status: item.status,
+        progress: item.progress || 50,
+        message: item.message || 'Server/worker can continue.',
+        uploadCreatedAt: item.uploadCreatedAt || null,
+      }));
+      localStorage.setItem('tdv.uploadQueue', JSON.stringify(durable));
+    }
+
+    function restoreUploadQueueState() {
+      try {
+        const saved = JSON.parse(localStorage.getItem('tdv.uploadQueue') || '[]');
+        if (!Array.isArray(saved)) return;
+        const restored = saved.filter((item) => item && typeof item.uploadID === 'string' && item.uploadID).map((item) => ({
+          id: Number(item.id) || state.nextUploadQueueID++,
+          uploadID: item.uploadID,
+          uploadCreatedAt: item.uploadCreatedAt || null,
+          file: {
+            name: typeof item.name === 'string' && item.name ? item.name : 'Upload',
+            size: Number(item.size) || 0,
+          },
+          parentID: typeof item.parentID === 'string' ? item.parentID : '',
+          status: item.status === 'completing' ? 'completing' : 'telegram',
+          progress: Number(item.progress) || 50,
+          message: typeof item.message === 'string' && item.message ? item.message : 'Restored. Server/worker can continue.',
+          error: '',
+          safeToClose: true,
+        }));
+        state.uploadQueue = restored;
+        const maxID = restored.reduce((max, item) => Math.max(max, item.id), 0);
+        state.nextUploadQueueID = Math.max(state.nextUploadQueueID, maxID + 1);
+        renderUploadQueue();
+      } catch (_) {
+        localStorage.removeItem('tdv.uploadQueue');
+      }
+    }
+
+    async function monitorRestoredUploads() {
+      if (state.uploadMonitorRunning) return;
+      state.uploadMonitorRunning = true;
+      try {
+        while (true) {
+          const item = state.uploadQueue.find((entry) => entry.uploadID && entry.safeToClose && !['complete', 'failed'].includes(entry.status));
+          if (!item) break;
+          try {
+            await monitorServerUpload(item);
+          } catch (err) {
+            updateQueueItem(item.id, {
+              status: 'failed',
+              message: err.message || 'Upload status check failed',
+              error: err.message || 'Upload status check failed',
+            });
+          }
+        }
+      } finally {
+        state.uploadMonitorRunning = false;
+      }
+    }
+
+    async function monitorServerUpload(item) {
+      const readyState = await waitUntilReady(item.uploadID, item);
+      if (readyState !== 'complete') {
+        updateQueueItem(item.id, { status: 'completing', progress: 96, message: 'Completing...', safeToClose: true });
+        try {
+          await api(`/uploads/${item.uploadID}/complete`, { method: 'POST', csrf: true });
+        } catch (err) {
+          if (err.message !== 'upload_not_found') throw err;
+        }
+      }
+      updateQueueItem(item.id, { status: 'complete', progress: 100, message: 'Complete', error: '' });
+      setUploadStatus(`Uploaded ${item.file.name}`);
+      await refreshFiles();
     }
 
     async function uploadParts(upload, item) {
@@ -2147,11 +2251,13 @@
       const item = state.uploadQueue.find((entry) => String(entry.id) === String(id));
       if (!item || (item.status !== 'complete' && item.status !== 'failed')) return;
       state.uploadQueue = state.uploadQueue.filter((entry) => String(entry.id) !== String(id));
+      persistUploadQueueState();
       renderUploadQueue();
     }
 
     function clearCompletedQueueItems() {
       state.uploadQueue = state.uploadQueue.filter((item) => item.status !== 'complete');
+      persistUploadQueueState();
       renderUploadQueue();
     }
 

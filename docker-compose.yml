@@ -26,12 +26,7 @@ services:
       retries: 10
 
   migrate:
-    build:
-      context: .
-      args:
-        APP_VERSION: ${APP_VERSION:-0.1.0-dev}
-        APP_COMMIT: ${APP_COMMIT:-unknown}
-        APP_BUILD_DATE: ${APP_BUILD_DATE:-unknown}
+    build: .
     image: televault:latest
     command: ["migrate", "up"]
     env_file: .env
@@ -43,12 +38,7 @@ services:
     restart: "no"
 
   api:
-    build:
-      context: .
-      args:
-        APP_VERSION: ${APP_VERSION:-0.1.0-dev}
-        APP_COMMIT: ${APP_COMMIT:-unknown}
-        APP_BUILD_DATE: ${APP_BUILD_DATE:-unknown}
+    build: .
     image: televault:latest
     command: ["api"]
     env_file: .env
@@ -73,12 +63,7 @@ services:
     restart: unless-stopped
 
   worker:
-    build:
-      context: .
-      args:
-        APP_VERSION: ${APP_VERSION:-0.1.0-dev}
-        APP_COMMIT: ${APP_COMMIT:-unknown}
-        APP_BUILD_DATE: ${APP_BUILD_DATE:-unknown}
+    build: .
     image: televault:latest
     command: ["worker"]
     env_file: .env
@@ -98,12 +83,7 @@ services:
     restart: unless-stopped
 
   cleanup:
-    build:
-      context: .
-      args:
-        APP_VERSION: ${APP_VERSION:-0.1.0-dev}
-        APP_COMMIT: ${APP_COMMIT:-unknown}
-        APP_BUILD_DATE: ${APP_BUILD_DATE:-unknown}
+    build: .
     image: televault:latest
     command:
       - sh

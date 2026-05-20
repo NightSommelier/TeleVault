@@ -81,11 +81,16 @@ func (s *LocalSpool) Delete(key string) error {
 	if err != nil {
 		return err
 	}
-	err = os.Remove(filepath.Join(s.root, key))
+	path := filepath.Join(s.root, key)
+	err = os.Remove(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	_ = os.Remove(filepath.Dir(path))
+	return nil
 }
 
 func (s *LocalSpool) Open(key string) (io.ReadCloser, error) {
