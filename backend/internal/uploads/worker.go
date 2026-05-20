@@ -137,7 +137,15 @@ func (w *DrainWorker) DrainLoop(ctx context.Context, pollInterval time.Duration)
 				state.Unlock()
 				notify()
 			}()
-			_ = w.drainClaimedWork(ctx, work)
+			if err := w.drainClaimedWork(ctx, work); err != nil {
+				w.settings.Logger.Warn(
+					"upload part drain failed",
+					"part_id", work.Part.ID,
+					"upload_id", work.Part.UploadID,
+					"part_number", work.Part.PartNumber,
+					"error", err,
+				)
+			}
 		}(work)
 	}
 
