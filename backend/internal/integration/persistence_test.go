@@ -737,6 +737,93 @@ func TestCancelUploadStopsQueueAndSchedulesCleanup(t *testing.T) {
 	}
 }
 
+func TestClaimQueuedPartWorkRespectsAccountParallelLimit(t *testing.T) {
+	database := openIntegrationDB(t)
+	sessionStore := auth.NewSessionStore(database)
+	settingsStore := adminsettings.NewStore(database, config.Config{
+		UploadPartSizeBytes:        5,
+		TelegramDocumentLimitBytes: 1024,
+		UploadSafetyMarginBytes:    64,
+	})
+	uploadStore := uploads.NewStore(database)
+	ctx := context.Background()
+
+	owner, cleanupOwner := createUserThroughLogin(t, database, sessionStore, 939_700_000_000+time.Now().UnixNano()%1_000_000_000)
+	defer cleanupOwner()
+
+	if _, err := settingsStore.UpdateUploadSettings(ctx, adminsettings.UploadSettings{
+		UploadPartSizeBytes:          5,
+		TelegramDocumentLimitBytes:   1024,
+		UploadSafetyMarginBytes:      64,
+		MaxParallelUploads:           4,
+		TargetUploadBytesPerSecond:   0,
+		CooldownBetweenPartsMillisec: 0,
+	}, owner.ID); err != nil {
+		t.Fatalf("UpdateUploadSettings() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = settingsStore.UpdateUploadSettings(context.Background(), adminsettings.UploadSettings{
+			UploadPartSizeBytes:          config.DefaultUploadPartSizeBytes,
+			TelegramDocumentLimitBytes:   config.DefaultTelegramDocumentLimitBytes,
+			UploadSafetyMarginBytes:      config.DefaultUploadSafetyMarginBytes,
+			MaxParallelUploads:           1,
+			TargetUploadBytesPerSecond:   0,
+			CooldownBetweenPartsMillisec: 0,
+		}, "")
+	})
+
+	now := time.Now().UTC()
+	upload, err := uploadStore.Create(ctx, uploads.CreateUploadParams{
+		OwnerID:       owner.ID,
+		Name:          "parallel-limit.bin",
+		PlaintextSize: 25,
+		PartSize:      5,
+		ExpiresAt:     now.Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("Create upload error = %v", err)
+	}
+	for part := 1; part <= 5; part++ {
+		if _, err := uploadStore.StagePart(ctx, uploads.StagePartParams{
+			OwnerID:        owner.ID,
+			UploadID:       upload.ID,
+			PartNumber:     part,
+			PlaintextSize:  5,
+			CiphertextSize: 9,
+			Checksum:       []byte(fmt.Sprintf("part-%d", part)),
+			UploadedSize:   int64(part * 5),
+			StorageBackend: uploads.LocalStagingBackend,
+			StorageKey:     fmt.Sprintf("parallel-limit.bin.part-%d", part),
+			AvailableAt:    now,
+			Now:            now,
+		}); err != nil {
+			t.Fatalf("StagePart(%d) error = %v", part, err)
+		}
+	}
+
+	for claim := 1; claim <= 4; claim++ {
+		work, err := uploadStore.ClaimQueuedPartWork(ctx, uploads.ClaimQueuedPartParams{
+			WorkerID:      fmt.Sprintf("worker-%d", claim),
+			Now:           now,
+			LeaseDuration: time.Minute,
+		})
+		if err != nil {
+			t.Fatalf("ClaimQueuedPartWork(%d) error = %v", claim, err)
+		}
+		if work.MaxParallelUploads != 4 {
+			t.Fatalf("ClaimQueuedPartWork(%d) MaxParallelUploads = %d, want 4", claim, work.MaxParallelUploads)
+		}
+	}
+
+	if _, err := uploadStore.ClaimQueuedPartWork(ctx, uploads.ClaimQueuedPartParams{
+		WorkerID:      "worker-over-limit",
+		Now:           now,
+		LeaseDuration: time.Minute,
+	}); !errors.Is(err, uploads.ErrUploadPartNotFound) {
+		t.Fatalf("ClaimQueuedPartWork() over limit error = %v, want ErrUploadPartNotFound", err)
+	}
+}
+
 func TestAdminUploadSettingsVaultUploadPartSize(t *testing.T) {
 	database := openIntegrationDB(t)
 	sessionStore := auth.NewSessionStore(database)
