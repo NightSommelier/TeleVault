@@ -969,7 +969,7 @@ WHERE id = $1
 	}
 
 	plaintextSize := nullableInt64(upload.PlaintextSize)
-	expectedParts := partCount(plaintextSize, upload.PartSize)
+	expectedParts := int64(len(uploadPartPlan(upload.ID, plaintextSize, upload.PartSize)))
 	parts, err := completeParts(ctx, tx, upload.ID)
 	if err != nil {
 		return File{}, err

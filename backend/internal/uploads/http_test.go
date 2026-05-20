@@ -42,7 +42,7 @@ func TestParseChecksumRejectsInvalidValue(t *testing.T) {
 }
 
 func TestPartCount(t *testing.T) {
-	partSize := int64(64 * 1024 * 1024)
+	partSize := int64(384 * 1024 * 1024)
 	tests := map[int64]int64{
 		0:            0,
 		1:            1,
@@ -54,6 +54,67 @@ func TestPartCount(t *testing.T) {
 		if got := partCount(size, partSize); got != want {
 			t.Fatalf("partCount(%d) = %d, want %d", size, got, want)
 		}
+	}
+}
+
+func TestUploadPartPlanUsesUnevenRanges(t *testing.T) {
+	maxPartSize := int64(384 * 1024 * 1024)
+	size := int64(1300 * 1024 * 1024)
+
+	plan := uploadPartPlan("upload-plan-test", size, maxPartSize)
+	if len(plan) != 4 {
+		t.Fatalf("len(plan) = %d, want 4", len(plan))
+	}
+
+	var cursor int64
+	sizes := make(map[int64]struct{})
+	for index, part := range plan {
+		if part.PartNumber != index+1 {
+			t.Fatalf("part number at index %d = %d", index, part.PartNumber)
+		}
+		if part.Start != cursor {
+			t.Fatalf("part %d start = %d, want %d", part.PartNumber, part.Start, cursor)
+		}
+		if part.End <= part.Start {
+			t.Fatalf("part %d has invalid range [%d,%d)", part.PartNumber, part.Start, part.End)
+		}
+		if part.Size != part.End-part.Start {
+			t.Fatalf("part %d size = %d, want %d", part.PartNumber, part.Size, part.End-part.Start)
+		}
+		if part.Size > maxPartSize {
+			t.Fatalf("part %d size = %d, exceeds max %d", part.PartNumber, part.Size, maxPartSize)
+		}
+		sizes[part.Size] = struct{}{}
+		cursor = part.End
+	}
+	if cursor != size {
+		t.Fatalf("planned size = %d, want %d", cursor, size)
+	}
+	if len(sizes) == 1 {
+		t.Fatalf("all planned parts have the same size: %+v", plan)
+	}
+}
+
+func TestUploadResponseIncludesPartPlan(t *testing.T) {
+	upload := Upload{
+		ID:            "upload-response-plan",
+		PlaintextSize: sql.NullInt64{Int64: 100, Valid: true},
+		PartSize:      40,
+	}
+
+	response := uploadResponse(upload)
+	plan, ok := response["part_plan"].([]map[string]any)
+	if !ok {
+		t.Fatalf("part_plan = %#v, want object array", response["part_plan"])
+	}
+	if response["part_count"] != len(plan) {
+		t.Fatalf("part_count = %#v, want %d", response["part_count"], len(plan))
+	}
+	if len(plan) != 3 {
+		t.Fatalf("len(part_plan) = %d, want 3", len(plan))
+	}
+	if plan[0]["part_number"] != 1 || plan[0]["start"] != int64(0) {
+		t.Fatalf("first part = %#v", plan[0])
 	}
 }
 

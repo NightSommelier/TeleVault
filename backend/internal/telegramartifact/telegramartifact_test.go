@@ -38,8 +38,8 @@ func TestWrapReaderAndUnwrapReaderRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadAll(WrapReader()) error = %v", err)
 	}
-	if bytes.HasPrefix(wrapped, []byte(ageMagicPrefix)) {
-		t.Fatal("wrapped bytes start with age header")
+	if bytes.Contains(wrapped, []byte(ageMagicPrefix)) {
+		t.Fatal("wrapped bytes contain age header")
 	}
 
 	unwrap, err := UnwrapReader(bytes.NewReader(wrapped))
@@ -52,6 +52,35 @@ func TestWrapReaderAndUnwrapReaderRoundTrip(t *testing.T) {
 	}
 	if !bytes.Equal(roundTrip, ciphertext.Bytes()) {
 		t.Fatal("unwrapped bytes did not match original ciphertext")
+	}
+}
+
+func TestUnwrapReaderPassesThroughLegacyWrappedCiphertext(t *testing.T) {
+	identity, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatalf("GenerateX25519Identity() error = %v", err)
+	}
+	var ciphertext bytes.Buffer
+	if _, err := agefile.EncryptStream(&ciphertext, bytes.NewReader([]byte("legacy wrapped")), identity.Recipient()); err != nil {
+		t.Fatalf("EncryptStream() error = %v", err)
+	}
+
+	spec := SpecForArtifactID("part-1")
+	legacy := bytes.NewBuffer(nil)
+	legacy.Write(spec.Profile.Prefix)
+	legacy.Write(wrapperHeader(spec.ProfileIndex, wrapperVersionPlain))
+	legacy.Write(ciphertext.Bytes())
+
+	unwrap, err := UnwrapReader(bytes.NewReader(legacy.Bytes()))
+	if err != nil {
+		t.Fatalf("UnwrapReader() error = %v", err)
+	}
+	roundTrip, err := io.ReadAll(unwrap)
+	if err != nil {
+		t.Fatalf("ReadAll(UnwrapReader()) error = %v", err)
+	}
+	if !bytes.Equal(roundTrip, ciphertext.Bytes()) {
+		t.Fatal("legacy wrapped ciphertext changed during unwrap")
 	}
 }
 

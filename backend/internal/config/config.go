@@ -14,7 +14,7 @@ const (
 	EnvDevelopment = "development"
 	EnvProduction  = "production"
 
-	DefaultUploadPartSizeBytes        int64 = 64 * 1024 * 1024
+	DefaultUploadPartSizeBytes        int64 = 384 * 1024 * 1024
 	DefaultTelegramDocumentLimitBytes int64 = 2 * 1024 * 1024 * 1024
 	DefaultUploadSafetyMarginBytes    int64 = 64 * 1024 * 1024
 	DefaultUploadStagingDir                 = "var/upload-staging"

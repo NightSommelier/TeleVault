@@ -223,13 +223,24 @@
       flex: 0 0 auto;
       display: inline-flex;
       align-items: center;
+      justify-content: center;
+      width: 28px;
+      height: 28px;
     }
     .file-select input {
       margin: 0;
+      width: 16px;
+      height: 16px;
     }
     .file-label {
       min-width: 0;
       overflow-wrap: anywhere;
+    }
+    .file-label[role="button"] {
+      cursor: pointer;
+    }
+    .file-label[role="button"]:hover {
+      color: var(--accent);
     }
     .folder-mark {
       width: 24px;
@@ -957,16 +968,35 @@
     function wireFileSelectionHandlers(files) {
       el.filesBody.querySelectorAll('[data-select-file]').forEach((input) => {
         input.addEventListener('change', () => {
-          const id = input.dataset.selectFile;
-          if (!id) return;
-          if (input.checked) {
-            state.selectedFileIds.add(id);
-          } else {
-            state.selectedFileIds.delete(id);
-          }
-          renderSelectionBar(files);
+          setFileSelection(input.dataset.selectFile, input.checked, files);
         });
       });
+      el.filesBody.querySelectorAll('[data-select-label]').forEach((label) => {
+        label.addEventListener('click', () => {
+          toggleFileSelection(label.dataset.selectLabel, files);
+        });
+        label.addEventListener('keydown', (event) => {
+          if (event.key !== 'Enter' && event.key !== ' ') return;
+          event.preventDefault();
+          toggleFileSelection(label.dataset.selectLabel, files);
+        });
+      });
+    }
+
+    function setFileSelection(id, selected, files) {
+      if (!id || state.view !== 'own') return;
+      if (selected) {
+        state.selectedFileIds.add(id);
+      } else {
+        state.selectedFileIds.delete(id);
+      }
+      syncSelectionCheckboxes();
+      renderSelectionBar(files);
+    }
+
+    function toggleFileSelection(id, files) {
+      if (!id || state.view !== 'own') return;
+      setFileSelection(id, !state.selectedFileIds.has(id), files);
     }
 
     function wireFileRowDragHandlers(files) {
@@ -1032,9 +1062,10 @@
     function renderFileName(file) {
       const name = escapeHTML(file.name || 'Untitled');
       const select = `<label class="file-select"><input type="checkbox" data-select-file="${file.id}" ${state.selectedFileIds.has(file.id) ? 'checked' : ''}></label>`;
+      const selectLabel = state.view === 'own' ? ` data-select-label="${file.id}" role="button" tabindex="0"` : '';
       const label = file.type !== 'folder'
-        ? `<span class="file-label">${name}</span>`
-        : `<button class="link folder-name file-label" data-open-folder="${file.id}"><span class="folder-mark" aria-hidden="true"></span>${name}</button>`;
+        ? `<span class="file-label"${selectLabel}>${name}</span>`
+        : `<span class="folder-name file-label"${selectLabel}><span class="folder-mark" aria-hidden="true"></span>${name}</span>`;
       return `<span class="file-cell">${select}${label}</span>`;
     }
 
@@ -1692,11 +1723,12 @@
     }
 
     async function uploadParts(upload, item) {
-      const partSize = upload.part_size;
-      const count = upload.part_count;
-      for (let part = 1; part <= count; part++) {
-        const start = (part - 1) * partSize;
-        const end = Math.min(start + partSize, item.file.size);
+      const plan = uploadPartPlan(upload, item.file.size);
+      const count = plan.length;
+      for (const partInfo of plan) {
+        const part = partInfo.partNumber;
+        const start = partInfo.start;
+        const end = partInfo.end;
         updateQueueItem(item.id, {
           status: 'staging',
           message: `Staging part ${part}/${count}`,
@@ -1720,6 +1752,42 @@
           throw new Error(message);
         }
       }
+    }
+
+    function uploadPartPlan(upload, fileSize) {
+      const serverPlan = Array.isArray(upload.part_plan) ? upload.part_plan : [];
+      const normalized = serverPlan.map((part) => ({
+        partNumber: Number(part.part_number),
+        start: Number(part.start),
+        end: Number(part.end),
+      })).filter((part) => (
+        Number.isInteger(part.partNumber) &&
+        Number.isFinite(part.start) &&
+        Number.isFinite(part.end) &&
+        part.partNumber > 0 &&
+        part.start >= 0 &&
+        part.end >= part.start &&
+        part.end <= fileSize
+      ));
+      if (normalized.length) {
+        return normalized.sort((a, b) => a.partNumber - b.partNumber);
+      }
+
+      const partSize = Number(upload.part_size);
+      const count = Number(upload.part_count);
+      if (!Number.isFinite(partSize) || partSize <= 0 || !Number.isInteger(count) || count < 1) {
+        throw new Error('Upload part plan is invalid.');
+      }
+      const fallback = [];
+      for (let part = 1; part <= count; part++) {
+        const start = (part - 1) * partSize;
+        fallback.push({
+          partNumber: part,
+          start,
+          end: Math.min(start + partSize, fileSize),
+        });
+      }
+      return fallback;
     }
 
     async function waitUntilReady(uploadID, item) {

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"hash/fnv"
 	"io"
 	"net/http"
 	"sort"
@@ -456,6 +457,7 @@ func parseChecksum(value string) (string, []byte, error) {
 }
 
 func uploadResponse(upload Upload) map[string]any {
+	plan := uploadPartPlan(upload.ID, nullableInt64(upload.PlaintextSize), upload.PartSize)
 	return map[string]any{
 		"id":                 upload.ID,
 		"parent_id":          nullableStringValue(upload.ParentID),
@@ -463,7 +465,8 @@ func uploadResponse(upload Upload) map[string]any {
 		"mime_type":          nullableStringValue(upload.MimeType),
 		"plaintext_size":     nullableInt64Value(upload.PlaintextSize),
 		"part_size":          upload.PartSize,
-		"part_count":         partCount(nullableInt64(upload.PlaintextSize), upload.PartSize),
+		"part_count":         len(plan),
+		"part_plan":          uploadPartPlanResponse(plan),
 		"status":             upload.Status,
 		"idempotency_key":    nullableStringValue(upload.IdempotencyKey),
 		"checksum_algorithm": nullableStringValue(upload.ChecksumAlgorithm),
@@ -512,7 +515,7 @@ func uploadPartsResponse(parts []UploadPart) []map[string]any {
 }
 
 func uploadProgressResponse(upload Upload, parts []UploadPart, settings EffectiveSettings, now func() time.Time) map[string]any {
-	expectedParts := partCount(nullableInt64(upload.PlaintextSize), upload.PartSize)
+	expectedParts := int64(len(uploadPartPlan(upload.ID, nullableInt64(upload.PlaintextSize), upload.PartSize)))
 	progress := map[string]any{
 		"expected_parts":           expectedParts,
 		"received_parts":           len(parts),
@@ -619,6 +622,88 @@ func fileResponse(file File) map[string]any {
 
 func uploadPartName(uploadID string, partNumber int) string {
 	return uploadID + ".part-" + strconv.Itoa(partNumber) + ".age"
+}
+
+type UploadPartRange struct {
+	PartNumber int
+	Start      int64
+	End        int64
+	Size       int64
+}
+
+func uploadPartPlan(uploadID string, size int64, maxPartSize int64) []UploadPartRange {
+	if size <= 0 || maxPartSize <= 0 {
+		return nil
+	}
+	count := int(partCount(size, maxPartSize))
+	if count <= 1 {
+		return []UploadPartRange{{PartNumber: 1, Start: 0, End: size, Size: size}}
+	}
+
+	minPartSize := maxPartSize / 2
+	if minPartSize < 8*1024*1024 {
+		minPartSize = minInt64(maxPartSize, 8*1024*1024)
+	}
+
+	plan := make([]UploadPartRange, 0, count)
+	var start int64
+	for part := 1; part <= count; part++ {
+		remaining := size - start
+		remainingParts := int64(count - part + 1)
+		partSize := remaining
+		if remainingParts > 1 {
+			low := maxInt64(minPartSize, remaining-maxPartSize*(remainingParts-1))
+			high := minInt64(maxPartSize, remaining-minPartSize*(remainingParts-1))
+			if high < low {
+				low = maxInt64(1, remaining/remainingParts)
+				high = minInt64(maxPartSize, remaining-(remainingParts-1))
+			}
+			partSize = stableRange(uploadID, part, low, high)
+		}
+		end := start + partSize
+		plan = append(plan, UploadPartRange{PartNumber: part, Start: start, End: end, Size: partSize})
+		start = end
+	}
+	return plan
+}
+
+func uploadPartPlanResponse(plan []UploadPartRange) []map[string]any {
+	out := make([]map[string]any, 0, len(plan))
+	for _, part := range plan {
+		out = append(out, map[string]any{
+			"part_number": part.PartNumber,
+			"start":       part.Start,
+			"end":         part.End,
+			"size":        part.Size,
+		})
+	}
+	return out
+}
+
+func stableRange(uploadID string, part int, low int64, high int64) int64 {
+	if high <= low {
+		return low
+	}
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(uploadID))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write([]byte(strconv.Itoa(part)))
+	span := uint64(high - low + 1)
+	return low + int64(h.Sum64()%span)
+}
+
+func minInt64(a int64, b int64) int64 {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func maxInt64(a int64, b int64) int64 {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func uploadPartArtifactID(uploadID string, partNumber int) string {

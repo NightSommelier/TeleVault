@@ -3,6 +3,7 @@ package telegramartifact
 import (
 	"bufio"
 	"bytes"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"hash/fnv"
@@ -10,8 +11,10 @@ import (
 )
 
 const (
-	wrapperMagic   = "TVW1"
-	ageMagicPrefix = "age-encryption.org/v1"
+	wrapperMagic        = "TVW1"
+	wrapperVersionPlain = 0x01
+	wrapperVersionXOR   = 0x02
+	ageMagicPrefix      = "age-encryption.org/v1"
 )
 
 type DecoyProfile struct {
@@ -114,8 +117,8 @@ func WrapReader(artifactID string, src io.Reader) io.Reader {
 	spec := SpecForArtifactID(artifactID)
 	return io.MultiReader(
 		bytes.NewReader(spec.Profile.Prefix),
-		bytes.NewReader(wrapperHeader(spec.ProfileIndex)),
-		src,
+		bytes.NewReader(wrapperHeader(spec.ProfileIndex, wrapperVersionXOR)),
+		newMaskReader(src, spec.ProfileIndex),
 	)
 }
 
@@ -130,33 +133,38 @@ func UnwrapReader(src io.Reader) (io.Reader, error) {
 		return br, nil
 	}
 
-	spec, ok := matchWrappedSpec(peek)
+	spec, version, ok := matchWrappedSpec(peek)
 	if !ok {
 		return nil, errors.New("telegram artifact wrapper not recognized")
 	}
 
-	consume := len(spec.Profile.Prefix) + len(wrapperHeader(spec.ProfileIndex))
+	consume := len(spec.Profile.Prefix) + len(wrapperHeader(spec.ProfileIndex, version))
 	if _, err := br.Discard(consume); err != nil {
 		return nil, err
+	}
+	if version == wrapperVersionXOR {
+		return newMaskReader(br, spec.ProfileIndex), nil
 	}
 	return br, nil
 }
 
-func matchWrappedSpec(peek []byte) (ArtifactSpec, bool) {
+func matchWrappedSpec(peek []byte) (ArtifactSpec, byte, bool) {
 	for idx, profile := range profiles {
 		spec := ArtifactSpec{ProfileIndex: idx, Profile: profile}
-		header := wrapperHeader(idx)
-		expected := append([]byte{}, profile.Prefix...)
-		expected = append(expected, header...)
-		if bytes.HasPrefix(peek, expected) {
-			return spec, true
+		for _, version := range []byte{wrapperVersionXOR, wrapperVersionPlain} {
+			header := wrapperHeader(idx, version)
+			expected := append([]byte{}, profile.Prefix...)
+			expected = append(expected, header...)
+			if bytes.HasPrefix(peek, expected) {
+				return spec, version, true
+			}
 		}
 	}
-	return ArtifactSpec{}, false
+	return ArtifactSpec{}, 0, false
 }
 
-func wrapperHeader(profileIndex int) []byte {
-	return []byte{wrapperMagic[0], wrapperMagic[1], wrapperMagic[2], wrapperMagic[3], byte(profileIndex), 0x01}
+func wrapperHeader(profileIndex int, version byte) []byte {
+	return []byte{wrapperMagic[0], wrapperMagic[1], wrapperMagic[2], wrapperMagic[3], byte(profileIndex), version}
 }
 
 func stableIndex(key string, modulo int) int {
@@ -171,12 +179,49 @@ func stableIndex(key string, modulo int) int {
 func maxDetectBytes() int {
 	maxLen := len(ageMagicPrefix)
 	for _, profile := range profiles {
-		length := len(profile.Prefix) + len(wrapperHeader(0))
+		length := len(profile.Prefix) + len(wrapperHeader(0, wrapperVersionXOR))
 		if length > maxLen {
 			maxLen = length
 		}
 	}
 	return maxLen
+}
+
+type maskReader struct {
+	src     io.Reader
+	key     [32]byte
+	offset  uint64
+	block   [32]byte
+	blockID uint64
+}
+
+func newMaskReader(src io.Reader, profileIndex int) io.Reader {
+	key := sha256.Sum256([]byte(fmt.Sprintf("televault-artifact-mask:v1:%d", profileIndex)))
+	return &maskReader{src: src, key: key}
+}
+
+func (r *maskReader) Read(p []byte) (int, error) {
+	n, err := r.src.Read(p)
+	for i := 0; i < n; i++ {
+		p[i] ^= r.nextMaskByte()
+	}
+	return n, err
+}
+
+func (r *maskReader) nextMaskByte() byte {
+	blockID := r.offset / uint64(len(r.block))
+	if r.offset%uint64(len(r.block)) == 0 || blockID != r.blockID {
+		seed := make([]byte, 40)
+		copy(seed, r.key[:])
+		for i := 0; i < 8; i++ {
+			seed[32+i] = byte(blockID >> (8 * i))
+		}
+		r.block = sha256.Sum256(seed)
+		r.blockID = blockID
+	}
+	value := r.block[r.offset%uint64(len(r.block))]
+	r.offset++
+	return value
 }
 
 func (s ArtifactSpec) String() string {
