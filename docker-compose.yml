@@ -1,15 +1,22 @@
+x-env: &env
+  build: .
+  image: televault:latest
+  restart: unless-stopped
+  env_file: .env
+
+
 services:
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_DB: televaultvault
-      POSTGRES_USER: televaultvault
-      POSTGRES_PASSWORD: televaultvault
+      POSTGRES_DB: televault
+      POSTGRES_USER: televaultpass
+      POSTGRES_PASSWORD: televaultdb
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U televaultvault -d televaultvault"]
+      test: ["CMD-SHELL", "pg_isready -U televaultpass -d televault"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -26,24 +33,20 @@ services:
       retries: 10
 
   migrate:
-    build: .
-    image: televault:latest
+    <<: *env
     command: ["migrate", "up"]
-    env_file: .env
     environment:
-      DATABASE_URL: postgres://televaultvault:televaultvault@postgres:5432/televaultvault?sslmode=disable
+      DATABASE_URL: postgres://televaultpass:televaultdb@postgres:5432/televault?sslmode=disable
+    restart: "no"
     depends_on:
       postgres:
         condition: service_healthy
-    restart: "no"
 
   api:
-    build: .
-    image: televault:latest
+    <<: *env
     command: ["api"]
-    env_file: .env
     environment:
-      DATABASE_URL: postgres://televaultvault:televaultvault@postgres:5432/televaultvault?sslmode=disable
+      DATABASE_URL: postgres://televaultpass:televaultdb@postgres:5432/televault?sslmode=disable
       VALKEY_ADDR: valkey:6379
       UPLOAD_STAGING_DIR: /data/upload-staging
     depends_on:
@@ -60,15 +63,12 @@ services:
       interval: 10s
       timeout: 5s
       retries: 12
-    restart: unless-stopped
 
   worker:
-    build: .
-    image: televault:latest
+    <<: *env
     command: ["worker"]
-    env_file: .env
     environment:
-      DATABASE_URL: postgres://televaultvault:televaultvault@postgres:5432/televaultvault?sslmode=disable
+      DATABASE_URL: postgres://televaultpass:televaultdb@postgres:5432/televault?sslmode=disable
       VALKEY_ADDR: valkey:6379
       UPLOAD_STAGING_DIR: /data/upload-staging
     depends_on:
@@ -80,18 +80,15 @@ services:
         condition: service_healthy
     volumes:
       - app-data:/data
-    restart: unless-stopped
 
   cleanup:
-    build: .
-    image: televault:latest
+    <<: *env
     command:
       - sh
       - -c
       - while true; do cleanup; sleep "$${CLEANUP_INTERVAL_SECONDS:-300}"; done
-    env_file: .env
     environment:
-      DATABASE_URL: postgres://televaultvault:televaultvault@postgres:5432/televaultvault?sslmode=disable
+      DATABASE_URL: postgres://televaultpass:televaultdb@postgres:5432/televault?sslmode=disable
       VALKEY_ADDR: valkey:6379
       UPLOAD_STAGING_DIR: /data/upload-staging
     depends_on:
@@ -103,7 +100,6 @@ services:
         condition: service_healthy
     volumes:
       - app-data:/data
-    restart: unless-stopped
 
 volumes:
   app-data:
