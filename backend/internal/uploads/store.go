@@ -18,6 +18,7 @@ var ErrUploadSizeMismatch = errors.New("upload size mismatch")
 var ErrUploadChecksumMismatch = errors.New("upload checksum mismatch")
 var ErrUploadPartOutOfOrder = errors.New("upload part out of order")
 var ErrUploadPartNotFound = errors.New("upload part not found")
+var ErrUploadPartSizeMismatch = errors.New("upload part size mismatch")
 
 const (
 	StatusPending   = "pending"
@@ -49,6 +50,8 @@ type UploadPart struct {
 	ID             string
 	UploadID       string
 	PartNumber     int
+	PlaintextStart sql.NullInt64
+	PlaintextEnd   sql.NullInt64
 	PlaintextSize  sql.NullInt64
 	CiphertextSize sql.NullInt64
 	Checksum       []byte
@@ -207,7 +210,7 @@ func (s *Store) Create(ctx context.Context, params CreateUploadParams) (Upload, 
 		return s.createIdempotent(ctx, params)
 	}
 
-	return scanUpload(s.db.QueryRowContext(ctx, `
+	upload, err := scanUpload(s.db.QueryRowContext(ctx, `
 INSERT INTO uploads (
     owner_id, parent_id, name_plain, mime_type, plaintext_size, part_size,
     status, checksum_algorithm, checksum, expires_at
@@ -226,6 +229,13 @@ RETURNING id, owner_id, parent_id, name_plain, mime_type, plaintext_size, part_s
 		nullableBytes(params.Checksum),
 		params.ExpiresAt,
 	))
+	if err != nil {
+		return Upload{}, err
+	}
+	if err := s.ensureUploadPlan(ctx, upload); err != nil {
+		return Upload{}, err
+	}
+	return upload, nil
 }
 
 func (s *Store) CompletePart(ctx context.Context, params CompletePartParams) (UploadPart, error) {
@@ -269,32 +279,35 @@ WHERE id = $1
 	if nextPartNumber != params.PartNumber {
 		return UploadPart{}, ErrUploadPartOutOfOrder
 	}
+	if err := validateUploadPartSize(ctx, tx, params.UploadID, params.PartNumber, params.PlaintextSize); err != nil {
+		return UploadPart{}, err
+	}
 	part, err := scanUploadPart(tx.QueryRowContext(ctx, `
-INSERT INTO upload_parts (upload_id, part_number, plaintext_size, ciphertext_size, checksum, telegram_peer, telegram_message_id, status)
-VALUES ($1, $2, $3, $4, $5, NULLIF($6, ''), $7, 'complete')
-ON CONFLICT (upload_id, part_number)
-DO UPDATE SET
-    plaintext_size = EXCLUDED.plaintext_size,
-    ciphertext_size = EXCLUDED.ciphertext_size,
-    checksum = EXCLUDED.checksum,
-    telegram_peer = EXCLUDED.telegram_peer,
-    telegram_message_id = EXCLUDED.telegram_message_id,
+UPDATE upload_parts
+SET ciphertext_size = $3,
+    checksum = $4,
+    telegram_peer = NULLIF($5, ''),
+    telegram_message_id = $6,
     status = 'complete',
     leased_until = NULL,
     last_error = NULL,
     worker_id = NULL,
     updated_at = now()
-WHERE upload_parts.status != 'complete'
-RETURNING id, upload_id, part_number, plaintext_size, ciphertext_size, checksum, telegram_peer, telegram_message_id,
+WHERE upload_id = $1
+  AND part_number = $2
+  AND status != 'complete'
+RETURNING id, upload_id, part_number, plaintext_start, plaintext_end, plaintext_size, ciphertext_size, checksum, telegram_peer, telegram_message_id,
           status, storage_backend, storage_key, available_at, leased_until, attempts, last_error, worker_id, created_at, updated_at`,
 		params.UploadID,
 		params.PartNumber,
-		params.PlaintextSize,
 		params.CiphertextSize,
 		nullableBytes(params.Checksum),
 		params.TelegramPeer,
 		nullableInt64Param(params.MessageID),
 	))
+	if errors.Is(err, sql.ErrNoRows) {
+		return UploadPart{}, ErrUploadPartOutOfOrder
+	}
 	if err != nil {
 		return UploadPart{}, err
 	}
@@ -383,31 +396,28 @@ WHERE id = $1
 	if nextPartNumber != params.PartNumber {
 		return UploadPart{}, ErrUploadPartOutOfOrder
 	}
+	if err := validateUploadPartSize(ctx, tx, params.UploadID, params.PartNumber, params.PlaintextSize); err != nil {
+		return UploadPart{}, err
+	}
 	part, err := scanUploadPart(tx.QueryRowContext(ctx, `
-INSERT INTO upload_parts (
-    upload_id, part_number, plaintext_size, ciphertext_size, checksum, status,
-    storage_backend, storage_key, available_at
-)
-VALUES ($1, $2, $3, $4, $5, 'pending', $6, $7, $8)
-ON CONFLICT (upload_id, part_number)
-DO UPDATE SET
-    plaintext_size = EXCLUDED.plaintext_size,
-    ciphertext_size = EXCLUDED.ciphertext_size,
-    checksum = EXCLUDED.checksum,
+UPDATE upload_parts
+SET ciphertext_size = $3,
+    checksum = $4,
     status = 'pending',
-    storage_backend = EXCLUDED.storage_backend,
-    storage_key = EXCLUDED.storage_key,
-    available_at = EXCLUDED.available_at,
+    storage_backend = $5,
+    storage_key = $6,
+    available_at = $7,
     leased_until = NULL,
     last_error = NULL,
     worker_id = NULL,
     updated_at = now()
-WHERE upload_parts.status != 'complete'
-RETURNING id, upload_id, part_number, plaintext_size, ciphertext_size, checksum, telegram_peer, telegram_message_id,
+WHERE upload_id = $1
+  AND part_number = $2
+  AND status != 'complete'
+RETURNING id, upload_id, part_number, plaintext_start, plaintext_end, plaintext_size, ciphertext_size, checksum, telegram_peer, telegram_message_id,
           status, storage_backend, storage_key, available_at, leased_until, attempts, last_error, worker_id, created_at, updated_at`,
 		params.UploadID,
 		params.PartNumber,
-		params.PlaintextSize,
 		params.CiphertextSize,
 		nullableBytes(params.Checksum),
 		params.StorageBackend,
@@ -469,7 +479,7 @@ SET status = 'complete',
     updated_at = now()
 WHERE id = $1
   AND status = 'pending'
-RETURNING id, upload_id, part_number, plaintext_size, ciphertext_size, checksum, telegram_peer, telegram_message_id,
+RETURNING id, upload_id, part_number, plaintext_start, plaintext_end, plaintext_size, ciphertext_size, checksum, telegram_peer, telegram_message_id,
           status, storage_backend, storage_key, available_at, leased_until, attempts, last_error, worker_id, created_at, updated_at`,
 		params.PartID,
 		params.TelegramPeer,
@@ -517,7 +527,7 @@ SET leased_until = $2,
     updated_at = now()
 FROM next_part
 WHERE p.id = next_part.id
-RETURNING p.id, p.upload_id, p.part_number, p.plaintext_size, p.ciphertext_size, p.checksum,
+RETURNING p.id, p.upload_id, p.part_number, p.plaintext_start, p.plaintext_end, p.plaintext_size, p.ciphertext_size, p.checksum,
           p.telegram_peer, p.telegram_message_id, p.status, p.storage_backend, p.storage_key,
           p.available_at, p.leased_until, p.attempts, p.last_error, p.worker_id, p.created_at, p.updated_at`,
 		params.Now,
@@ -527,6 +537,8 @@ RETURNING p.id, p.upload_id, p.part_number, p.plaintext_size, p.ciphertext_size,
 		&part.ID,
 		&part.UploadID,
 		&part.PartNumber,
+		&part.PlaintextStart,
+		&part.PlaintextEnd,
 		&part.PlaintextSize,
 		&part.CiphertextSize,
 		&part.Checksum,
@@ -593,11 +605,11 @@ claimed AS (
         updated_at = now()
     FROM next_part
     WHERE p.id = next_part.id
-    RETURNING p.id, p.upload_id, p.part_number, p.plaintext_size, p.ciphertext_size, p.checksum,
+    RETURNING p.id, p.upload_id, p.part_number, p.plaintext_start, p.plaintext_end, p.plaintext_size, p.ciphertext_size, p.checksum,
               p.telegram_peer, p.telegram_message_id, p.status, p.storage_backend, p.storage_key,
               p.available_at, p.leased_until, p.attempts, p.last_error, p.worker_id, p.created_at, p.updated_at
 )
-SELECT claimed.id, claimed.upload_id, claimed.part_number, claimed.plaintext_size, claimed.ciphertext_size,
+SELECT claimed.id, claimed.upload_id, claimed.part_number, claimed.plaintext_start, claimed.plaintext_end, claimed.plaintext_size, claimed.ciphertext_size,
        claimed.checksum, claimed.telegram_peer, claimed.telegram_message_id, claimed.status,
        claimed.storage_backend, claimed.storage_key, claimed.available_at, claimed.leased_until,
        claimed.attempts, claimed.last_error, claimed.worker_id, claimed.created_at, claimed.updated_at,
@@ -618,6 +630,8 @@ LEFT JOIN admin_settings ON admin_settings.id = TRUE`,
 		&work.Part.ID,
 		&work.Part.UploadID,
 		&work.Part.PartNumber,
+		&work.Part.PlaintextStart,
+		&work.Part.PlaintextEnd,
 		&work.Part.PlaintextSize,
 		&work.Part.CiphertextSize,
 		&work.Part.Checksum,
@@ -969,7 +983,11 @@ WHERE id = $1
 	}
 
 	plaintextSize := nullableInt64(upload.PlaintextSize)
-	expectedParts := int64(len(uploadPartPlan(upload.ID, plaintextSize, upload.PartSize)))
+	plannedParts, err := allUploadParts(ctx, tx, upload.ID)
+	if err != nil {
+		return File{}, err
+	}
+	expectedParts := int64(len(plannedParts))
 	parts, err := completeParts(ctx, tx, upload.ID)
 	if err != nil {
 		return File{}, err
@@ -982,7 +1000,10 @@ WHERE id = $1
 	var ciphertextTotal int64
 	for i, part := range parts {
 		expectedPartNumber := i + 1
-		if part.PartNumber != expectedPartNumber || !part.PlaintextSize.Valid || !part.CiphertextSize.Valid || !part.TelegramPeer.Valid || !part.MessageID.Valid {
+		if part.PartNumber != expectedPartNumber || !part.PlaintextStart.Valid || !part.PlaintextEnd.Valid || !part.PlaintextSize.Valid || !part.CiphertextSize.Valid || !part.TelegramPeer.Valid || !part.MessageID.Valid {
+			return File{}, ErrUploadIncomplete
+		}
+		if part.PlaintextEnd.Int64-part.PlaintextStart.Int64 != part.PlaintextSize.Int64 {
 			return File{}, ErrUploadIncomplete
 		}
 		plaintextTotal += part.PlaintextSize.Int64
@@ -1023,10 +1044,16 @@ RETURNING id, owner_id, parent_id, name_plain, mime_type, plaintext_size, cipher
 
 	for _, part := range parts {
 		if _, err := tx.ExecContext(ctx, `
-INSERT INTO file_parts (file_id, part_number, telegram_peer, telegram_message_id, ciphertext_size, checksum)
-VALUES ($1, $2, $3, $4, $5, $6)`,
+INSERT INTO file_parts (
+    file_id, part_number, plaintext_start, plaintext_end, plaintext_size,
+    telegram_peer, telegram_message_id, ciphertext_size, checksum
+)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
 			file.ID,
 			part.PartNumber,
+			part.PlaintextStart,
+			part.PlaintextEnd,
+			part.PlaintextSize.Int64,
 			part.TelegramPeer.String,
 			part.MessageID.Int64,
 			part.CiphertextSize.Int64,
@@ -1073,7 +1100,7 @@ WHERE id = $1
 	}
 
 	rows, err := s.db.QueryContext(ctx, `
-SELECT id, upload_id, part_number, plaintext_size, ciphertext_size, checksum, telegram_peer, telegram_message_id,
+SELECT id, upload_id, part_number, plaintext_start, plaintext_end, plaintext_size, ciphertext_size, checksum, telegram_peer, telegram_message_id,
        status, storage_backend, storage_key, available_at, leased_until, attempts, last_error, worker_id, created_at, updated_at
 FROM upload_parts
 WHERE upload_id = $1
@@ -1167,7 +1194,7 @@ WHERE user_id = $1`,
 }
 
 func (s *Store) createIdempotent(ctx context.Context, params CreateUploadParams) (Upload, error) {
-	return scanUpload(s.db.QueryRowContext(ctx, `
+	upload, err := scanUpload(s.db.QueryRowContext(ctx, `
 INSERT INTO uploads (
     owner_id, parent_id, name_plain, mime_type, plaintext_size, part_size,
     status, idempotency_key, checksum_algorithm, checksum, expires_at
@@ -1189,6 +1216,13 @@ RETURNING id, owner_id, parent_id, name_plain, mime_type, plaintext_size, part_s
 		nullableBytes(params.Checksum),
 		params.ExpiresAt,
 	))
+	if err != nil {
+		return Upload{}, err
+	}
+	if err := s.ensureUploadPlan(ctx, upload); err != nil {
+		return Upload{}, err
+	}
+	return upload, nil
 }
 
 func (s *Store) ensureParentFolder(ctx context.Context, ownerID string, parentID string) error {
@@ -1215,12 +1249,77 @@ SELECT EXISTS (
 	return nil
 }
 
+func (s *Store) ensureUploadPlan(ctx context.Context, upload Upload) error {
+	plan := uploadPartPlan(upload.ID, nullableInt64(upload.PlaintextSize), upload.PartSize)
+	if len(plan) == 0 {
+		return nil
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	for _, part := range plan {
+		if _, err := tx.ExecContext(ctx, `
+INSERT INTO upload_parts (
+    upload_id, part_number, plaintext_start, plaintext_end, plaintext_size, status
+)
+VALUES ($1, $2, $3, $4, $5, 'pending')
+ON CONFLICT (upload_id, part_number)
+DO UPDATE SET
+    plaintext_start = EXCLUDED.plaintext_start,
+    plaintext_end = EXCLUDED.plaintext_end,
+    plaintext_size = EXCLUDED.plaintext_size
+WHERE upload_parts.ciphertext_size IS NULL
+  AND upload_parts.telegram_message_id IS NULL
+  AND upload_parts.storage_key IS NULL`,
+			upload.ID,
+			part.PartNumber,
+			part.Start,
+			part.End,
+			part.Size,
+		); err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit()
+}
+
 type rowScanner interface {
 	Scan(dest ...any) error
 }
 
 type queryer interface {
 	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}
+
+type queryRower interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+func validateUploadPartSize(ctx context.Context, q queryRower, uploadID string, partNumber int, plaintextSize int64) error {
+	var plannedSize sql.NullInt64
+	err := q.QueryRowContext(ctx, `
+SELECT plaintext_size
+FROM upload_parts
+WHERE upload_id = $1
+  AND part_number = $2`,
+		uploadID,
+		partNumber,
+	).Scan(&plannedSize)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrUploadPartNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if !plannedSize.Valid || plannedSize.Int64 != plaintextSize {
+		return ErrUploadPartSizeMismatch
+	}
+	return nil
 }
 
 func scanUpload(row rowScanner) (Upload, error) {
@@ -1256,6 +1355,8 @@ func scanUploadPart(row rowScanner) (UploadPart, error) {
 		&part.ID,
 		&part.UploadID,
 		&part.PartNumber,
+		&part.PlaintextStart,
+		&part.PlaintextEnd,
 		&part.PlaintextSize,
 		&part.CiphertextSize,
 		&part.Checksum,
@@ -1280,11 +1381,39 @@ func scanUploadPart(row rowScanner) (UploadPart, error) {
 
 func completeParts(ctx context.Context, q queryer, uploadID string) ([]UploadPart, error) {
 	rows, err := q.QueryContext(ctx, `
-SELECT id, upload_id, part_number, plaintext_size, ciphertext_size, checksum, telegram_peer, telegram_message_id,
+SELECT id, upload_id, part_number, plaintext_start, plaintext_end, plaintext_size, ciphertext_size, checksum, telegram_peer, telegram_message_id,
        status, storage_backend, storage_key, available_at, leased_until, attempts, last_error, worker_id, created_at, updated_at
 FROM upload_parts
 WHERE upload_id = $1
   AND status = 'complete'
+ORDER BY part_number ASC`,
+		uploadID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var parts []UploadPart
+	for rows.Next() {
+		part, err := scanUploadPart(rows)
+		if err != nil {
+			return nil, err
+		}
+		parts = append(parts, part)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return parts, nil
+}
+
+func allUploadParts(ctx context.Context, q queryer, uploadID string) ([]UploadPart, error) {
+	rows, err := q.QueryContext(ctx, `
+SELECT id, upload_id, part_number, plaintext_start, plaintext_end, plaintext_size, ciphertext_size, checksum, telegram_peer, telegram_message_id,
+       status, storage_backend, storage_key, available_at, leased_until, attempts, last_error, worker_id, created_at, updated_at
+FROM upload_parts
+WHERE upload_id = $1
 ORDER BY part_number ASC`,
 		uploadID,
 	)

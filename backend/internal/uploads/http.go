@@ -136,9 +136,14 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "upload_create_failed")
 		return
 	}
+	_, parts, err := h.store.GetWithParts(r.Context(), user.ID, upload.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "upload_parts_load_failed")
+		return
+	}
 
 	writeJSON(w, http.StatusCreated, map[string]any{
-		"upload": uploadResponse(upload),
+		"upload": uploadResponse(upload, parts),
 	})
 }
 
@@ -179,7 +184,7 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"upload":   uploadResponse(upload),
+		"upload":   uploadResponse(upload, parts),
 		"parts":    uploadPartsResponse(parts),
 		"progress": uploadProgressResponse(upload, parts, effectiveSettings, h.now),
 	})
@@ -305,6 +310,10 @@ func (h *Handler) UploadPart(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "upload_part_out_of_order")
 		return
 	}
+	if errors.Is(err, ErrUploadPartSizeMismatch) {
+		writeError(w, http.StatusConflict, "upload_part_size_mismatch")
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "part_store_failed")
 		return
@@ -363,6 +372,11 @@ func (h *Handler) stageUploadPart(w http.ResponseWriter, r *http.Request, ownerI
 	if errors.Is(err, ErrUploadPartOutOfOrder) {
 		_ = h.staging.Delete(storageKey)
 		writeError(w, http.StatusConflict, "upload_part_out_of_order")
+		return
+	}
+	if errors.Is(err, ErrUploadPartSizeMismatch) {
+		_ = h.staging.Delete(storageKey)
+		writeError(w, http.StatusConflict, "upload_part_size_mismatch")
 		return
 	}
 	if err != nil {
@@ -456,8 +470,11 @@ func parseChecksum(value string) (string, []byte, error) {
 	return "sha256", checksum, nil
 }
 
-func uploadResponse(upload Upload) map[string]any {
-	plan := uploadPartPlan(upload.ID, nullableInt64(upload.PlaintextSize), upload.PartSize)
+func uploadResponse(upload Upload, parts []UploadPart) map[string]any {
+	plan := uploadPartPlanFromParts(parts)
+	if len(plan) == 0 {
+		plan = uploadPartPlan(upload.ID, nullableInt64(upload.PlaintextSize), upload.PartSize)
+	}
 	return map[string]any{
 		"id":                 upload.ID,
 		"parent_id":          nullableStringValue(upload.ParentID),
@@ -488,6 +505,8 @@ func uploadPartResponse(part UploadPart) map[string]any {
 		"id":                  part.ID,
 		"upload_id":           part.UploadID,
 		"part_number":         part.PartNumber,
+		"plaintext_start":     nullableInt64Value(part.PlaintextStart),
+		"plaintext_end":       nullableInt64Value(part.PlaintextEnd),
 		"plaintext_size":      nullableInt64Value(part.PlaintextSize),
 		"ciphertext_size":     nullableInt64Value(part.CiphertextSize),
 		"checksum":            hex.EncodeToString(part.Checksum),
@@ -515,10 +534,14 @@ func uploadPartsResponse(parts []UploadPart) []map[string]any {
 }
 
 func uploadProgressResponse(upload Upload, parts []UploadPart, settings EffectiveSettings, now func() time.Time) map[string]any {
-	expectedParts := int64(len(uploadPartPlan(upload.ID, nullableInt64(upload.PlaintextSize), upload.PartSize)))
+	expectedParts := int64(len(parts))
+	if expectedParts == 0 {
+		expectedParts = int64(len(uploadPartPlan(upload.ID, nullableInt64(upload.PlaintextSize), upload.PartSize)))
+	}
+	receivedParts := 0
 	progress := map[string]any{
 		"expected_parts":           expectedParts,
-		"received_parts":           len(parts),
+		"received_parts":           0,
 		"queued_parts":             0,
 		"leased_parts":             0,
 		"complete_parts":           0,
@@ -537,6 +560,9 @@ func uploadProgressResponse(upload Upload, parts []UploadPart, settings Effectiv
 	var nextRetry sql.NullTime
 	currentTime := now()
 	for _, part := range parts {
+		if part.CiphertextSize.Valid || len(part.Checksum) > 0 || part.StorageKey.Valid || part.TelegramPeer.Valid || part.MessageID.Valid || part.Status == StatusComplete || part.Status == "failed" {
+			receivedParts++
+		}
 		if part.PlaintextSize.Valid && part.Status == StatusComplete {
 			progress["plaintext_complete_size"] = progress["plaintext_complete_size"].(int64) + part.PlaintextSize.Int64
 		}
@@ -568,6 +594,7 @@ func uploadProgressResponse(upload Upload, parts []UploadPart, settings Effectiv
 			}
 		}
 	}
+	progress["received_parts"] = receivedParts
 
 	if nextRetry.Valid {
 		progress["next_retry_at"] = nextRetry.Time
@@ -583,6 +610,28 @@ func uploadProgressResponse(upload Upload, parts []UploadPart, settings Effectiv
 		int64(progress["complete_parts"].(int)) == expectedParts &&
 		progress["failed_parts"].(int) == 0
 	return progress
+}
+
+func uploadPartPlanFromParts(parts []UploadPart) []UploadPartRange {
+	if len(parts) == 0 {
+		return nil
+	}
+	plan := make([]UploadPartRange, 0, len(parts))
+	for _, part := range parts {
+		if !part.PlaintextStart.Valid || !part.PlaintextEnd.Valid || !part.PlaintextSize.Valid {
+			return nil
+		}
+		plan = append(plan, UploadPartRange{
+			PartNumber: part.PartNumber,
+			Start:      part.PlaintextStart.Int64,
+			End:        part.PlaintextEnd.Int64,
+			Size:       part.PlaintextSize.Int64,
+		})
+	}
+	sort.Slice(plan, func(i, j int) bool {
+		return plan[i].PartNumber < plan[j].PartNumber
+	})
+	return plan
 }
 
 func uploadPolicyResponse(settings EffectiveSettings) map[string]any {

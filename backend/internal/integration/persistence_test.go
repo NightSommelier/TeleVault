@@ -269,6 +269,18 @@ func TestFilesUploadsPersistenceOwnerIsolationAndCompletion(t *testing.T) {
 	if downloadFile.ID != file.ID || len(parts) != 2 {
 		t.Fatalf("DownloadData() file ID = %s parts = %d, want file %s with 2 parts", downloadFile.ID, len(parts), file.ID)
 	}
+	if !parts[0].PlaintextStart.Valid || !parts[0].PlaintextEnd.Valid || !parts[0].PlaintextSize.Valid {
+		t.Fatalf("DownloadData() part 1 ranges = %+v, want persisted plaintext range", parts[0])
+	}
+	if parts[0].PlaintextStart.Int64 != 0 || parts[0].PlaintextEnd.Int64 != 3 || parts[0].PlaintextSize.Int64 != 3 {
+		t.Fatalf("DownloadData() part 1 ranges = [%d,%d) size=%d, want [0,3) size=3", parts[0].PlaintextStart.Int64, parts[0].PlaintextEnd.Int64, parts[0].PlaintextSize.Int64)
+	}
+	if !parts[1].PlaintextStart.Valid || !parts[1].PlaintextEnd.Valid || !parts[1].PlaintextSize.Valid {
+		t.Fatalf("DownloadData() part 2 ranges = %+v, want persisted plaintext range", parts[1])
+	}
+	if parts[1].PlaintextStart.Int64 != 3 || parts[1].PlaintextEnd.Int64 != 6 || parts[1].PlaintextSize.Int64 != 3 {
+		t.Fatalf("DownloadData() part 2 ranges = [%d,%d) size=%d, want [3,6) size=3", parts[1].PlaintextStart.Int64, parts[1].PlaintextEnd.Int64, parts[1].PlaintextSize.Int64)
+	}
 	if parts[0].TelegramMessageID != 101 || parts[1].TelegramMessageID != 102 {
 		t.Fatalf("DownloadData() message IDs = %d,%d, want 101,102", parts[0].TelegramMessageID, parts[1].TelegramMessageID)
 	}

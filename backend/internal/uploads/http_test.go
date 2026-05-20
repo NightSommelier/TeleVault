@@ -101,8 +101,13 @@ func TestUploadResponseIncludesPartPlan(t *testing.T) {
 		PlaintextSize: sql.NullInt64{Int64: 100, Valid: true},
 		PartSize:      40,
 	}
+	parts := []UploadPart{
+		{PartNumber: 1, PlaintextStart: sql.NullInt64{Int64: 0, Valid: true}, PlaintextEnd: sql.NullInt64{Int64: 31, Valid: true}, PlaintextSize: sql.NullInt64{Int64: 31, Valid: true}},
+		{PartNumber: 2, PlaintextStart: sql.NullInt64{Int64: 31, Valid: true}, PlaintextEnd: sql.NullInt64{Int64: 68, Valid: true}, PlaintextSize: sql.NullInt64{Int64: 37, Valid: true}},
+		{PartNumber: 3, PlaintextStart: sql.NullInt64{Int64: 68, Valid: true}, PlaintextEnd: sql.NullInt64{Int64: 100, Valid: true}, PlaintextSize: sql.NullInt64{Int64: 32, Valid: true}},
+	}
 
-	response := uploadResponse(upload)
+	response := uploadResponse(upload, parts)
 	plan, ok := response["part_plan"].([]map[string]any)
 	if !ok {
 		t.Fatalf("part_plan = %#v, want object array", response["part_plan"])
@@ -179,7 +184,7 @@ func TestUploadProgressResponseSummarizesQueueState(t *testing.T) {
 	}
 	progress := uploadProgressResponse(upload, parts, settings, func() time.Time { return now })
 	if progress["expected_parts"] != int64(3) ||
-		progress["received_parts"] != 3 ||
+		progress["received_parts"] != 2 ||
 		progress["queued_parts"] != 1 ||
 		progress["leased_parts"] != 1 ||
 		progress["complete_parts"] != 1 ||

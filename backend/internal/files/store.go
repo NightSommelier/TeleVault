@@ -36,6 +36,9 @@ type File struct {
 
 type FilePart struct {
 	PartNumber        int
+	PlaintextStart    sql.NullInt64
+	PlaintextEnd      sql.NullInt64
+	PlaintextSize     sql.NullInt64
 	TelegramPeer      string
 	TelegramMessageID int64
 	CiphertextSize    int64
@@ -478,7 +481,7 @@ func (s *Store) downloadDataForFile(ctx context.Context, file File) (File, []Fil
 	}
 
 	rows, err := s.db.QueryContext(ctx, `
-SELECT part_number, telegram_peer, telegram_message_id, ciphertext_size, checksum
+SELECT part_number, plaintext_start, plaintext_end, plaintext_size, telegram_peer, telegram_message_id, ciphertext_size, checksum
 FROM file_parts
 WHERE file_id = $1
 ORDER BY part_number ASC`,
@@ -492,7 +495,7 @@ ORDER BY part_number ASC`,
 	var parts []FilePart
 	for rows.Next() {
 		var part FilePart
-		if err := rows.Scan(&part.PartNumber, &part.TelegramPeer, &part.TelegramMessageID, &part.CiphertextSize, &part.Checksum); err != nil {
+		if err := rows.Scan(&part.PartNumber, &part.PlaintextStart, &part.PlaintextEnd, &part.PlaintextSize, &part.TelegramPeer, &part.TelegramMessageID, &part.CiphertextSize, &part.Checksum); err != nil {
 			return File{}, nil, TelegramSession{}, err
 		}
 		parts = append(parts, part)

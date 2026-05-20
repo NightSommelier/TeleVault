@@ -397,7 +397,7 @@ func scanFile(scanner interface {
 
 func loadParts(ctx context.Context, tx *sql.Tx, fileID string) ([]PartEntry, error) {
 	rows, err := tx.QueryContext(ctx, `
-SELECT id, part_number, telegram_peer, telegram_message_id, ciphertext_size, checksum, created_at
+SELECT id, part_number, plaintext_start, plaintext_end, plaintext_size, telegram_peer, telegram_message_id, ciphertext_size, checksum, created_at
 FROM file_parts
 WHERE file_id = $1
 ORDER BY part_number ASC`,
@@ -411,9 +411,15 @@ ORDER BY part_number ASC`,
 	parts := make([]PartEntry, 0)
 	for rows.Next() {
 		var part PartEntry
+		var plaintextStart sql.NullInt64
+		var plaintextEnd sql.NullInt64
+		var plaintextSize sql.NullInt64
 		if err := rows.Scan(
 			&part.ID,
 			&part.PartNumber,
+			&plaintextStart,
+			&plaintextEnd,
+			&plaintextSize,
 			&part.TelegramPeer,
 			&part.TelegramMessageID,
 			&part.CiphertextSize,
@@ -421,6 +427,18 @@ ORDER BY part_number ASC`,
 			&part.CreatedAt,
 		); err != nil {
 			return nil, err
+		}
+		if plaintextStart.Valid {
+			value := plaintextStart.Int64
+			part.PlaintextStart = &value
+		}
+		if plaintextEnd.Valid {
+			value := plaintextEnd.Int64
+			part.PlaintextEnd = &value
+		}
+		if plaintextSize.Valid {
+			value := plaintextSize.Int64
+			part.PlaintextSize = &value
 		}
 		parts = append(parts, part)
 	}
@@ -519,12 +537,16 @@ VALUES ($1, $2, NULL, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
 		for _, part := range file.Parts {
 			if _, err := tx.ExecContext(ctx, `
 INSERT INTO file_parts (
-    id, file_id, part_number, telegram_peer, telegram_message_id, ciphertext_size, checksum, created_at
+    id, file_id, part_number, plaintext_start, plaintext_end, plaintext_size,
+    telegram_peer, telegram_message_id, ciphertext_size, checksum, created_at
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
 				part.ID,
 				file.ID,
 				part.PartNumber,
+				nullableInt64(part.PlaintextStart),
+				nullableInt64(part.PlaintextEnd),
+				nullableInt64(part.PlaintextSize),
 				part.TelegramPeer,
 				part.TelegramMessageID,
 				part.CiphertextSize,

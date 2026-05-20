@@ -42,6 +42,9 @@ type FileEntry struct {
 type PartEntry struct {
 	ID                string    `json:"id"`
 	PartNumber        int       `json:"part_number"`
+	PlaintextStart    *int64    `json:"plaintext_start,omitempty"`
+	PlaintextEnd      *int64    `json:"plaintext_end,omitempty"`
+	PlaintextSize     *int64    `json:"plaintext_size,omitempty"`
 	TelegramPeer      string    `json:"telegram_peer"`
 	TelegramMessageID int64     `json:"telegram_message_id"`
 	CiphertextSize    int64     `json:"ciphertext_size"`
