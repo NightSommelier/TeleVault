@@ -120,6 +120,7 @@ func (s *Server) routes() {
 	s.mux.Handle("GET /uploads/{id}", authHandler.RequireAuth(http.HandlerFunc(uploadsHandler.Get)))
 	s.mux.Handle("POST /uploads/{id}/parts/{part_number}", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(uploadsHandler.UploadPart))))
 	s.mux.Handle("POST /uploads/{id}/complete", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(uploadsHandler.Complete))))
+	s.mux.Handle("DELETE /uploads/{id}", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(uploadsHandler.Cancel))))
 
 	recoveryHandler := recovery.NewHandler(s.db, s.secrets)
 	s.mux.Handle("POST /recovery/export", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(recoveryHandler.Export))))

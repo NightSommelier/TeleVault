@@ -183,6 +183,12 @@ type CompleteUploadParams struct {
 	Now      time.Time
 }
 
+type CancelUploadParams struct {
+	OwnerID  string
+	UploadID string
+	Now      time.Time
+}
+
 type CleanupResult struct {
 	ExpiredUploads           int64
 	TelegramArtifactsDeleted int64
@@ -585,13 +591,6 @@ WITH next_part AS (
       AND (p.leased_until IS NULL OR p.leased_until <= $1)
       AND u.status IN ('pending', 'uploading')
       AND u.expires_at > $1
-      AND NOT EXISTS (
-          SELECT 1
-          FROM upload_parts prev
-          WHERE prev.upload_id = p.upload_id
-            AND prev.part_number < p.part_number
-            AND prev.status <> 'complete'
-      )
     ORDER BY p.available_at ASC, p.created_at ASC
     FOR UPDATE SKIP LOCKED
     LIMIT 1
@@ -723,6 +722,51 @@ DO UPDATE SET
 	return err
 }
 
+func (s *Store) CancelUpload(ctx context.Context, params CancelUploadParams) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	result, err := tx.ExecContext(ctx, `
+UPDATE uploads
+SET status = 'failed', updated_at = now()
+WHERE id = $1
+  AND owner_id = $2
+  AND status IN ('pending', 'uploading')`,
+		params.UploadID,
+		params.OwnerID,
+	)
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return ErrUploadNotFound
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+UPDATE upload_parts
+SET status = 'failed',
+    leased_until = NULL,
+    worker_id = NULL,
+    updated_at = now()
+WHERE upload_id = $1
+  AND status = 'pending'
+  AND (leased_until IS NULL OR leased_until <= $2)`,
+		params.UploadID,
+		params.Now,
+	); err != nil {
+		return err
+	}
+
+	return tx.Commit()
+}
+
 func (s *Store) ExpireAbandoned(ctx context.Context, now time.Time) (CleanupResult, error) {
 	result, err := s.db.ExecContext(ctx, `
 UPDATE uploads
@@ -758,7 +802,7 @@ FROM (
     JOIN uploads u ON u.id = p.upload_id
     JOIN users ON users.id = u.owner_id
     JOIN telegram_sessions ts ON ts.user_id = u.owner_id
-    WHERE u.status = 'expired'
+    WHERE u.status IN ('expired', 'failed')
       AND p.telegram_message_id IS NOT NULL
       AND p.telegram_deleted_at IS NULL
     UNION ALL
@@ -817,8 +861,7 @@ FROM upload_parts p
 JOIN uploads u ON u.id = p.upload_id
 WHERE p.storage_backend = $1
   AND p.storage_key IS NOT NULL
-  AND p.status != 'complete'
-  AND (u.status IN ('expired', 'failed') OR p.status = 'failed')
+  AND (p.status = 'complete' OR u.status IN ('expired', 'failed') OR p.status = 'failed')
 ORDER BY p.created_at ASC
 LIMIT $2`,
 		LocalStagingBackend,

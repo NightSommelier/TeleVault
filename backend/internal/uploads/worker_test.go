@@ -83,6 +83,9 @@ func TestDrainWorkerUploadsStagedPartAndDeletesLocalCopy(t *testing.T) {
 	if store.marked.PartID != "part-1" || store.marked.TelegramPeer != "self" || store.marked.MessageID != 77 {
 		t.Fatalf("MarkStagedPartUploaded() params = %+v", store.marked)
 	}
+	if store.localDeletedID != "part-1" {
+		t.Fatalf("MarkLocalStagingDeleted() part ID = %q, want part-1", store.localDeletedID)
+	}
 	if store.completed.OwnerID != "owner-1" || store.completed.UploadID != "upload-1" || !store.completed.Now.Equal(time.Unix(1000, 0)) {
 		t.Fatalf("CompleteUpload() params = %+v", store.completed)
 	}
@@ -303,6 +306,73 @@ func TestDrainLoopRespectsConfiguredConcurrency(t *testing.T) {
 	}
 }
 
+func TestDrainLoopCanUploadPartsFromSameUploadConcurrently(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	spool, err := NewLocalSpool(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewLocalSpool() error = %v", err)
+	}
+	for _, key := range []string{"upload-a/part-1.age", "upload-a/part-2.age"} {
+		if err := spool.Write(ctx, key, func(w io.Writer) error {
+			_, err := w.Write([]byte("ciphertext"))
+			return err
+		}); err != nil {
+			t.Fatalf("spool.Write(%q) error = %v", key, err)
+		}
+	}
+
+	crypto := testSessionCrypto(t)
+	encryptedSession, err := crypto.Encrypt("telegram:12345", "telegram-session")
+	if err != nil {
+		t.Fatalf("Encrypt() error = %v", err)
+	}
+
+	store := &sequenceWorkStore{
+		works: []QueuedPartWork{
+			testQueuedWork("part-a", "upload-a", "upload-a/part-1.age", encryptedSession, 2),
+			testQueuedWork("part-b", "upload-a", "upload-a/part-2.age", encryptedSession, 2),
+		},
+	}
+	telegram := newGateWorkerTelegram(2)
+
+	worker, err := NewDrainWorker(store, spool, crypto, telegram, WorkerSettings{
+		WorkerID:      "worker-a",
+		LeaseDuration: time.Minute,
+		Now:           func() time.Time { return time.Unix(1000, 0) },
+	})
+	if err != nil {
+		t.Fatalf("NewDrainWorker() error = %v", err)
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- worker.DrainLoop(ctx, 10*time.Millisecond)
+	}()
+
+	select {
+	case <-telegram.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for same-upload parts to start")
+	}
+	if got := telegram.maxActive(); got != 2 {
+		t.Fatalf("max active uploads = %d, want 2", got)
+	}
+
+	telegram.release()
+	cancel()
+
+	select {
+	case err := <-errCh:
+		if err != nil && !errors.Is(err, context.Canceled) {
+			t.Fatalf("DrainLoop() error = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for DrainLoop() to stop")
+	}
+}
+
 func TestDrainLoopDoesNotExceedLowerCapForPendingWork(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -408,14 +478,15 @@ func testSessionCrypto(t *testing.T) auth.TelegramSessionCrypto {
 }
 
 type fakeWorkStore struct {
-	work        QueuedPartWork
-	claimed     bool
-	marked      MarkStagedPartUploadedParams
-	completed   CompleteUploadParams
-	completeErr error
-	retry       RetryPartParams
-	failedID    string
-	failedErr   error
+	work           QueuedPartWork
+	claimed        bool
+	marked         MarkStagedPartUploadedParams
+	completed      CompleteUploadParams
+	completeErr    error
+	localDeletedID string
+	retry          RetryPartParams
+	failedID       string
+	failedErr      error
 }
 
 func (s *fakeWorkStore) ClaimQueuedPartWork(context.Context, ClaimQueuedPartParams) (QueuedPartWork, error) {
@@ -441,6 +512,11 @@ func (s *fakeWorkStore) CompleteUpload(_ context.Context, params CompleteUploadP
 		return File{}, s.completeErr
 	}
 	return File{ID: "file-1"}, nil
+}
+
+func (s *fakeWorkStore) MarkLocalStagingDeleted(_ context.Context, partID string) error {
+	s.localDeletedID = partID
+	return nil
 }
 
 func (s *fakeWorkStore) RetryQueuedPart(_ context.Context, params RetryPartParams) error {
@@ -527,6 +603,8 @@ func (s *sequenceWorkStore) CompleteUpload(_ context.Context, params CompleteUpl
 	s.completed = append(s.completed, params)
 	return File{ID: params.UploadID + "-file"}, nil
 }
+
+func (s *sequenceWorkStore) MarkLocalStagingDeleted(context.Context, string) error { return nil }
 
 func (s *sequenceWorkStore) RetryQueuedPart(context.Context, RetryPartParams) error { return nil }
 

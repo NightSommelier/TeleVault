@@ -458,6 +458,36 @@ func (h *Handler) Complete(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (h *Handler) Cancel(w http.ResponseWriter, r *http.Request) {
+	user, ok := auth.UserFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "missing_authenticated_user")
+		return
+	}
+
+	uploadID := strings.TrimSpace(r.PathValue("id"))
+	if uploadID == "" {
+		writeError(w, http.StatusBadRequest, "upload_id_required")
+		return
+	}
+
+	err := h.store.CancelUpload(r.Context(), CancelUploadParams{
+		OwnerID:  user.ID,
+		UploadID: uploadID,
+		Now:      h.now(),
+	})
+	if errors.Is(err, ErrUploadNotFound) {
+		writeError(w, http.StatusNotFound, "upload_not_found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "upload_cancel_failed")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
 type createUploadRequest struct {
 	Name           string `json:"name"`
 	ParentID       string `json:"parent_id"`

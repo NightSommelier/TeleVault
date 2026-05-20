@@ -27,6 +27,7 @@ type WorkStore interface {
 	ClaimQueuedPartWork(ctx context.Context, params ClaimQueuedPartParams) (QueuedPartWork, error)
 	MarkStagedPartUploaded(ctx context.Context, params MarkStagedPartUploadedParams) (UploadPart, error)
 	CompleteUpload(ctx context.Context, params CompleteUploadParams) (File, error)
+	MarkLocalStagingDeleted(ctx context.Context, partID string) error
 	RetryQueuedPart(ctx context.Context, params RetryPartParams) error
 	FailQueuedPart(ctx context.Context, partID string, failure error) error
 }
@@ -282,6 +283,9 @@ func (w *DrainWorker) drainClaimedWork(ctx context.Context, work QueuedPartWork)
 	}
 
 	if err := w.spool.Delete(part.StorageKey.String); err != nil {
+		return err
+	}
+	if err := w.store.MarkLocalStagingDeleted(ctx, part.ID); err != nil {
 		return err
 	}
 	if err := w.tryCompleteUpload(ctx, work); err != nil {

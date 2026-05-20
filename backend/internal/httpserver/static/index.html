@@ -1832,6 +1832,8 @@
           message: 'Waiting',
           error: '',
           safeToClose: false,
+          cancelRequested: false,
+          abortController: null,
         });
         state.nextUploadQueueID += 1;
       }
@@ -1881,8 +1883,10 @@
         parent_id: item.parentID || null,
         mime_type: item.file.type || 'application/octet-stream',
       });
+      if (item.cancelRequested) throw new Error('upload_canceled');
       updateQueueItem(item.id, { status: 'hashing', progress: 1, message: 'Hashing...' });
       const checksum = await sha256Hex(item.file, ({ loaded, total }) => {
+        if (item.cancelRequested) throw new Error('upload_canceled');
         const percent = total > 0 ? Math.max(1, Math.round((loaded / total) * 4)) : 1;
         updateQueueItem(item.id, {
           status: 'hashing',
@@ -1890,6 +1894,7 @@
           message: `Hashing ${formatBytes(loaded)} / ${formatBytes(total)}`,
         });
       });
+      if (item.cancelRequested) throw new Error('upload_canceled');
       debugUpload('upload:hash-complete', {
         file: item.file.name,
         checksum_prefix: checksum.slice(0, 12),
@@ -1917,6 +1922,7 @@
         uploadCreatedAt: created.upload.created_at || new Date().toISOString(),
       });
       await uploadParts(created.upload, item);
+      if (item.cancelRequested) throw new Error('upload_canceled');
       updateQueueItem(item.id, {
         status: 'telegram',
         progress: 50,
@@ -1924,6 +1930,7 @@
         safeToClose: true,
       });
       const readyState = await waitUntilReady(created.upload.id, item);
+      if (item.cancelRequested) throw new Error('upload_canceled');
       if (readyState !== 'complete') {
         updateQueueItem(item.id, { status: 'completing', progress: 96, message: 'Completing...', safeToClose: true });
         debugUpload('upload:complete-request', { upload_id: created.upload.id });
@@ -2038,6 +2045,7 @@
 
     async function monitorServerUpload(item) {
       const readyState = await waitUntilReady(item.uploadID, item);
+      if (item.cancelRequested) throw new Error('upload_canceled');
       if (readyState !== 'complete') {
         updateQueueItem(item.id, { status: 'completing', progress: 96, message: 'Completing...', safeToClose: true });
         try {
@@ -2055,6 +2063,7 @@
       const plan = uploadPartPlan(upload, item.file.size);
       const count = plan.length;
       for (const partInfo of plan) {
+        if (item.cancelRequested) throw new Error('upload_canceled');
         const part = partInfo.partNumber;
         const start = partInfo.start;
         const end = partInfo.end;
@@ -2071,15 +2080,19 @@
           end,
           size: end - start,
         });
+        const abortController = new AbortController();
+        updateQueueItem(item.id, { abortController });
         const response = await fetch(`/uploads/${upload.id}/parts/${part}`, {
           method: 'POST',
           credentials: 'same-origin',
+          signal: abortController.signal,
           headers: {
             'Content-Type': 'application/octet-stream',
             'X-CSRF-Token': csrfToken(),
           },
           body: item.file.slice(start, end),
         });
+        updateQueueItem(item.id, { abortController: null });
         debugUpload('part:response', {
           upload_id: upload.id,
           part,
@@ -2137,6 +2150,7 @@
     async function waitUntilReady(uploadID, item) {
       clearInterval(state.uploadTimer);
       while (true) {
+        if (item.cancelRequested) throw new Error('upload_canceled');
         const data = await api(`/uploads/${uploadID}`);
         const progress = data.progress;
         if (data.upload && data.upload.status === 'complete') return 'complete';
@@ -2186,7 +2200,11 @@
           </div>
         `;
       }
-      return '';
+      return `
+        <div class="queue-actions">
+          <button data-queue-cancel="${item.id}">Cancel</button>
+        </div>
+      `;
     }
 
     function renderUploadQueue() {
@@ -2231,6 +2249,9 @@
       el.uploadQueue.querySelectorAll('[data-queue-remove]').forEach((button) => {
         button.addEventListener('click', () => removeQueueItem(button.dataset.queueRemove));
       });
+      el.uploadQueue.querySelectorAll('[data-queue-cancel]').forEach((button) => {
+        button.addEventListener('click', () => cancelQueueItem(button.dataset.queueCancel));
+      });
     }
 
     function retryQueueItem(id) {
@@ -2242,6 +2263,7 @@
         message: 'Waiting',
         error: '',
         safeToClose: false,
+        cancelRequested: false,
       });
       setUploadStatus(`Retry queued: ${item.file.name}`);
       runUploadQueue();
@@ -2253,6 +2275,28 @@
       state.uploadQueue = state.uploadQueue.filter((entry) => String(entry.id) !== String(id));
       persistUploadQueueState();
       renderUploadQueue();
+    }
+
+    async function cancelQueueItem(id) {
+      const item = state.uploadQueue.find((entry) => String(entry.id) === String(id));
+      if (!item || item.status === 'complete' || item.status === 'failed') return;
+      item.cancelRequested = true;
+      if (item.abortController) item.abortController.abort();
+      updateQueueItem(item.id, {
+        status: 'failed',
+        message: 'Canceled',
+        error: 'Canceled',
+        abortController: null,
+      });
+      if (item.uploadID) {
+        try {
+          await api(`/uploads/${item.uploadID}`, { method: 'DELETE', csrf: true });
+        } catch (err) {
+          debugUpload('upload:cancel-failed', { upload_id: item.uploadID, message: err.message });
+        }
+      }
+      setUploadStatus(`Canceled: ${item.file.name}`);
+      runUploadQueue();
     }
 
     function clearCompletedQueueItems() {

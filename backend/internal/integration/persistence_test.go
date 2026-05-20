@@ -599,6 +599,144 @@ VALUES ($1, 1, 5, 10, 'pending', 'local', 'cleanup.bin.part-1')`,
 	}
 }
 
+func TestCompletedLocalStagingCleanupArtifacts(t *testing.T) {
+	database := openIntegrationDB(t)
+	sessionStore := auth.NewSessionStore(database)
+	uploadStore := uploads.NewStore(database)
+	ctx := context.Background()
+
+	owner, cleanupOwner := createUserThroughLogin(t, database, sessionStore, 939_500_000_000+time.Now().UnixNano()%1_000_000_000)
+	defer cleanupOwner()
+
+	now := time.Now().UTC()
+	upload, err := uploadStore.Create(ctx, uploads.CreateUploadParams{
+		OwnerID:       owner.ID,
+		Name:          "completed-local.bin",
+		PlaintextSize: 5,
+		PartSize:      5,
+		ExpiresAt:     now.Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("Create upload error = %v", err)
+	}
+	if _, err := database.ExecContext(ctx, `
+UPDATE upload_parts
+SET plaintext_size = 5,
+    ciphertext_size = 10,
+    telegram_peer = 'self',
+    telegram_message_id = 301,
+    status = 'complete',
+    storage_backend = 'local',
+    storage_key = 'completed-local.bin.part-1'
+WHERE upload_id = $1
+  AND part_number = 1`,
+		upload.ID,
+	); err != nil {
+		t.Fatalf("update completed staged part error = %v", err)
+	}
+
+	artifacts, err := uploadStore.PendingLocalStagingCleanupArtifacts(ctx, 10)
+	if err != nil {
+		t.Fatalf("PendingLocalStagingCleanupArtifacts() error = %v", err)
+	}
+	if len(artifacts) != 1 || artifacts[0].StorageKey != "completed-local.bin.part-1" {
+		t.Fatalf("PendingLocalStagingCleanupArtifacts() = %+v, want completed local cleanup", artifacts)
+	}
+}
+
+func TestCancelUploadStopsQueueAndSchedulesCleanup(t *testing.T) {
+	database := openIntegrationDB(t)
+	sessionStore := auth.NewSessionStore(database)
+	uploadStore := uploads.NewStore(database)
+	ctx := context.Background()
+
+	owner, cleanupOwner := createUserThroughLogin(t, database, sessionStore, 939_000_000_000+time.Now().UnixNano()%1_000_000_000)
+	defer cleanupOwner()
+
+	now := time.Now().UTC()
+	upload, err := uploadStore.Create(ctx, uploads.CreateUploadParams{
+		OwnerID:       owner.ID,
+		Name:          "cancel.bin",
+		PlaintextSize: 10,
+		PartSize:      5,
+		ExpiresAt:     now.Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("Create upload error = %v", err)
+	}
+	if _, err := uploadStore.StagePart(ctx, uploads.StagePartParams{
+		OwnerID:        owner.ID,
+		UploadID:       upload.ID,
+		PartNumber:     1,
+		PlaintextSize:  5,
+		CiphertextSize: 9,
+		Checksum:       []byte("part-1"),
+		UploadedSize:   5,
+		StorageBackend: "local",
+		StorageKey:     "cancel.bin.part-1",
+		AvailableAt:    now,
+		Now:            now,
+	}); err != nil {
+		t.Fatalf("StagePart(1) error = %v", err)
+	}
+	part2, err := uploadStore.StagePart(ctx, uploads.StagePartParams{
+		OwnerID:        owner.ID,
+		UploadID:       upload.ID,
+		PartNumber:     2,
+		PlaintextSize:  5,
+		CiphertextSize: 9,
+		Checksum:       []byte("part-2"),
+		UploadedSize:   10,
+		StorageBackend: "local",
+		StorageKey:     "cancel.bin.part-2",
+		AvailableAt:    now,
+		Now:            now,
+	})
+	if err != nil {
+		t.Fatalf("StagePart(2) error = %v", err)
+	}
+	if _, err := uploadStore.MarkStagedPartUploaded(ctx, uploads.MarkStagedPartUploadedParams{
+		PartID:       part2.ID,
+		TelegramPeer: "self",
+		MessageID:    302,
+	}); err != nil {
+		t.Fatalf("MarkStagedPartUploaded() error = %v", err)
+	}
+	if err := uploadStore.MarkLocalStagingDeleted(ctx, part2.ID); err != nil {
+		t.Fatalf("MarkLocalStagingDeleted() error = %v", err)
+	}
+
+	if err := uploadStore.CancelUpload(ctx, uploads.CancelUploadParams{
+		OwnerID:  owner.ID,
+		UploadID: upload.ID,
+		Now:      now,
+	}); err != nil {
+		t.Fatalf("CancelUpload() error = %v", err)
+	}
+	if _, err := uploadStore.ClaimQueuedPartWork(ctx, uploads.ClaimQueuedPartParams{
+		WorkerID:      "worker-a",
+		Now:           now,
+		LeaseDuration: time.Minute,
+	}); !errors.Is(err, uploads.ErrUploadPartNotFound) {
+		t.Fatalf("ClaimQueuedPartWork() after cancel error = %v, want ErrUploadPartNotFound", err)
+	}
+
+	localArtifacts, err := uploadStore.PendingLocalStagingCleanupArtifacts(ctx, 10)
+	if err != nil {
+		t.Fatalf("PendingLocalStagingCleanupArtifacts() error = %v", err)
+	}
+	if len(localArtifacts) != 1 || localArtifacts[0].StorageKey != "cancel.bin.part-1" {
+		t.Fatalf("PendingLocalStagingCleanupArtifacts() = %+v, want part 1 local cleanup", localArtifacts)
+	}
+	telegramArtifacts, err := uploadStore.PendingTelegramCleanupArtifacts(ctx, 10)
+	if err != nil {
+		t.Fatalf("PendingTelegramCleanupArtifacts() error = %v", err)
+	}
+	if len(telegramArtifacts) != 1 || telegramArtifacts[0].MessageID != 302 {
+		t.Fatalf("PendingTelegramCleanupArtifacts() = %+v, want uploaded part cleanup", telegramArtifacts)
+	}
+}
+
 func TestAdminUploadSettingsVaultUploadPartSize(t *testing.T) {
 	database := openIntegrationDB(t)
 	sessionStore := auth.NewSessionStore(database)
