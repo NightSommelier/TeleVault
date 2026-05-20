@@ -939,6 +939,11 @@
       el.filesBody.querySelectorAll('[data-open-folder]').forEach((button) => {
         button.addEventListener('click', () => {
           const folder = files.find((file) => file.id === button.dataset.openFolder);
+          if (!folder) return;
+          if (hasActiveSelection()) {
+            toggleFileSelection(folder.id, files);
+            return;
+          }
           navigateToFolder(folder);
         });
       });
@@ -997,6 +1002,10 @@
     function toggleFileSelection(id, files) {
       if (!id || state.view !== 'own') return;
       setFileSelection(id, !state.selectedFileIds.has(id), files);
+    }
+
+    function hasActiveSelection() {
+      return state.view === 'own' && state.selectedFileIds.size > 0;
     }
 
     function wireFileRowDragHandlers(files) {
@@ -1065,7 +1074,7 @@
       const selectLabel = state.view === 'own' ? ` data-select-label="${file.id}" role="button" tabindex="0"` : '';
       const label = file.type !== 'folder'
         ? `<span class="file-label"${selectLabel}>${name}</span>`
-        : `<button class="link folder-name file-label" data-open-folder="${file.id}"><span class="folder-mark" aria-hidden="true"></span>${name}</button>`;
+        : `<button type="button" class="link folder-name file-label" data-open-folder="${file.id}"><span class="folder-mark" aria-hidden="true"></span>${name}</button>`;
       return `<span class="file-cell">${select}${label}</span>`;
     }
 
