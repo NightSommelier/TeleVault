@@ -579,6 +579,9 @@ func uploadPartsResponse(parts []UploadPart) []map[string]any {
 }
 
 func uploadProgressResponse(upload Upload, parts []UploadPart, settings EffectiveSettings, now func() time.Time) map[string]any {
+	const minObservedETAWindowSeconds = int64(5)
+	const observedPartsWindow = 4
+
 	expectedParts := int64(len(parts))
 	if expectedParts == 0 {
 		expectedParts = int64(len(uploadPartPlan(upload.ID, nullableInt64(upload.PlaintextSize), upload.PartSize)))
@@ -601,7 +604,8 @@ func uploadProgressResponse(upload Upload, parts []UploadPart, settings Effectiv
 		"next_retry_at":            nil,
 		"telegram_eta_seconds":     nil,
 		"telegram_eta_source":      nil,
-		"telegram_estimated_bps":   int64(0),
+		"telegram_estimated_bps":   nil,
+		"telegram_observed_bps":    nil,
 		"telegram_remaining_bytes": int64(0),
 		"active_workers":           []string{},
 		"ready_to_complete":        false,
@@ -670,11 +674,27 @@ func uploadProgressResponse(upload Upload, parts []UploadPart, settings Effectiv
 	if remainingTelegramBytes > 0 {
 		bytesPerSecond := settings.TargetUploadBytesPerSecond
 		etaSource := "configured"
-		if bytesPerSecond <= 0 && completeTelegramBytes > 0 && !upload.CreatedAt.IsZero() && currentTime.After(upload.CreatedAt) {
+		observedBytesPerSecond := int64(0)
+		if bps := observedThroughputFromCompletedParts(parts, observedPartsWindow, minObservedETAWindowSeconds); bps > 0 {
+			observedBytesPerSecond = bps
+		}
+		if completeTelegramBytes > 0 && !upload.CreatedAt.IsZero() && currentTime.After(upload.CreatedAt) {
 			elapsedSeconds := int64(currentTime.Sub(upload.CreatedAt).Seconds())
-			if elapsedSeconds > 0 {
-				bytesPerSecond = completeTelegramBytes / elapsedSeconds
+			if elapsedSeconds >= minObservedETAWindowSeconds {
+				lifetimeObservedBytesPerSecond := completeTelegramBytes / elapsedSeconds
+				if lifetimeObservedBytesPerSecond > 0 && (observedBytesPerSecond <= 0 || lifetimeObservedBytesPerSecond < observedBytesPerSecond) {
+					observedBytesPerSecond = lifetimeObservedBytesPerSecond
+				}
+			}
+		}
+		if observedBytesPerSecond > 0 {
+			progress["telegram_observed_bps"] = observedBytesPerSecond
+			if bytesPerSecond <= 0 {
+				bytesPerSecond = observedBytesPerSecond
 				etaSource = "observed"
+			} else if observedBytesPerSecond < bytesPerSecond {
+				bytesPerSecond = observedBytesPerSecond
+				etaSource = "adaptive"
 			}
 		}
 		if bytesPerSecond > 0 {
@@ -685,7 +705,17 @@ func uploadProgressResponse(upload Upload, parts []UploadPart, settings Effectiv
 			if settings.CooldownBetweenPartsMillisec > 0 && remainingTelegramParts > 0 {
 				cooldownSeconds = int64(remainingTelegramParts*settings.CooldownBetweenPartsMillisec+999) / 1000
 			}
-			progress["telegram_eta_seconds"] = transferSeconds + cooldownSeconds
+			retryDelaySeconds := int64(0)
+			if nextRetry.Valid && nextRetry.Time.After(currentTime) {
+				retryDelaySeconds = int64(nextRetry.Time.Sub(currentTime).Seconds())
+				if nextRetry.Time.Sub(currentTime)%time.Second != 0 {
+					retryDelaySeconds++
+				}
+				if retryDelaySeconds < 1 {
+					retryDelaySeconds = 1
+				}
+			}
+			progress["telegram_eta_seconds"] = transferSeconds + cooldownSeconds + retryDelaySeconds
 		}
 	}
 	workers := make([]string, 0, len(activeWorkers))
@@ -700,6 +730,44 @@ func uploadProgressResponse(upload Upload, parts []UploadPart, settings Effectiv
 		int64(progress["complete_parts"].(int)) == expectedParts &&
 		progress["failed_parts"].(int) == 0
 	return progress
+}
+
+func observedThroughputFromCompletedParts(parts []UploadPart, maxParts int, minWindowSeconds int64) int64 {
+	if maxParts < 2 {
+		return 0
+	}
+	completed := make([]UploadPart, 0, len(parts))
+	for _, part := range parts {
+		if part.Status != StatusComplete || !part.CiphertextSize.Valid || part.CiphertextSize.Int64 <= 0 || part.UpdatedAt.IsZero() {
+			continue
+		}
+		completed = append(completed, part)
+	}
+	if len(completed) < 2 {
+		return 0
+	}
+	sort.Slice(completed, func(i, j int) bool {
+		return completed[i].UpdatedAt.Before(completed[j].UpdatedAt)
+	})
+	start := 0
+	if len(completed) > maxParts {
+		start = len(completed) - maxParts
+	}
+	window := completed[start:]
+	firstTime := window[0].UpdatedAt
+	lastTime := window[len(window)-1].UpdatedAt
+	elapsedSeconds := int64(lastTime.Sub(firstTime).Seconds())
+	if elapsedSeconds < minWindowSeconds {
+		return 0
+	}
+	totalBytes := int64(0)
+	for _, part := range window {
+		totalBytes += part.CiphertextSize.Int64
+	}
+	if totalBytes <= 0 {
+		return 0
+	}
+	return totalBytes / elapsedSeconds
 }
 
 func uploadPartPlanFromParts(parts []UploadPart) []UploadPartRange {

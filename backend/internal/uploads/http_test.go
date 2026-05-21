@@ -199,7 +199,7 @@ func TestUploadProgressResponseSummarizesQueueState(t *testing.T) {
 		progress["ciphertext_staged_size"] != int64(17) ||
 		progress["ciphertext_complete_size"] != int64(18) ||
 		progress["telegram_remaining_bytes"] != int64(27) ||
-		progress["telegram_eta_seconds"] != int64(2) ||
+		progress["telegram_eta_seconds"] != int64(32) ||
 		progress["telegram_eta_source"] != "configured" ||
 		progress["telegram_estimated_bps"] != int64(10_000_000) ||
 		progress["ready_to_complete"] != false {
@@ -291,5 +291,155 @@ func TestUploadProgressResponseEstimatesETAFromCompletedBytes(t *testing.T) {
 		progress["telegram_eta_source"] != "observed" ||
 		progress["telegram_estimated_bps"] != int64(10) {
 		t.Fatalf("uploadProgressResponse() = %+v, want observed ETA at 10 B/s", progress)
+	}
+}
+
+func TestUploadProgressResponseSkipsObservedETAUntilMinimumWindow(t *testing.T) {
+	now := time.Unix(1000, 0).UTC()
+	upload := Upload{
+		PlaintextSize: sql.NullInt64{Int64: 30, Valid: true},
+		PartSize:      10,
+		CreatedAt:     now.Add(-2 * time.Second),
+	}
+	parts := []UploadPart{
+		{
+			PartNumber:     1,
+			Status:         StatusComplete,
+			CiphertextSize: sql.NullInt64{Int64: 100, Valid: true},
+		},
+		{
+			PartNumber:     2,
+			Status:         StatusPending,
+			CiphertextSize: sql.NullInt64{Int64: 50, Valid: true},
+			StorageBackend: sql.NullString{String: LocalStagingBackend, Valid: true},
+			StorageKey:     sql.NullString{String: "upload/part-2.age", Valid: true},
+		},
+		{
+			PartNumber:     3,
+			Status:         StatusPending,
+			CiphertextSize: sql.NullInt64{Int64: 50, Valid: true},
+			StorageBackend: sql.NullString{String: LocalStagingBackend, Valid: true},
+			StorageKey:     sql.NullString{String: "upload/part-3.age", Valid: true},
+		},
+	}
+
+	progress := uploadProgressResponse(upload, parts, EffectiveSettings{}, func() time.Time { return now })
+	if progress["telegram_eta_seconds"] != nil ||
+		progress["telegram_eta_source"] != nil ||
+		progress["telegram_estimated_bps"] != nil {
+		t.Fatalf("uploadProgressResponse() = %+v, want unknown ETA for short observed window", progress)
+	}
+}
+
+func TestUploadProgressResponseUsesConservativeRateWhenObservedIsSlower(t *testing.T) {
+	now := time.Unix(2000, 0).UTC()
+	upload := Upload{
+		PlaintextSize: sql.NullInt64{Int64: 30, Valid: true},
+		PartSize:      10,
+		CreatedAt:     now.Add(-10 * time.Second),
+	}
+	parts := []UploadPart{
+		{
+			PartNumber:     1,
+			Status:         StatusComplete,
+			CiphertextSize: sql.NullInt64{Int64: 100, Valid: true},
+		},
+		{
+			PartNumber:     2,
+			Status:         StatusPending,
+			CiphertextSize: sql.NullInt64{Int64: 50, Valid: true},
+			StorageBackend: sql.NullString{String: LocalStagingBackend, Valid: true},
+			StorageKey:     sql.NullString{String: "upload/part-2.age", Valid: true},
+		},
+	}
+
+	settings := EffectiveSettings{
+		TargetUploadBytesPerSecond: 1000,
+	}
+	progress := uploadProgressResponse(upload, parts, settings, func() time.Time { return now })
+	if progress["telegram_estimated_bps"] != int64(10) ||
+		progress["telegram_eta_source"] != "adaptive" ||
+		progress["telegram_eta_seconds"] != int64(5) {
+		t.Fatalf("uploadProgressResponse() = %+v, want conservative adaptive ETA", progress)
+	}
+}
+
+func TestUploadProgressResponseIncludesRetryDelayInETA(t *testing.T) {
+	now := time.Unix(3000, 0).UTC()
+	upload := Upload{
+		PlaintextSize: sql.NullInt64{Int64: 20, Valid: true},
+		PartSize:      10,
+		CreatedAt:     now.Add(-2 * time.Second),
+	}
+	parts := []UploadPart{
+		{
+			PartNumber:     1,
+			Status:         StatusComplete,
+			CiphertextSize: sql.NullInt64{Int64: 100, Valid: true},
+		},
+		{
+			PartNumber:     2,
+			Status:         StatusPending,
+			CiphertextSize: sql.NullInt64{Int64: 100, Valid: true},
+			StorageBackend: sql.NullString{String: LocalStagingBackend, Valid: true},
+			StorageKey:     sql.NullString{String: "upload/part-2.age", Valid: true},
+			AvailableAt:    now.Add(30 * time.Second),
+		},
+	}
+
+	settings := EffectiveSettings{TargetUploadBytesPerSecond: 100}
+	progress := uploadProgressResponse(upload, parts, settings, func() time.Time { return now })
+	if progress["telegram_eta_seconds"] != int64(31) {
+		t.Fatalf("uploadProgressResponse() = %+v, want ETA to include retry delay", progress)
+	}
+}
+
+func TestUploadProgressResponseUsesRecentCompletedPartWindowForObservedRate(t *testing.T) {
+	now := time.Unix(4000, 0).UTC()
+	upload := Upload{
+		PlaintextSize: sql.NullInt64{Int64: 50, Valid: true},
+		PartSize:      10,
+		CreatedAt:     now.Add(-2 * time.Hour),
+	}
+	parts := []UploadPart{
+		{
+			PartNumber:     1,
+			Status:         StatusComplete,
+			CiphertextSize: sql.NullInt64{Int64: 100, Valid: true},
+			UpdatedAt:      now.Add(-120 * time.Second),
+		},
+		{
+			PartNumber:     2,
+			Status:         StatusComplete,
+			CiphertextSize: sql.NullInt64{Int64: 100, Valid: true},
+			UpdatedAt:      now.Add(-90 * time.Second),
+		},
+		{
+			PartNumber:     3,
+			Status:         StatusComplete,
+			CiphertextSize: sql.NullInt64{Int64: 100, Valid: true},
+			UpdatedAt:      now.Add(-60 * time.Second),
+		},
+		{
+			PartNumber:     4,
+			Status:         StatusComplete,
+			CiphertextSize: sql.NullInt64{Int64: 100, Valid: true},
+			UpdatedAt:      now.Add(-30 * time.Second),
+		},
+		{
+			PartNumber:     5,
+			Status:         StatusPending,
+			CiphertextSize: sql.NullInt64{Int64: 100, Valid: true},
+			StorageBackend: sql.NullString{String: LocalStagingBackend, Valid: true},
+			StorageKey:     sql.NullString{String: "upload/part-5.age", Valid: true},
+		},
+	}
+
+	progress := uploadProgressResponse(upload, parts, EffectiveSettings{}, func() time.Time { return now })
+	if progress["telegram_observed_bps"] != int64(4) ||
+		progress["telegram_estimated_bps"] != int64(4) ||
+		progress["telegram_eta_source"] != "observed" ||
+		progress["telegram_eta_seconds"] != int64(25) {
+		t.Fatalf("uploadProgressResponse() = %+v, want window-based observed ETA", progress)
 	}
 }
