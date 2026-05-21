@@ -2,9 +2,9 @@
 
 FROM golang:1.26.2-alpine AS builder
 
-ARG APP_VERSION=0.1.0-dev
-ARG APP_COMMIT=unknown
-ARG APP_BUILD_DATE=unknown
+ARG APP_VERSION
+ARG APP_COMMIT
+ARG APP_BUILD_DATE
 
 WORKDIR /src
 RUN apk add --no-cache git ca-certificates
@@ -16,9 +16,13 @@ COPY backend/ ./
 
 RUN set -eux; \
     mkdir -p /out; \
+    LDFLAGS="-s -w"; \
+    if [ -n "${APP_VERSION:-}" ]; then LDFLAGS="${LDFLAGS} -X 'gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/buildinfo.Version=${APP_VERSION}'"; fi; \
+    if [ -n "${APP_COMMIT:-}" ]; then LDFLAGS="${LDFLAGS} -X 'gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/buildinfo.Commit=${APP_COMMIT}'"; fi; \
+    if [ -n "${APP_BUILD_DATE:-}" ]; then LDFLAGS="${LDFLAGS} -X 'gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/buildinfo.Date=${APP_BUILD_DATE}'"; fi; \
     for bin in api worker cleanup migrate smoke admin; do \
         CGO_ENABLED=0 GOOS=linux go build \
-            -ldflags="-s -w -X 'gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/buildinfo.Version=${APP_VERSION}' -X 'gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/buildinfo.Commit=${APP_COMMIT}' -X 'gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/buildinfo.Date=${APP_BUILD_DATE}'" \
+            -ldflags="${LDFLAGS}" \
             -trimpath \
             -o "/out/${bin}" "./cmd/${bin}"; \
     done
