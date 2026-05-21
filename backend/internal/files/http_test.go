@@ -2,7 +2,10 @@ package files
 
 import (
 	"database/sql"
+	"io"
+	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -94,5 +97,34 @@ func TestAcceptsHTML(t *testing.T) {
 	r.Header.Set("Accept", "application/json, text/html")
 	if !acceptsHTML(r) {
 		t.Fatal("acceptsHTML(mixed) = false, want true")
+	}
+}
+
+func TestWritePublicLinkPageWithError(t *testing.T) {
+	h := &Handler{}
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/public/token", nil)
+	file := File{
+		NamePlain:      sql.NullString{String: "report.zip", Valid: true},
+		PlaintextSize:  sql.NullInt64{Int64: 1024, Valid: true},
+		CiphertextSize: sql.NullInt64{Int64: 1200, Valid: true},
+	}
+	link := PublicLink{PasswordRequired: true}
+	h.writePublicLinkPageWithError(w, r, "token", file, link, http.StatusUnauthorized, "Incorrect password. Try again.")
+
+	resp := w.Result()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusUnauthorized)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("ReadAll() error = %v", err)
+	}
+	text := string(body)
+	if !strings.Contains(text, "Incorrect password. Try again.") {
+		t.Fatalf("body does not contain password error message: %s", text)
+	}
+	if !strings.Contains(text, `action="/public/token/download"`) {
+		t.Fatalf("body does not contain download form action: %s", text)
 	}
 }

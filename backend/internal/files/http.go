@@ -48,6 +48,7 @@ var publicLinkPageTemplate = template.Must(template.New("public-link").Parse(`<!
     .panel { width: min(460px, 100%); background: #fff; border: 1px solid #d9dee7; border-radius: 8px; padding: 22px; box-shadow: 0 1px 2px rgba(16, 24, 40, .06); text-align: center; }
     h1 { font-size: 18px; margin: 0 0 6px; overflow-wrap: anywhere; }
     .muted { color: #68707c; margin: 0 0 14px; }
+    .error { color: #b42318; background: #fef3f2; border: 1px solid #fecdca; border-radius: 6px; padding: 8px 10px; margin: 0 0 12px; text-align: left; }
     form { display: grid; gap: 10px; width: 100%; }
     input { min-height: 40px; width: 100%; box-sizing: border-box; padding: 0 12px; border: 1px solid #d9dee7; border-radius: 6px; font: inherit; }
     button, a.button { min-height: 40px; width: 100%; box-sizing: border-box; display: inline-grid; place-items: center; border: 1px solid #0f766e; border-radius: 6px; background: #0f766e; color: #fff; text-decoration: none; font: inherit; padding: 0 14px; cursor: pointer; }
@@ -58,6 +59,9 @@ var publicLinkPageTemplate = template.Must(template.New("public-link").Parse(`<!
     <div class="panel">
       <h1>{{.Name}}</h1>
       <div class="muted">{{.Size}}</div>
+      {{if .PasswordError}}
+      <div class="error">{{.PasswordError}}</div>
+      {{end}}
       {{if .PasswordRequired}}
       <form method="post" action="/public/{{.Token}}/download">
         <input name="password" type="password" autocomplete="current-password" placeholder="Password" required autofocus>
@@ -763,6 +767,10 @@ func (h *Handler) PublicDownload(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 	if link.PasswordRequired && !verifyPublicLinkPassword(link, publicLinkPasswordFromRequest(r)) {
+		if acceptsHTML(r) {
+			h.writePublicLinkPageWithError(w, r, token, file, link, http.StatusUnauthorized, "Incorrect password. Try again.")
+			return
+		}
 		writeError(w, http.StatusUnauthorized, "public_link_password_required")
 		return
 	}
@@ -1140,16 +1148,22 @@ func acceptsHTML(r *http.Request) bool {
 }
 
 func (h *Handler) writePublicLinkPage(w http.ResponseWriter, r *http.Request, token string, file File, link PublicLink) {
+	h.writePublicLinkPageWithError(w, r, token, file, link, http.StatusOK, "")
+}
+
+func (h *Handler) writePublicLinkPageWithError(w http.ResponseWriter, r *http.Request, token string, file File, link PublicLink, status int, passwordError string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	name := nullableString(file.NamePlain)
 	if name == "" {
 		name = "download"
 	}
+	w.WriteHeader(status)
 	_ = publicLinkPageTemplate.Execute(w, map[string]any{
 		"Token":            token,
 		"Name":             name,
 		"Size":             formatPublicFileSize(file.PlaintextSize),
 		"PasswordRequired": link.PasswordRequired,
+		"PasswordError":    passwordError,
 	})
 }
 
