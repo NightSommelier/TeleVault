@@ -200,6 +200,8 @@ func TestUploadProgressResponseSummarizesQueueState(t *testing.T) {
 		progress["ciphertext_complete_size"] != int64(18) ||
 		progress["telegram_remaining_bytes"] != int64(27) ||
 		progress["telegram_eta_seconds"] != int64(2) ||
+		progress["telegram_eta_source"] != "configured" ||
+		progress["telegram_estimated_bps"] != int64(10_000_000) ||
 		progress["ready_to_complete"] != false {
 		t.Fatalf("uploadProgressResponse() = %+v", progress)
 	}
@@ -285,7 +287,9 @@ func TestUploadProgressResponseEstimatesETAFromCompletedBytes(t *testing.T) {
 	}
 
 	progress := uploadProgressResponse(upload, parts, EffectiveSettings{}, func() time.Time { return now })
-	if progress["telegram_eta_seconds"] != int64(10) {
-		t.Fatalf("telegram_eta_seconds = %v, want 10", progress["telegram_eta_seconds"])
+	if progress["telegram_eta_seconds"] != int64(10) ||
+		progress["telegram_eta_source"] != "observed" ||
+		progress["telegram_estimated_bps"] != int64(10) {
+		t.Fatalf("uploadProgressResponse() = %+v, want observed ETA at 10 B/s", progress)
 	}
 }

@@ -600,6 +600,8 @@ func uploadProgressResponse(upload Upload, parts []UploadPart, settings Effectiv
 		"ciphertext_complete_size": int64(0),
 		"next_retry_at":            nil,
 		"telegram_eta_seconds":     nil,
+		"telegram_eta_source":      nil,
+		"telegram_estimated_bps":   int64(0),
 		"telegram_remaining_bytes": int64(0),
 		"active_workers":           []string{},
 		"ready_to_complete":        false,
@@ -667,13 +669,17 @@ func uploadProgressResponse(upload Upload, parts []UploadPart, settings Effectiv
 	progress["telegram_remaining_bytes"] = remainingTelegramBytes
 	if remainingTelegramBytes > 0 {
 		bytesPerSecond := settings.TargetUploadBytesPerSecond
+		etaSource := "configured"
 		if bytesPerSecond <= 0 && completeTelegramBytes > 0 && !upload.CreatedAt.IsZero() && currentTime.After(upload.CreatedAt) {
 			elapsedSeconds := int64(currentTime.Sub(upload.CreatedAt).Seconds())
 			if elapsedSeconds > 0 {
 				bytesPerSecond = completeTelegramBytes / elapsedSeconds
+				etaSource = "observed"
 			}
 		}
 		if bytesPerSecond > 0 {
+			progress["telegram_estimated_bps"] = bytesPerSecond
+			progress["telegram_eta_source"] = etaSource
 			transferSeconds := (remainingTelegramBytes + bytesPerSecond - 1) / bytesPerSecond
 			cooldownSeconds := int64(0)
 			if settings.CooldownBetweenPartsMillisec > 0 && remainingTelegramParts > 0 {

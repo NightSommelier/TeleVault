@@ -2240,13 +2240,18 @@
           leased,
           failed: progress.failed_parts,
           next_retry_at: progress.next_retry_at || null,
+          eta_source: progress.telegram_eta_source || null,
+          estimated_bps: progress.telegram_estimated_bps || 0,
         });
         if (progress.failed_parts > 0) throw new Error('upload_part_failed');
         if (progress.ready_to_complete) return 'ready';
         const eta = formatETA(progress.telegram_eta_seconds);
+        const speed = formatSpeed(progress.telegram_estimated_bps);
+        const retry = formatRetryAt(progress.next_retry_at);
+        const retrySuffix = retry ? `, retry ${retry}` : '';
         updateQueueItem(item.id, {
           status: 'telegram',
-          message: `Telegram ${done}/${total} complete, ${leased} active, ${queued} queued, ETA ${eta}`,
+          message: `Telegram ${done}/${total} complete, ${leased} active, ${queued} queued, ETA ${eta}, ${speed}${retrySuffix}`,
           safeToClose: true,
           progress: 50 + Math.round((done / Math.max(total, 1)) * 45),
         });
@@ -2656,6 +2661,20 @@
       if (hours > 0) return `${hours}h ${minutes}m`;
       if (minutes > 0) return `${minutes}m ${rest}s`;
       return `${rest}s`;
+    }
+
+    function formatSpeed(bytesPerSecond) {
+      const value = Number(bytesPerSecond);
+      if (!Number.isFinite(value) || value <= 0) return 'speed unknown';
+      return `${formatBytes(value)}/s`;
+    }
+
+    function formatRetryAt(value) {
+      if (!value) return '';
+      const retryAt = new Date(value).getTime();
+      if (!Number.isFinite(retryAt)) return '';
+      const seconds = Math.max(0, Math.ceil((retryAt - Date.now()) / 1000));
+      return seconds > 0 ? `in ${formatETA(seconds)}` : 'now';
     }
 
     function escapeHTML(value) {
