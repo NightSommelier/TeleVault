@@ -45,12 +45,12 @@ var publicLinkPageTemplate = template.Must(template.New("public-link").Parse(`<!
   <style>
     body { margin: 0; font: 14px/1.45 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #1b1f24; background: #f7f8fa; }
     main { min-height: 100vh; display: grid; place-items: center; padding: 24px; }
-    .panel { width: min(460px, 100%); background: #fff; border: 1px solid #d9dee7; border-radius: 8px; padding: 18px; box-shadow: 0 1px 2px rgba(16, 24, 40, .06); }
+    .panel { width: min(460px, 100%); background: #fff; border: 1px solid #d9dee7; border-radius: 8px; padding: 22px; box-shadow: 0 1px 2px rgba(16, 24, 40, .06); text-align: center; }
     h1 { font-size: 18px; margin: 0 0 6px; overflow-wrap: anywhere; }
-    .muted { color: #68707c; margin-bottom: 14px; }
-    form { display: grid; gap: 10px; }
-    input { min-height: 38px; padding: 0 10px; border: 1px solid #d9dee7; border-radius: 6px; font: inherit; }
-    button, a.button { min-height: 38px; display: inline-grid; place-items: center; border: 1px solid #0f766e; border-radius: 6px; background: #0f766e; color: #fff; text-decoration: none; font: inherit; padding: 0 14px; cursor: pointer; }
+    .muted { color: #68707c; margin: 0 0 14px; }
+    form { display: grid; gap: 10px; width: 100%; }
+    input { min-height: 40px; width: 100%; box-sizing: border-box; padding: 0 12px; border: 1px solid #d9dee7; border-radius: 6px; font: inherit; }
+    button, a.button { min-height: 40px; width: 100%; box-sizing: border-box; display: inline-grid; place-items: center; border: 1px solid #0f766e; border-radius: 6px; background: #0f766e; color: #fff; text-decoration: none; font: inherit; padding: 0 14px; cursor: pointer; }
   </style>
 </head>
 <body>
@@ -66,6 +66,30 @@ var publicLinkPageTemplate = template.Must(template.New("public-link").Parse(`<!
       {{else}}
       <a class="button" href="/public/{{.Token}}/download">Download</a>
       {{end}}
+    </div>
+  </main>
+</body>
+</html>`))
+
+var publicLinkUnavailableTemplate = template.Must(template.New("public-link-unavailable").Parse(`<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Link unavailable - TeleVault</title>
+  <style>
+    body { margin: 0; font: 14px/1.45 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #1b1f24; background: #f7f8fa; }
+    main { min-height: 100vh; display: grid; place-items: center; padding: 24px; }
+    .panel { width: min(460px, 100%); background: #fff; border: 1px solid #d9dee7; border-radius: 8px; padding: 22px; box-shadow: 0 1px 2px rgba(16, 24, 40, .06); text-align: center; }
+    h1 { font-size: 18px; margin: 0 0 8px; }
+    p { color: #68707c; margin: 0; }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="panel">
+      <h1>Link unavailable</h1>
+      <p>This file is unavailable or the link is no longer active.</p>
     </div>
   </main>
 </body>
@@ -579,8 +603,18 @@ func (h *Handler) CreatePublicLink(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_public_link_password")
 		return
 	}
+	maxDownloads, ok := parseOptionalMaxDownloads(request.MaxDownloads)
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid_max_downloads")
+		return
+	}
+	downloadLimitMode, ok := parseDownloadLimitMode(request.DownloadLimitMode)
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid_download_limit_mode")
+		return
+	}
 
-	link, err := h.store.CreatePublicLink(r.Context(), user.ID, fileID, tokenHash, expiresAt, password)
+	link, err := h.store.CreatePublicLink(r.Context(), user.ID, fileID, tokenHash, expiresAt, maxDownloads, downloadLimitMode, password)
 	if errors.Is(err, ErrNotFound) {
 		writeError(w, http.StatusNotFound, "file_not_found")
 		return
@@ -653,7 +687,7 @@ func (h *Handler) Download(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.streamDownload(w, r, file, parts, session, downloadStreamMeta{
+	_ = h.streamDownload(w, r, file, parts, session, downloadStreamMeta{
 		Source: "auth",
 		FileID: file.ID,
 		UserID: user.ID,
@@ -669,6 +703,10 @@ func (h *Handler) PublicMetadata(w http.ResponseWriter, r *http.Request) {
 
 	file, link, err := h.store.PublicFileByTokenHash(r.Context(), publicLinkTokenHash(token))
 	if errors.Is(err, ErrNotFound) {
+		if acceptsHTML(r) {
+			h.writePublicLinkUnavailablePage(w)
+			return
+		}
 		writeError(w, http.StatusNotFound, "public_link_not_found")
 		return
 	}
@@ -705,8 +743,12 @@ func (h *Handler) PublicDownload(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	file, link, err := h.store.PublicFileByTokenHash(r.Context(), publicLinkTokenHash(token))
-	if errors.Is(err, ErrNotFound) {
+	file, link, claimed, err := h.store.ReservePublicLinkDownloadSlot(r.Context(), publicLinkTokenHash(token))
+	if !claimed {
+		if acceptsHTML(r) {
+			h.writePublicLinkUnavailablePage(w)
+			return
+		}
 		writeError(w, http.StatusNotFound, "public_link_not_found")
 		return
 	}
@@ -714,6 +756,12 @@ func (h *Handler) PublicDownload(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "public_download_load_failed")
 		return
 	}
+	completed := false
+	defer func() {
+		if err := h.store.FinishPublicLinkDownload(r.Context(), link.ID, completed); err != nil {
+			h.logger.Warn("public download counter update failed", "public_link_id", link.ID, "completed", completed, "error", err)
+		}
+	}()
 	if link.PasswordRequired && !verifyPublicLinkPassword(link, publicLinkPasswordFromRequest(r)) {
 		writeError(w, http.StatusUnauthorized, "public_link_password_required")
 		return
@@ -735,7 +783,7 @@ func (h *Handler) PublicDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.streamDownload(w, r, file, parts, session, downloadStreamMeta{
+	completed = h.streamDownload(w, r, file, parts, session, downloadStreamMeta{
 		Source:       "public",
 		FileID:       file.ID,
 		PublicLinkID: link.ID,
@@ -760,7 +808,7 @@ func (w *countingWriter) Write(p []byte) (int, error) {
 	return n, err
 }
 
-func (h *Handler) streamDownload(w http.ResponseWriter, r *http.Request, file File, parts []FilePart, session string, meta downloadStreamMeta) {
+func (h *Handler) streamDownload(w http.ResponseWriter, r *http.Request, file File, parts []FilePart, session string, meta downloadStreamMeta) bool {
 	name := nullableString(file.NamePlain)
 	if name == "" {
 		name = "download"
@@ -795,7 +843,7 @@ func (h *Handler) streamDownload(w http.ResponseWriter, r *http.Request, file Fi
 		if unwrapErr != nil {
 			_ = reader.CloseWithError(unwrapErr)
 			<-errCh
-			return
+			return false
 		}
 
 		partWriter := &countingWriter{dst: w}
@@ -818,7 +866,7 @@ func (h *Handler) streamDownload(w http.ResponseWriter, r *http.Request, file Fi
 				"context_error", errorString(r.Context().Err()),
 				"duration_ms", time.Since(startedAt).Milliseconds(),
 			)
-			return
+			return false
 		}
 		totalWritten += partWriter.n
 	}
@@ -833,6 +881,7 @@ func (h *Handler) streamDownload(w http.ResponseWriter, r *http.Request, file Fi
 		"written_bytes", totalWritten,
 		"duration_ms", time.Since(startedAt).Milliseconds(),
 	)
+	return true
 }
 
 func requestClientIP(r *http.Request) string {
@@ -874,8 +923,10 @@ type createShareRequest struct {
 }
 
 type createPublicLinkRequest struct {
-	ExpiresAt string `json:"expires_at"`
-	Password  string `json:"password"`
+	ExpiresAt         string `json:"expires_at"`
+	Password          string `json:"password"`
+	MaxDownloads      *int64 `json:"max_downloads"`
+	DownloadLimitMode string `json:"download_limit_mode"`
 }
 
 func normalizeName(name string) string {
@@ -958,15 +1009,19 @@ func publicLinksResponse(links []PublicLink) []map[string]any {
 
 func publicLinkResponse(link PublicLink) map[string]any {
 	return map[string]any{
-		"id":                link.ID,
-		"file_id":           link.FileID,
-		"owner_id":          link.OwnerID,
-		"permission":        link.Permission,
-		"expires_at":        nullableTimeValue(link.ExpiresAt),
-		"revoked_at":        nullableTimeValue(link.RevokedAt),
-		"password_required": link.PasswordRequired,
-		"created_at":        link.CreatedAt,
-		"updated_at":        link.UpdatedAt,
+		"id":                    link.ID,
+		"file_id":               link.FileID,
+		"owner_id":              link.OwnerID,
+		"permission":            link.Permission,
+		"expires_at":            nullableTimeValue(link.ExpiresAt),
+		"revoked_at":            nullableTimeValue(link.RevokedAt),
+		"max_downloads":         nullableInt64Value(link.MaxDownloads),
+		"download_count":        link.DownloadCount,
+		"active_download_count": link.ActiveDownloadCount,
+		"download_limit_mode":   link.DownloadLimitMode,
+		"password_required":     link.PasswordRequired,
+		"created_at":            link.CreatedAt,
+		"updated_at":            link.UpdatedAt,
 	}
 }
 
@@ -1098,11 +1153,27 @@ func (h *Handler) writePublicLinkPage(w http.ResponseWriter, r *http.Request, to
 	})
 }
 
+func (h *Handler) writePublicLinkUnavailablePage(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusNotFound)
+	_ = publicLinkUnavailableTemplate.Execute(w, nil)
+}
+
 func formatPublicFileSize(size sql.NullInt64) string {
 	if !size.Valid {
 		return "Unknown size"
 	}
-	return strconv.FormatInt(size.Int64, 10) + " bytes"
+	units := []string{"B", "KB", "MB", "GB", "TB", "PB"}
+	value := float64(size.Int64)
+	unit := units[0]
+	for i := 1; i < len(units) && value >= 1024; i++ {
+		value /= 1024
+		unit = units[i]
+	}
+	if unit == "B" {
+		return strconv.FormatInt(size.Int64, 10) + " B"
+	}
+	return strconv.FormatFloat(value, 'f', 1, 64) + " " + unit
 }
 
 func nullableStringValue(value sql.NullString) any {
@@ -1143,6 +1214,27 @@ func parseOptionalExpiry(value string) (sql.NullTime, bool) {
 		return sql.NullTime{}, false
 	}
 	return sql.NullTime{Time: parsed.UTC(), Valid: true}, true
+}
+
+func parseOptionalMaxDownloads(value *int64) (sql.NullInt64, bool) {
+	if value == nil {
+		return sql.NullInt64{}, true
+	}
+	if *value <= 0 {
+		return sql.NullInt64{}, false
+	}
+	return sql.NullInt64{Int64: *value, Valid: true}, true
+}
+
+func parseDownloadLimitMode(value string) (string, bool) {
+	value = strings.TrimSpace(strings.ToLower(value))
+	if value == "" {
+		return PublicDownloadLimitModeHard, true
+	}
+	if value != PublicDownloadLimitModeHard && value != PublicDownloadLimitModeSoft {
+		return "", false
+	}
+	return value, true
 }
 
 func writeError(w http.ResponseWriter, status int, code string) {

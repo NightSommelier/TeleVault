@@ -727,6 +727,17 @@
             <label for="publicPasswordInput">Password</label>
             <input id="publicPasswordInput" type="password" minlength="8" maxlength="1024" autocomplete="new-password" placeholder="Optional, at least 8 characters">
           </div>
+          <div class="field">
+            <label for="publicDownloadLimitInput">Download limit</label>
+            <input id="publicDownloadLimitInput" type="number" min="1" step="1" placeholder="Unlimited">
+          </div>
+          <div class="field">
+            <label for="publicDownloadLimitModeSelect">Limit mode</label>
+            <select id="publicDownloadLimitModeSelect">
+              <option value="hard" selected>Hard</option>
+              <option value="soft">Soft</option>
+            </select>
+          </div>
           <div id="publicLinkResult" class="copy-field hidden">
             <input id="publicLinkInput" type="text" readonly>
             <button id="copyPublicLinkBtn">Copy</button>
@@ -736,11 +747,12 @@
               <tr>
                 <th>Created</th>
                 <th>Expires</th>
+                <th>Downloads</th>
                 <th></th>
               </tr>
             </thead>
             <tbody id="publicLinksBody">
-              <tr><td colspan="3" class="muted">No active public links.</td></tr>
+              <tr><td colspan="4" class="muted">No active public links.</td></tr>
             </tbody>
           </table>
         </div>
@@ -994,6 +1006,8 @@
       publicLinkResult: document.getElementById('publicLinkResult'),
       publicLinkInput: document.getElementById('publicLinkInput'),
       publicPasswordInput: document.getElementById('publicPasswordInput'),
+      publicDownloadLimitInput: document.getElementById('publicDownloadLimitInput'),
+      publicDownloadLimitModeSelect: document.getElementById('publicDownloadLimitModeSelect'),
       copyPublicLinkBtn: document.getElementById('copyPublicLinkBtn'),
       publicLinksBody: document.getElementById('publicLinksBody'),
       moveModal: document.getElementById('moveModal'),
@@ -1793,6 +1807,8 @@
       el.publicExpirySelect.value = '1d';
       el.publicLinkInput.value = '';
       el.publicPasswordInput.value = '';
+      el.publicDownloadLimitInput.value = '';
+      el.publicDownloadLimitModeSelect.value = 'hard';
       el.publicLinkResult.classList.add('hidden');
       setShareStatus('');
       el.shareModal.classList.remove('hidden');
@@ -1856,12 +1872,12 @@
 
     async function refreshPublicLinks() {
       if (!state.shareFile) return;
-      el.publicLinksBody.innerHTML = `<tr><td colspan="3" class="muted">Loading...</td></tr>`;
+      el.publicLinksBody.innerHTML = `<tr><td colspan="4" class="muted">Loading...</td></tr>`;
       try {
         const data = await api(`/files/${state.shareFile.id}/public-links`);
         renderPublicLinks(data.public_links || []);
       } catch (err) {
-        el.publicLinksBody.innerHTML = `<tr><td colspan="3" class="muted">${escapeHTML(err.message)}</td></tr>`;
+        el.publicLinksBody.innerHTML = `<tr><td colspan="4" class="muted">${escapeHTML(err.message)}</td></tr>`;
       }
     }
 
@@ -1923,6 +1939,11 @@
 
     async function createPublicLink() {
       if (!state.shareFile) return;
+      const rawDownloadLimit = String(el.publicDownloadLimitInput.value || '').trim();
+      if (rawDownloadLimit !== '' && (!/^\d+$/.test(rawDownloadLimit) || Number(rawDownloadLimit) <= 0)) {
+        setShareStatus('Download limit must be a positive integer.', true);
+        return;
+      }
       try {
         el.createPublicLinkBtn.disabled = true;
         const data = await api(`/files/${state.shareFile.id}/public-links`, {
@@ -1931,10 +1952,14 @@
           body: JSON.stringify({
             expires_at: selectedExpiry(el.publicExpirySelect.value),
             password: el.publicPasswordInput.value.trim() || undefined,
+            max_downloads: rawDownloadLimit === '' ? null : Number(rawDownloadLimit),
+            download_limit_mode: el.publicDownloadLimitModeSelect.value || 'hard',
           }),
         });
         el.publicLinkInput.value = data.url || '';
         el.publicPasswordInput.value = '';
+        el.publicDownloadLimitInput.value = '';
+        el.publicDownloadLimitModeSelect.value = 'hard';
         el.publicLinkResult.classList.remove('hidden');
         setShareStatus('Public link created.');
         await refreshPublicLinks();
@@ -1947,13 +1972,14 @@
 
     function renderPublicLinks(links) {
       if (!links.length) {
-        el.publicLinksBody.innerHTML = `<tr><td colspan="3" class="muted">No active public links.</td></tr>`;
+        el.publicLinksBody.innerHTML = `<tr><td colspan="4" class="muted">No active public links.</td></tr>`;
         return;
       }
       el.publicLinksBody.innerHTML = links.map((link) => `
         <tr>
           <td>${escapeHTML(new Date(link.created_at).toLocaleString())}</td>
           <td>${link.expires_at ? escapeHTML(new Date(link.expires_at).toLocaleString()) : 'No limit'}${link.password_required ? ' + password' : ''}</td>
+          <td>${Number.isInteger(link.max_downloads) ? `${link.download_count || 0} / ${link.max_downloads}${link.download_limit_mode === 'hard' && Number.isInteger(link.active_download_count) && link.active_download_count > 0 ? ` (${link.active_download_count} active)` : ''}` : 'Unlimited'}${link.download_limit_mode ? ` (${escapeHTML(String(link.download_limit_mode))})` : ''}</td>
           <td><button data-revoke-public-link="${link.id}">Revoke</button></td>
         </tr>
       `).join('');

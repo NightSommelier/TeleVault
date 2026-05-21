@@ -18,6 +18,9 @@ const (
 	TypeFile    = "file"
 	TypeFolder  = "folder"
 	StatusReady = "ready"
+
+	PublicDownloadLimitModeHard = "hard"
+	PublicDownloadLimitModeSoft = "soft"
 )
 
 type File struct {
@@ -73,6 +76,10 @@ type PublicLink struct {
 	Permission             string
 	ExpiresAt              sql.NullTime
 	RevokedAt              sql.NullTime
+	MaxDownloads           sql.NullInt64
+	DownloadCount          int64
+	ActiveDownloadCount    int64
+	DownloadLimitMode      string
 	PasswordRequired       bool
 	PasswordKDF            sql.NullString
 	PasswordSalt           []byte
@@ -486,7 +493,7 @@ func (s *Store) DownloadDataForPublicFile(ctx context.Context, file File) (File,
 func (s *Store) PublicFileByTokenHash(ctx context.Context, tokenHash []byte) (File, PublicLink, error) {
 	row := s.db.QueryRowContext(ctx, `
 SELECT f.id, f.owner_id, f.parent_id, f.name_plain, f.mime_type, f.plaintext_size, f.ciphertext_size, f.type, f.status, f.created_at, f.updated_at,
-       l.id, l.file_id, l.owner_id, l.permission, l.expires_at, l.revoked_at, (l.password_hash IS NOT NULL),
+       l.id, l.file_id, l.owner_id, l.permission, l.expires_at, l.revoked_at, l.max_downloads, l.download_count, l.active_download_count, l.download_limit_mode, (l.password_hash IS NOT NULL),
        l.password_kdf, l.password_salt, l.password_hash, l.password_argon_time, l.password_argon_memory_kib, l.password_argon_threads,
        l.created_at, l.updated_at
 FROM public_links l
@@ -494,6 +501,11 @@ JOIN files f ON f.id = l.file_id
 WHERE l.token_hash = $1
   AND l.revoked_at IS NULL
   AND (l.expires_at IS NULL OR l.expires_at > now())
+  AND (
+    l.max_downloads IS NULL
+    OR (l.download_limit_mode = 'hard' AND (l.download_count + l.active_download_count) < l.max_downloads)
+    OR (l.download_limit_mode = 'soft' AND l.download_count < l.max_downloads)
+  )
   AND f.deleted_at IS NULL`,
 		tokenHash,
 	)
@@ -580,7 +592,7 @@ WHERE id = TRUE`,
 	return value, nil
 }
 
-func (s *Store) CreatePublicLink(ctx context.Context, ownerID string, fileID string, tokenHash []byte, expiresAt sql.NullTime, password PublicLinkPassword) (PublicLink, error) {
+func (s *Store) CreatePublicLink(ctx context.Context, ownerID string, fileID string, tokenHash []byte, expiresAt sql.NullTime, maxDownloads sql.NullInt64, downloadLimitMode string, password PublicLinkPassword) (PublicLink, error) {
 	file, err := s.GetByID(ctx, ownerID, fileID)
 	if err != nil {
 		return PublicLink{}, err
@@ -597,6 +609,8 @@ INSERT INTO public_links (
     token_hash,
     permission,
     expires_at,
+    max_downloads,
+    download_limit_mode,
     password_kdf,
     password_salt,
     password_hash,
@@ -604,12 +618,14 @@ INSERT INTO public_links (
     password_argon_memory_kib,
     password_argon_threads
 )
-VALUES ($1, $2, $3, 'read', $4, $5, $6, $7, $8, $9, $10)
+VALUES ($1, $2, $3, 'read', $4, $5, $6, $7, $8, $9, $10, $11, $12)
 RETURNING id`,
 		fileID,
 		ownerID,
 		tokenHash,
 		nullableTime(expiresAt),
+		nullableInt64(maxDownloads),
+		nullableDownloadLimitMode(downloadLimitMode),
 		nullablePasswordString(password.KDF),
 		nullablePasswordBytes(password.Salt),
 		nullablePasswordBytes(password.Hash),
@@ -626,7 +642,7 @@ RETURNING id`,
 
 func (s *Store) GetPublicLink(ctx context.Context, ownerID string, fileID string, linkID string) (PublicLink, error) {
 	link, err := scanPublicLink(s.db.QueryRowContext(ctx, `
-SELECT id, file_id, owner_id, permission, expires_at, revoked_at, (password_hash IS NOT NULL),
+SELECT id, file_id, owner_id, permission, expires_at, revoked_at, max_downloads, download_count, active_download_count, download_limit_mode, (password_hash IS NOT NULL),
        password_kdf, password_salt, password_hash, password_argon_time, password_argon_memory_kib, password_argon_threads,
        created_at, updated_at
 FROM public_links
@@ -652,7 +668,7 @@ func (s *Store) ListPublicLinks(ctx context.Context, ownerID string, fileID stri
 	}
 
 	rows, err := s.db.QueryContext(ctx, `
-SELECT id, file_id, owner_id, permission, expires_at, revoked_at, (password_hash IS NOT NULL),
+SELECT id, file_id, owner_id, permission, expires_at, revoked_at, max_downloads, download_count, active_download_count, download_limit_mode, (password_hash IS NOT NULL),
        password_kdf, password_salt, password_hash, password_argon_time, password_argon_memory_kib, password_argon_threads,
        created_at, updated_at
 FROM public_links
@@ -695,6 +711,77 @@ WHERE owner_id = $1
 		fileID,
 		linkID,
 		now,
+	)
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (s *Store) ReservePublicLinkDownloadSlot(ctx context.Context, tokenHash []byte) (File, PublicLink, bool, error) {
+	row := s.db.QueryRowContext(ctx, `
+WITH claimed AS (
+	UPDATE public_links
+	SET active_download_count = CASE
+		WHEN download_limit_mode = 'hard' THEN active_download_count + 1
+		ELSE active_download_count
+	END,
+	    updated_at = now()
+	WHERE token_hash = $1
+	  AND revoked_at IS NULL
+	  AND (expires_at IS NULL OR expires_at > now())
+	  AND (
+		max_downloads IS NULL
+		OR (download_limit_mode = 'hard' AND (download_count + active_download_count) < max_downloads)
+		OR (download_limit_mode = 'soft' AND download_count < max_downloads)
+	  )
+	RETURNING id, file_id, owner_id, permission, expires_at, revoked_at, max_downloads, download_count,
+	          CASE WHEN download_limit_mode = 'hard' THEN active_download_count + 1 ELSE active_download_count END AS active_download_count,
+	          download_limit_mode,
+	          (password_hash IS NOT NULL) AS password_required, password_kdf, password_salt, password_hash, password_argon_time, password_argon_memory_kib,
+	          password_argon_threads, created_at, updated_at
+)
+SELECT f.id, f.owner_id, f.parent_id, f.name_plain, f.mime_type, f.plaintext_size, f.ciphertext_size, f.type, f.status, f.created_at, f.updated_at,
+       c.id, c.file_id, c.owner_id, c.permission, c.expires_at, c.revoked_at, c.max_downloads, c.download_count, c.active_download_count, c.download_limit_mode,
+       c.password_required, c.password_kdf, c.password_salt, c.password_hash, c.password_argon_time, c.password_argon_memory_kib, c.password_argon_threads, c.created_at, c.updated_at
+FROM claimed c
+JOIN files f ON f.id = c.file_id
+WHERE f.deleted_at IS NULL`,
+		tokenHash,
+	)
+	file, link, err := scanFileAndPublicLink(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return File{}, PublicLink{}, false, nil
+	}
+	if err != nil {
+		return File{}, PublicLink{}, false, err
+	}
+	return file, link, true, nil
+}
+
+func (s *Store) FinishPublicLinkDownload(ctx context.Context, linkID string, completed bool) error {
+	downloadInc := 0
+	if completed {
+		downloadInc = 1
+	}
+	result, err := s.db.ExecContext(ctx, `
+UPDATE public_links
+SET download_count = download_count + $2,
+    active_download_count = CASE
+      WHEN download_limit_mode = 'hard' AND active_download_count > 0 THEN active_download_count - 1
+      ELSE active_download_count
+    END,
+    updated_at = now()
+WHERE id = $1`,
+		linkID,
+		downloadInc,
 	)
 	if err != nil {
 		return err
@@ -1021,6 +1108,10 @@ func scanPublicLink(row rowScanner) (PublicLink, error) {
 		&link.Permission,
 		&link.ExpiresAt,
 		&link.RevokedAt,
+		&link.MaxDownloads,
+		&link.DownloadCount,
+		&link.ActiveDownloadCount,
+		&link.DownloadLimitMode,
 		&link.PasswordRequired,
 		&link.PasswordKDF,
 		&link.PasswordSalt,
@@ -1058,6 +1149,10 @@ func scanFileAndPublicLink(row rowScanner) (File, PublicLink, error) {
 		&link.Permission,
 		&link.ExpiresAt,
 		&link.RevokedAt,
+		&link.MaxDownloads,
+		&link.DownloadCount,
+		&link.ActiveDownloadCount,
+		&link.DownloadLimitMode,
 		&link.PasswordRequired,
 		&link.PasswordKDF,
 		&link.PasswordSalt,
@@ -1098,6 +1193,20 @@ func nullablePasswordBytes(value []byte) any {
 func nullablePasswordInt(value int) any {
 	if value == 0 {
 		return nil
+	}
+	return value
+}
+
+func nullableInt64(value sql.NullInt64) any {
+	if !value.Valid {
+		return nil
+	}
+	return value.Int64
+}
+
+func nullableDownloadLimitMode(value string) any {
+	if value == "" {
+		return PublicDownloadLimitModeHard
 	}
 	return value
 }

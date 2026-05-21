@@ -2,6 +2,7 @@ package files
 
 import (
 	"database/sql"
+	"net/http/httptest"
 	"testing"
 )
 
@@ -46,5 +47,52 @@ func TestPublicLinkPasswordRoundTrip(t *testing.T) {
 func TestPublicLinkPasswordRejectsShortPasswords(t *testing.T) {
 	if _, ok := derivePublicLinkPassword("short", 8); ok {
 		t.Fatal("derivePublicLinkPassword(short) ok = true, want false")
+	}
+}
+
+func TestFormatPublicFileSizeHumanReadable(t *testing.T) {
+	if got := formatPublicFileSize(sql.NullInt64{Int64: 2222981120, Valid: true}); got != "2.1 GB" {
+		t.Fatalf("formatPublicFileSize() = %q, want %q", got, "2.1 GB")
+	}
+}
+
+func TestParseOptionalMaxDownloads(t *testing.T) {
+	if got, ok := parseOptionalMaxDownloads(nil); !ok || got.Valid {
+		t.Fatalf("parseOptionalMaxDownloads(nil) = %+v,%v, want invalid,true", got, ok)
+	}
+	v := int64(3)
+	if got, ok := parseOptionalMaxDownloads(&v); !ok || !got.Valid || got.Int64 != 3 {
+		t.Fatalf("parseOptionalMaxDownloads(3) = %+v,%v, want 3,true", got, ok)
+	}
+	bad := int64(0)
+	if _, ok := parseOptionalMaxDownloads(&bad); ok {
+		t.Fatal("parseOptionalMaxDownloads(0) ok = true, want false")
+	}
+}
+
+func TestParseDownloadLimitMode(t *testing.T) {
+	if got, ok := parseDownloadLimitMode(""); !ok || got != PublicDownloadLimitModeHard {
+		t.Fatalf("parseDownloadLimitMode(empty) = %q,%v, want hard,true", got, ok)
+	}
+	if got, ok := parseDownloadLimitMode("soft"); !ok || got != PublicDownloadLimitModeSoft {
+		t.Fatalf("parseDownloadLimitMode(soft) = %q,%v, want soft,true", got, ok)
+	}
+	if _, ok := parseDownloadLimitMode("weird"); ok {
+		t.Fatal("parseDownloadLimitMode(weird) ok = true, want false")
+	}
+}
+
+func TestAcceptsHTML(t *testing.T) {
+	r := httptest.NewRequest("GET", "/public/token", nil)
+	if !acceptsHTML(r) {
+		t.Fatal("acceptsHTML(empty) = false, want true")
+	}
+	r.Header.Set("Accept", "application/json")
+	if acceptsHTML(r) {
+		t.Fatal("acceptsHTML(json) = true, want false")
+	}
+	r.Header.Set("Accept", "application/json, text/html")
+	if !acceptsHTML(r) {
+		t.Fatal("acceptsHTML(mixed) = false, want true")
 	}
 }
