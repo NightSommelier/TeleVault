@@ -638,6 +638,7 @@
             <div id="selectionSummary" class="selection-summary"></div>
             <div class="actions">
               <button id="selectAllVisibleBtn">Select all</button>
+              <button id="moveSelectedBtn">Move selected</button>
               <button id="deleteSelectedBtn" class="danger">Delete selected</button>
               <button id="clearSelectionBtn">Clear</button>
             </div>
@@ -742,6 +743,28 @@
               <tr><td colspan="3" class="muted">No active public links.</td></tr>
             </tbody>
           </table>
+        </div>
+      </div>
+    </div>
+
+    <div id="moveModal" class="modal-backdrop hidden">
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="moveTitle">
+        <div class="modal-head">
+          <div>
+            <div id="moveTitle" class="panel-title">Move selected items</div>
+            <div id="moveSummary" class="muted"></div>
+          </div>
+          <button id="closeMoveBtn">Close</button>
+        </div>
+        <div class="modal-body stack">
+          <div class="field">
+            <label for="moveTargetSelect">Destination folder</label>
+            <select id="moveTargetSelect"></select>
+          </div>
+          <div class="actions">
+            <button id="confirmMoveBtn" class="primary">Move</button>
+          </div>
+          <div id="moveStatus" class="status"></div>
         </div>
       </div>
     </div>
@@ -919,6 +942,7 @@
       uploadDebugLines: [],
       adminAccountLimits: [],
       adminEditingAccountID: '',
+      movePickerFolders: [],
     };
 
     const el = {
@@ -940,6 +964,7 @@
       selectionBar: document.getElementById('selectionBar'),
       selectionSummary: document.getElementById('selectionSummary'),
       selectAllVisibleBtn: document.getElementById('selectAllVisibleBtn'),
+      moveSelectedBtn: document.getElementById('moveSelectedBtn'),
       deleteSelectedBtn: document.getElementById('deleteSelectedBtn'),
       clearSelectionBtn: document.getElementById('clearSelectionBtn'),
       filesBody: document.getElementById('filesBody'),
@@ -971,6 +996,12 @@
       publicPasswordInput: document.getElementById('publicPasswordInput'),
       copyPublicLinkBtn: document.getElementById('copyPublicLinkBtn'),
       publicLinksBody: document.getElementById('publicLinksBody'),
+      moveModal: document.getElementById('moveModal'),
+      closeMoveBtn: document.getElementById('closeMoveBtn'),
+      moveSummary: document.getElementById('moveSummary'),
+      moveTargetSelect: document.getElementById('moveTargetSelect'),
+      confirmMoveBtn: document.getElementById('confirmMoveBtn'),
+      moveStatus: document.getElementById('moveStatus'),
       detailsModal: document.getElementById('detailsModal'),
       closeDetailsBtn: document.getElementById('closeDetailsBtn'),
       detailsFileName: document.getElementById('detailsFileName'),
@@ -1156,7 +1187,9 @@
       renderBreadcrumbs();
       try {
         const data = state.view === 'shared'
-          ? await api('/shared')
+          ? (state.currentFolderId
+            ? await api(`/files?parent_id=${encodeURIComponent(state.currentFolderId)}`)
+            : await api('/shared'))
           : await api(`/files${state.currentFolderId ? `?parent_id=${encodeURIComponent(state.currentFolderId)}` : ''}`);
         renderFiles(data.files || []);
       } catch (err) {
@@ -1309,10 +1342,13 @@
     }
 
     function renderFileActions(file) {
-      const downloadLink = `<a class="button-link" href="/files/${encodeURIComponent(file.id)}/download" download>Download</a>`;
       if (state.view === 'shared') {
-        return `${downloadLink}<button data-details="${file.id}">Details</button>`;
+        if (file.type === 'folder') {
+          return `<button data-open-folder="${file.id}">Open</button><button data-details="${file.id}">Details</button>`;
+        }
+        return `<a class="button-link" href="/files/${encodeURIComponent(file.id)}/download" download>Download</a><button data-details="${file.id}">Details</button>`;
       }
+      const downloadLink = `<a class="button-link" href="/files/${encodeURIComponent(file.id)}/download" download>Download</a>`;
       const deleteButton = `<button data-delete="${file.id}">Delete</button>`;
       if (file.type === 'folder') {
         return `<button data-open-folder="${file.id}">Open</button><button data-details="${file.id}">Details</button>${deleteButton}`;
@@ -1322,7 +1358,9 @@
 
     function renderFileName(file) {
       const name = escapeHTML(file.name || 'Untitled');
-      const select = `<label class="file-select"><input type="checkbox" data-select-file="${file.id}" ${state.selectedFileIds.has(file.id) ? 'checked' : ''}></label>`;
+      const select = state.view === 'own'
+        ? `<label class="file-select"><input type="checkbox" data-select-file="${file.id}" ${state.selectedFileIds.has(file.id) ? 'checked' : ''}></label>`
+        : '';
       const selectLabel = state.view === 'own' ? ` data-select-label="${file.id}" role="button" tabindex="0"` : '';
       const label = file.type !== 'folder'
         ? `<span class="file-label"${selectLabel}>${name}</span>`
@@ -1338,6 +1376,7 @@
       el.selectionSummary.textContent = selectedCount === 1
         ? '1 item selected.'
         : `${selectedCount} items selected.`;
+      el.moveSelectedBtn.disabled = selectedCount === 0;
       el.deleteSelectedBtn.disabled = selectedCount === 0;
       el.clearSelectionBtn.disabled = selectedCount === 0;
       el.selectAllVisibleBtn.disabled = visibleCount === 0;
@@ -1345,12 +1384,13 @@
     }
 
     function renderBreadcrumbs() {
-      const root = `<button class="link" data-crumb-index="-1">Root</button>`;
+      const rootLabel = state.view === 'shared' ? 'Shared with me' : 'Root';
+      const root = `<button class="link" data-crumb-index="-1">${rootLabel}</button>`;
       const crumbs = state.folderStack.map((folder, index) => (
         `<span>/</span><button class="link" data-crumb-index="${index}">${escapeHTML(folder.name || 'Untitled')}</button>`
       )).join('');
-      el.breadcrumbs.innerHTML = state.view === 'shared' ? '<span>Shared with me</span>' : root + crumbs;
-      el.upBtn.disabled = state.view === 'shared' || !state.currentFolderId;
+      el.breadcrumbs.innerHTML = root + crumbs;
+      el.upBtn.disabled = !state.currentFolderId;
       el.ownFilesBtn.classList.toggle('active', state.view === 'own');
       el.sharedFilesBtn.classList.toggle('active', state.view === 'shared');
       el.breadcrumbs.querySelectorAll('[data-crumb-index]').forEach((button) => {
@@ -1384,6 +1424,10 @@
       state.currentFolderId = folder.id;
       state.folderStack.push({ id: folder.id, name: folder.name || 'Untitled' });
       saveFolderState();
+      if (state.view === 'shared') {
+        setHashRoute(sharedFolderRoute(folder.id));
+        return;
+      }
       setHashRoute(folderRoute(folder.id));
     }
 
@@ -1401,6 +1445,10 @@
       const parent = state.folderStack[state.folderStack.length - 1];
       state.currentFolderId = parent ? parent.id : '';
       saveFolderState();
+      if (state.view === 'shared') {
+        setHashRoute(parent ? sharedFolderRoute(parent.id) : '#/shared');
+        return;
+      }
       setHashRoute(parent ? folderRoute(parent.id) : '#/');
     }
 
@@ -1413,13 +1461,20 @@
         state.currentFolderId = state.folderStack[index].id;
       }
       saveFolderState();
+      if (state.view === 'shared') {
+        setHashRoute(state.currentFolderId ? sharedFolderRoute(state.currentFolderId) : '#/shared');
+        return;
+      }
       setHashRoute(state.currentFolderId ? folderRoute(state.currentFolderId) : '#/');
     }
 
     function setView(view) {
       state.view = view;
       state.droppedFiles = [];
-      setHashRoute(view === 'shared' ? '#/shared' : (state.currentFolderId ? folderRoute(state.currentFolderId) : '#/'));
+      state.currentFolderId = '';
+      state.folderStack = [];
+      saveFolderState();
+      setHashRoute(view === 'shared' ? '#/shared' : '#/');
     }
 
     function setHashRoute(hash) {
@@ -1434,6 +1489,10 @@
       return `#/folder/${encodeURIComponent(id)}`;
     }
 
+    function sharedFolderRoute(id) {
+      return `#/shared/folder/${encodeURIComponent(id)}`;
+    }
+
     async function applyRoute() {
       if (!state.user || state.applyingRoute) return;
       state.applyingRoute = true;
@@ -1442,6 +1501,24 @@
         if (route.view === 'shared') {
           state.view = 'shared';
           state.droppedFiles = [];
+          if (!route.folderId) {
+            state.currentFolderId = '';
+            state.folderStack = [];
+            renderBreadcrumbs();
+            await refreshFiles();
+            return;
+          }
+          try {
+            await loadSharedFolderRoute(route.folderId);
+          } catch (err) {
+            state.currentFolderId = '';
+            state.folderStack = [];
+            if (window.location.hash !== '#/shared') {
+              window.location.hash = '#/shared';
+              return;
+            }
+            setUploadStatus(err.message, true);
+          }
           renderBreadcrumbs();
           await refreshFiles();
           return;
@@ -1480,7 +1557,9 @@
 
     function parseHashRoute() {
       const hash = window.location.hash || '#/';
-      if (hash === '#/shared') return { view: 'shared' };
+      if (hash === '#/shared') return { view: 'shared', folderId: '' };
+      const sharedMatch = hash.match(/^#\/shared\/folder\/([^/]+)$/);
+      if (sharedMatch) return { view: 'shared', folderId: decodeURIComponent(sharedMatch[1]) };
       const match = hash.match(/^#\/folder\/([^/]+)$/);
       if (match) return { view: 'own', folderId: decodeURIComponent(match[1]) };
       return { view: 'own', folderId: '' };
@@ -1495,6 +1574,29 @@
         seen.add(currentID);
         const data = await api(`/files/${encodeURIComponent(currentID)}`);
         const folder = data.file;
+        if (!folder || folder.type !== 'folder') throw new Error('folder_not_found');
+        stack.unshift({ id: folder.id, name: folder.name || 'Untitled' });
+        currentID = folder.parent_id || '';
+      }
+      state.currentFolderId = folderId;
+      state.folderStack = stack;
+    }
+
+    async function loadSharedFolderRoute(folderId) {
+      const stack = [];
+      let currentID = folderId;
+      const seen = new Set();
+      while (currentID) {
+        if (seen.has(currentID)) throw new Error('folder_cycle');
+        seen.add(currentID);
+        let folder;
+        try {
+          const data = await api(`/files/${encodeURIComponent(currentID)}`);
+          folder = data.file;
+        } catch (err) {
+          if (stack.length === 0) throw err;
+          break;
+        }
         if (!folder || folder.type !== 'folder') throw new Error('folder_not_found');
         stack.unshift({ id: folder.id, name: folder.name || 'Untitled' });
         currentID = folder.parent_id || '';
@@ -1556,6 +1658,88 @@
       await moveFiles([id], parentID);
     }
 
+    async function openMoveDialog() {
+      const selected = Array.from(state.selectedFileIds);
+      if (!selected.length || state.view !== 'own') return;
+      setMoveStatus('');
+      el.moveSummary.textContent = `${selected.length} item${selected.length === 1 ? '' : 's'} selected`;
+      el.confirmMoveBtn.disabled = true;
+      el.moveTargetSelect.disabled = true;
+      el.moveTargetSelect.innerHTML = '<option value="">Loading folders...</option>';
+      el.moveModal.classList.remove('hidden');
+      try {
+        state.movePickerFolders = await loadAllOwnFolders();
+        renderMoveTargets(selected);
+      } catch (err) {
+        el.moveTargetSelect.innerHTML = '<option value="">Folder list unavailable</option>';
+        setMoveStatus(err.message, true);
+      }
+    }
+
+    function closeMoveDialog() {
+      el.moveModal.classList.add('hidden');
+      state.movePickerFolders = [];
+      setMoveStatus('');
+    }
+
+    async function confirmMoveSelected() {
+      const selected = Array.from(state.selectedFileIds);
+      if (!selected.length || state.view !== 'own') return;
+      const targetID = String(el.moveTargetSelect.value || '');
+      if (!targetID && targetID !== '') return;
+      el.confirmMoveBtn.disabled = true;
+      try {
+        await moveFiles(selected, targetID);
+        closeMoveDialog();
+      } catch (_) {
+        // moveFiles already sets a status message.
+      } finally {
+        el.confirmMoveBtn.disabled = false;
+      }
+    }
+
+    async function loadAllOwnFolders() {
+      const folders = [{ id: '', path: 'Root' }];
+      const queue = [{ id: '', path: 'Root' }];
+      const seen = new Set(['']);
+      while (queue.length) {
+        const current = queue.shift();
+        const data = await api(`/files${current.id ? `?parent_id=${encodeURIComponent(current.id)}` : ''}`);
+        const list = (data.files || []).filter((item) => item.type === 'folder');
+        for (const folder of list) {
+          if (!folder.id || seen.has(folder.id)) continue;
+          seen.add(folder.id);
+          const path = `${current.path}/${folder.name || 'Untitled'}`;
+          const entry = { id: folder.id, path };
+          folders.push(entry);
+          queue.push(entry);
+        }
+      }
+      return folders;
+    }
+
+    function renderMoveTargets(selectedIDs) {
+      const forbidden = new Set(selectedIDs.map((id) => String(id)));
+      const options = state.movePickerFolders
+        .filter((folder) => !forbidden.has(folder.id))
+        .map((folder) => `<option value="${escapeHTML(folder.id)}">${escapeHTML(folder.path)}</option>`);
+      el.moveTargetSelect.innerHTML = options.join('');
+      if (!options.length) {
+        el.moveTargetSelect.innerHTML = '<option value="">No valid destination</option>';
+        el.confirmMoveBtn.disabled = true;
+        el.moveTargetSelect.disabled = true;
+        return;
+      }
+      el.moveTargetSelect.disabled = false;
+      el.confirmMoveBtn.disabled = false;
+      el.moveTargetSelect.value = state.currentFolderId || '';
+    }
+
+    function setMoveStatus(message, error = false) {
+      el.moveStatus.textContent = message;
+      el.moveStatus.classList.toggle('error', error);
+    }
+
     async function moveFiles(ids, parentID) {
       const normalized = Array.from(new Set((ids || []).map((id) => String(id).trim()).filter(Boolean)));
       if (!normalized.length) return;
@@ -1574,6 +1758,7 @@
         await applyRoute();
       } catch (err) {
         setUploadStatus(err.message, true);
+        throw err;
       }
     }
 
@@ -1795,9 +1980,11 @@
       el.saveDetailsFileNameBtn.disabled = !editable;
       const rows = [];
       const ownerLabel = state.user && file.owner_id === state.user.id ? 'You' : 'Shared owner';
+      const accessLabel = editable ? 'Owner (read/write)' : 'Shared (read-only)';
       rows.push(['Type', file.type || '-']);
       rows.push(['Status', file.status || '-']);
       rows.push(['Owner', ownerLabel]);
+      rows.push(['Access', accessLabel]);
       rows.push(['Size', file.type === 'file' ? formatBytes(file.plaintext_size || 0) : '-']);
       rows.push(['MIME', file.type === 'file' ? (file.mime_type || '-') : '-']);
       rows.push(['Created', file.created_at ? new Date(file.created_at).toLocaleString() : '-']);
@@ -2510,7 +2697,10 @@
           body: manifestText,
         });
         const summary = data.import;
-        setRecoveryStatus(`Imported ${summary.files_imported} files and ${summary.parts_imported} parts.`);
+        const keyMode = summary && summary.used_existing_recovery_key
+          ? 'Used existing recovery key.'
+          : 'Imported recovery private key from map.';
+        setRecoveryStatus(`Imported ${summary.files_imported} files and ${summary.parts_imported} parts. ${keyMode}`);
         await refreshFiles();
       } catch (err) {
         setRecoveryStatus(err.message, true);
@@ -2926,6 +3116,7 @@
       if (event.key === 'Enter') createFolder();
     });
     el.selectAllVisibleBtn.addEventListener('click', toggleVisibleSelection);
+    el.moveSelectedBtn.addEventListener('click', openMoveDialog);
     el.deleteSelectedBtn.addEventListener('click', () => deleteFiles(Array.from(state.selectedFileIds)));
     el.clearSelectionBtn.addEventListener('click', clearSelection);
     el.dropZone.addEventListener('click', () => el.fileInput.click());
@@ -2992,6 +3183,8 @@
       }
     });
     el.closeShareBtn.addEventListener('click', closeShareDialog);
+    el.closeMoveBtn.addEventListener('click', closeMoveDialog);
+    el.confirmMoveBtn.addEventListener('click', confirmMoveSelected);
     el.createShareBtn.addEventListener('click', createShare);
     el.createPublicLinkBtn.addEventListener('click', createPublicLink);
     el.copyPublicLinkBtn.addEventListener('click', copyPublicLink);
@@ -3003,6 +3196,9 @@
     });
     el.shareModal.addEventListener('click', (event) => {
       if (event.target === el.shareModal) closeShareDialog();
+    });
+    el.moveModal.addEventListener('click', (event) => {
+      if (event.target === el.moveModal) closeMoveDialog();
     });
     el.detailsModal.addEventListener('click', (event) => {
       if (event.target === el.detailsModal) closeDetailsDialog();
@@ -3023,7 +3219,11 @@
         closeAdminPanel();
         return;
       }
-      if (!el.shareModal.classList.contains('hidden')) closeShareDialog();
+      if (!el.shareModal.classList.contains('hidden')) {
+        closeShareDialog();
+        return;
+      }
+      if (!el.moveModal.classList.contains('hidden')) closeMoveDialog();
     });
     window.addEventListener('hashchange', applyRoute);
     setUploadDebugEnabled(state.uploadDebugEnabled);
