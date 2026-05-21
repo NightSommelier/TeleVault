@@ -586,6 +586,7 @@ func uploadProgressResponse(upload Upload, parts []UploadPart, settings Effectiv
 	receivedParts := 0
 	remainingTelegramBytes := int64(0)
 	remainingTelegramParts := 0
+	completeTelegramBytes := int64(0)
 	progress := map[string]any{
 		"expected_parts":           expectedParts,
 		"received_parts":           0,
@@ -622,6 +623,7 @@ func uploadProgressResponse(upload Upload, parts []UploadPart, settings Effectiv
 			}
 			if part.Status == StatusComplete {
 				progress["ciphertext_complete_size"] = progress["ciphertext_complete_size"].(int64) + part.CiphertextSize.Int64
+				completeTelegramBytes += part.CiphertextSize.Int64
 			}
 		}
 
@@ -663,13 +665,22 @@ func uploadProgressResponse(upload Upload, parts []UploadPart, settings Effectiv
 		progress["next_retry_at"] = nextRetry.Time
 	}
 	progress["telegram_remaining_bytes"] = remainingTelegramBytes
-	if settings.TargetUploadBytesPerSecond > 0 && remainingTelegramBytes > 0 {
-		transferSeconds := (remainingTelegramBytes + settings.TargetUploadBytesPerSecond - 1) / settings.TargetUploadBytesPerSecond
-		cooldownSeconds := int64(0)
-		if settings.CooldownBetweenPartsMillisec > 0 && remainingTelegramParts > 0 {
-			cooldownSeconds = int64(remainingTelegramParts*settings.CooldownBetweenPartsMillisec+999) / 1000
+	if remainingTelegramBytes > 0 {
+		bytesPerSecond := settings.TargetUploadBytesPerSecond
+		if bytesPerSecond <= 0 && completeTelegramBytes > 0 && !upload.CreatedAt.IsZero() && currentTime.After(upload.CreatedAt) {
+			elapsedSeconds := int64(currentTime.Sub(upload.CreatedAt).Seconds())
+			if elapsedSeconds > 0 {
+				bytesPerSecond = completeTelegramBytes / elapsedSeconds
+			}
 		}
-		progress["telegram_eta_seconds"] = transferSeconds + cooldownSeconds
+		if bytesPerSecond > 0 {
+			transferSeconds := (remainingTelegramBytes + bytesPerSecond - 1) / bytesPerSecond
+			cooldownSeconds := int64(0)
+			if settings.CooldownBetweenPartsMillisec > 0 && remainingTelegramParts > 0 {
+				cooldownSeconds = int64(remainingTelegramParts*settings.CooldownBetweenPartsMillisec+999) / 1000
+			}
+			progress["telegram_eta_seconds"] = transferSeconds + cooldownSeconds
+		}
 	}
 	workers := make([]string, 0, len(activeWorkers))
 	for workerID := range activeWorkers {

@@ -254,3 +254,38 @@ func TestUploadProgressResponseTreatsFailedUploadAsTerminal(t *testing.T) {
 		t.Fatalf("uploadProgressResponse() = %+v, want failed terminal progress", progress)
 	}
 }
+
+func TestUploadProgressResponseEstimatesETAFromCompletedBytes(t *testing.T) {
+	now := time.Unix(1000, 0).UTC()
+	upload := Upload{
+		PlaintextSize: sql.NullInt64{Int64: 30, Valid: true},
+		PartSize:      10,
+		CreatedAt:     now.Add(-10 * time.Second),
+	}
+	parts := []UploadPart{
+		{
+			PartNumber:     1,
+			Status:         StatusComplete,
+			CiphertextSize: sql.NullInt64{Int64: 100, Valid: true},
+		},
+		{
+			PartNumber:     2,
+			Status:         StatusPending,
+			CiphertextSize: sql.NullInt64{Int64: 50, Valid: true},
+			StorageBackend: sql.NullString{String: LocalStagingBackend, Valid: true},
+			StorageKey:     sql.NullString{String: "upload/part-2.age", Valid: true},
+		},
+		{
+			PartNumber:     3,
+			Status:         StatusPending,
+			CiphertextSize: sql.NullInt64{Int64: 50, Valid: true},
+			StorageBackend: sql.NullString{String: LocalStagingBackend, Valid: true},
+			StorageKey:     sql.NullString{String: "upload/part-3.age", Valid: true},
+		},
+	}
+
+	progress := uploadProgressResponse(upload, parts, EffectiveSettings{}, func() time.Time { return now })
+	if progress["telegram_eta_seconds"] != int64(10) {
+		t.Fatalf("telegram_eta_seconds = %v, want 10", progress["telegram_eta_seconds"])
+	}
+}

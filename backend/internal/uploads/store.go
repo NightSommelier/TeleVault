@@ -595,6 +595,8 @@ WITH next_part AS (
     SELECT p.id
     FROM upload_parts p
     JOIN uploads u ON u.id = p.upload_id
+    LEFT JOIN telegram_account_limits tal ON tal.user_id = u.owner_id
+    LEFT JOIN admin_settings ON admin_settings.id = TRUE
     WHERE p.status = 'pending'
       AND p.storage_backend IS NOT NULL
       AND p.storage_key IS NOT NULL
@@ -602,6 +604,15 @@ WITH next_part AS (
       AND (p.leased_until IS NULL OR p.leased_until <= $1)
       AND u.status IN ('pending', 'uploading')
       AND u.expires_at > $1
+      AND (
+          SELECT COUNT(*)
+          FROM upload_parts active_part
+          JOIN uploads active_upload ON active_upload.id = active_part.upload_id
+          WHERE active_upload.owner_id = u.owner_id
+            AND active_upload.status IN ('pending', 'uploading')
+            AND active_part.status = 'pending'
+            AND active_part.leased_until > $1
+      ) < COALESCE(tal.max_parallel_uploads, admin_settings.max_parallel_uploads, 1)
     ORDER BY p.available_at ASC, p.created_at ASC
     FOR UPDATE SKIP LOCKED
     LIMIT 1
