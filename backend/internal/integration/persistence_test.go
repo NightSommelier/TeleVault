@@ -311,6 +311,15 @@ func TestFilesUploadsPersistenceOwnerIsolationAndCompletion(t *testing.T) {
 	if sharedDownload.OwnerID != owner.ID || len(sharedParts) != 2 {
 		t.Fatalf("shared DownloadData() owner=%s parts=%d, want owner %s parts 2", sharedDownload.OwnerID, len(sharedParts), owner.ID)
 	}
+	if _, err := fileStore.ListShares(ctx, other.ID, file.ID); !errors.Is(err, files.ErrNotFound) {
+		t.Fatalf("grantee ListShares() error = %v, want files.ErrNotFound", err)
+	}
+	if err := fileStore.RevokeShare(ctx, other.ID, file.ID, share.ID, time.Now()); !errors.Is(err, files.ErrNotFound) {
+		t.Fatalf("grantee RevokeShare() error = %v, want files.ErrNotFound", err)
+	}
+	if _, err := fileStore.CreateShare(ctx, other.ID, file.ID, owner.TelegramID, sql.NullTime{}); !errors.Is(err, files.ErrNotFound) {
+		t.Fatalf("cross-owner CreateShare() error = %v, want files.ErrNotFound", err)
+	}
 	if err := fileStore.RevokeShare(ctx, owner.ID, file.ID, share.ID, time.Now()); err != nil {
 		t.Fatalf("RevokeShare() error = %v", err)
 	}
@@ -329,6 +338,12 @@ func TestFilesUploadsPersistenceOwnerIsolationAndCompletion(t *testing.T) {
 	if len(publicLinks) != 1 || publicLinks[0].ID != publicLink.ID {
 		t.Fatalf("ListPublicLinks() = %+v, want link %s", publicLinks, publicLink.ID)
 	}
+	if _, err := fileStore.ListPublicLinks(ctx, other.ID, file.ID); !errors.Is(err, files.ErrNotFound) {
+		t.Fatalf("cross-owner ListPublicLinks() error = %v, want files.ErrNotFound", err)
+	}
+	if err := fileStore.RevokePublicLink(ctx, other.ID, file.ID, publicLink.ID, time.Now()); !errors.Is(err, files.ErrNotFound) {
+		t.Fatalf("cross-owner RevokePublicLink() error = %v, want files.ErrNotFound", err)
+	}
 	publicDownload, publicParts, publicSession, err := fileStore.DownloadDataByPublicTokenHash(ctx, publicTokenHash[:])
 	if err != nil {
 		t.Fatalf("DownloadDataByPublicTokenHash() error = %v", err)
@@ -341,6 +356,13 @@ func TestFilesUploadsPersistenceOwnerIsolationAndCompletion(t *testing.T) {
 	}
 	if _, _, _, err := fileStore.DownloadDataByPublicTokenHash(ctx, publicTokenHash[:]); !errors.Is(err, files.ErrNotFound) {
 		t.Fatalf("revoked public download error = %v, want files.ErrNotFound", err)
+	}
+	expiredTokenHash := sha256.Sum256([]byte("integration-expired-token-" + uniqueSuffix()))
+	if _, err := fileStore.CreatePublicLink(ctx, owner.ID, file.ID, expiredTokenHash[:], sql.NullTime{Time: time.Now().Add(-time.Hour), Valid: true}, files.PublicLinkPassword{}); err != nil {
+		t.Fatalf("CreatePublicLink(expired) error = %v", err)
+	}
+	if _, _, _, err := fileStore.DownloadDataByPublicTokenHash(ctx, expiredTokenHash[:]); !errors.Is(err, files.ErrNotFound) {
+		t.Fatalf("expired public download error = %v, want files.ErrNotFound", err)
 	}
 	protectedTokenHash := sha256.Sum256([]byte("integration-protected-token-" + uniqueSuffix()))
 	protectedLink, err := fileStore.CreatePublicLink(ctx, owner.ID, file.ID, protectedTokenHash[:], sql.NullTime{}, files.PublicLinkPassword{
