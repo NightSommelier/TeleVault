@@ -2149,9 +2149,28 @@
 
     async function waitUntilReady(uploadID, item) {
       clearInterval(state.uploadTimer);
+      let pollErrors = 0;
       while (true) {
         if (item.cancelRequested) throw new Error('upload_canceled');
-        const data = await api(`/uploads/${uploadID}`);
+        let data;
+        try {
+          data = await api(`/uploads/${uploadID}`);
+          pollErrors = 0;
+        } catch (err) {
+          pollErrors += 1;
+          debugUpload('upload:poll-error', {
+            upload_id: uploadID,
+            attempts: pollErrors,
+            message: err.message || 'poll failed',
+          });
+          updateQueueItem(item.id, {
+            status: 'telegram',
+            message: `Waiting for API reconnect (${pollErrors})...`,
+            safeToClose: true,
+          });
+          await delay(Math.min(10000, 2000 * pollErrors));
+          continue;
+        }
         const progress = data.progress;
         if (data.upload && data.upload.status === 'complete') return 'complete';
         if (data.upload && (data.upload.status === 'failed' || data.upload.status === 'expired')) {
