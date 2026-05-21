@@ -533,7 +533,7 @@ WITH next_part AS (
             AND active_part.leased_until > $1
       ) < COALESCE(tal.max_parallel_uploads, admin_settings.max_parallel_uploads, 1)
     ORDER BY p.available_at ASC, p.created_at ASC
-    FOR UPDATE SKIP LOCKED
+    FOR UPDATE OF p SKIP LOCKED
     LIMIT 1
 )
 UPDATE upload_parts p
@@ -614,7 +614,7 @@ WITH next_part AS (
             AND active_part.leased_until > $1
       ) < COALESCE(tal.max_parallel_uploads, admin_settings.max_parallel_uploads, 1)
     ORDER BY p.available_at ASC, p.created_at ASC
-    FOR UPDATE SKIP LOCKED
+    FOR UPDATE OF p SKIP LOCKED
     LIMIT 1
 ),
 claimed AS (
