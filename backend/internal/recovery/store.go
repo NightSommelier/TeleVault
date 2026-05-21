@@ -110,6 +110,9 @@ func (s *Store) ImportManifest(ctx context.Context, userID string, manifest Mani
 	if manifest.Schema != ManifestSchema {
 		return ImportSummary{}, fmt.Errorf("%w: unsupported schema", ErrInvalidManifest)
 	}
+	if err := validateManifest(manifest); err != nil {
+		return ImportSummary{}, err
+	}
 	if manifest.User.AgePrivateIdentity == "" || manifest.User.AgePublicRecipient == "" {
 		return ImportSummary{}, fmt.Errorf("%w: missing recovery key material", ErrInvalidManifest)
 	}
@@ -493,6 +496,115 @@ func ensureParentsExist(files []FileEntry) error {
 		}
 		if _, ok := ids[file.ParentID]; !ok {
 			return fmt.Errorf("%w: missing parent %s", ErrInvalidManifest, file.ParentID)
+		}
+	}
+	return nil
+}
+
+func validateManifest(manifest Manifest) error {
+	if manifest.SnapshotID == "" {
+		return fmt.Errorf("%w: missing snapshot id", ErrInvalidManifest)
+	}
+	if manifest.SnapshotVersion <= 0 {
+		return fmt.Errorf("%w: invalid snapshot version", ErrInvalidManifest)
+	}
+	if manifest.User.ID == "" {
+		return fmt.Errorf("%w: missing user id", ErrInvalidManifest)
+	}
+	if manifest.User.TelegramID == 0 {
+		return fmt.Errorf("%w: missing telegram id", ErrInvalidManifest)
+	}
+
+	fileIDs := make(map[string]struct{}, len(manifest.Files))
+	partIDs := make(map[string]struct{})
+	for _, file := range manifest.Files {
+		if file.ID == "" {
+			return fmt.Errorf("%w: missing file id", ErrInvalidManifest)
+		}
+		if _, exists := fileIDs[file.ID]; exists {
+			return fmt.Errorf("%w: duplicate file id %s", ErrInvalidManifest, file.ID)
+		}
+		fileIDs[file.ID] = struct{}{}
+		if file.OwnerID != "" && file.OwnerID != manifest.User.ID {
+			return fmt.Errorf("%w: file %s owner mismatch", ErrInvalidManifest, file.ID)
+		}
+		if file.Type != "file" && file.Type != "folder" {
+			return fmt.Errorf("%w: file %s has invalid type", ErrInvalidManifest, file.ID)
+		}
+		if file.Status != "pending" && file.Status != "ready" && file.Status != "deleted" && file.Status != "failed" {
+			return fmt.Errorf("%w: file %s has invalid status", ErrInvalidManifest, file.ID)
+		}
+		if file.Type == "folder" && len(file.Parts) > 0 {
+			return fmt.Errorf("%w: folder %s cannot contain parts", ErrInvalidManifest, file.ID)
+		}
+
+		partNumbers := make(map[int]struct{}, len(file.Parts))
+		for _, part := range file.Parts {
+			if part.ID == "" {
+				return fmt.Errorf("%w: missing part id", ErrInvalidManifest)
+			}
+			if _, exists := partIDs[part.ID]; exists {
+				return fmt.Errorf("%w: duplicate part id %s", ErrInvalidManifest, part.ID)
+			}
+			partIDs[part.ID] = struct{}{}
+			if part.PartNumber <= 0 {
+				return fmt.Errorf("%w: part %s has invalid number", ErrInvalidManifest, part.ID)
+			}
+			if _, exists := partNumbers[part.PartNumber]; exists {
+				return fmt.Errorf("%w: duplicate part number %d", ErrInvalidManifest, part.PartNumber)
+			}
+			partNumbers[part.PartNumber] = struct{}{}
+			if part.TelegramPeer == "" {
+				return fmt.Errorf("%w: part %s missing telegram peer", ErrInvalidManifest, part.ID)
+			}
+			if part.TelegramMessageID <= 0 {
+				return fmt.Errorf("%w: part %s missing telegram message id", ErrInvalidManifest, part.ID)
+			}
+			if part.CiphertextSize <= 0 {
+				return fmt.Errorf("%w: part %s invalid ciphertext size", ErrInvalidManifest, part.ID)
+			}
+			if err := validatePartRange(part); err != nil {
+				return err
+			}
+		}
+	}
+	if err := ensureParentsExist(manifest.Files); err != nil {
+		return err
+	}
+	if err := ensureNoParentCycles(manifest.Files); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validatePartRange(part PartEntry) error {
+	if part.PlaintextStart == nil && part.PlaintextEnd == nil && part.PlaintextSize == nil {
+		return nil
+	}
+	if part.PlaintextStart == nil || part.PlaintextEnd == nil || part.PlaintextSize == nil {
+		return fmt.Errorf("%w: part %s has incomplete plaintext range", ErrInvalidManifest, part.ID)
+	}
+	if *part.PlaintextStart < 0 || *part.PlaintextEnd < *part.PlaintextStart || *part.PlaintextSize < 0 {
+		return fmt.Errorf("%w: part %s has invalid plaintext range", ErrInvalidManifest, part.ID)
+	}
+	if *part.PlaintextEnd-*part.PlaintextStart != *part.PlaintextSize {
+		return fmt.Errorf("%w: part %s plaintext range size mismatch", ErrInvalidManifest, part.ID)
+	}
+	return nil
+}
+
+func ensureNoParentCycles(files []FileEntry) error {
+	parents := make(map[string]string, len(files))
+	for _, file := range files {
+		parents[file.ID] = file.ParentID
+	}
+	for _, file := range files {
+		seen := map[string]struct{}{file.ID: {}}
+		for parentID := file.ParentID; parentID != ""; parentID = parents[parentID] {
+			if _, exists := seen[parentID]; exists {
+				return fmt.Errorf("%w: parent cycle at %s", ErrInvalidManifest, file.ID)
+			}
+			seen[parentID] = struct{}{}
 		}
 	}
 	return nil
