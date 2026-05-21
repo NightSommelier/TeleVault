@@ -1,11 +1,9 @@
 package buildinfo
 
-const defaultVersion = "0.1.0-dev"
-
 var (
-	Version = defaultVersion
-	Commit  = "unknown"
-	Date    = "unknown"
+	Version = generatedVersion
+	Commit  = generatedCommit
+	Date    = generatedDate
 )
 
 func Info() map[string]string {
