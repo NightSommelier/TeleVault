@@ -100,10 +100,12 @@ func (s *Store) ExportManifest(ctx context.Context, userID string, exportedAt ti
 }
 
 type ImportSummary struct {
-	SnapshotID      string `json:"snapshot_id"`
-	SnapshotVersion int    `json:"snapshot_version"`
-	FilesImported   int    `json:"files_imported"`
-	PartsImported   int    `json:"parts_imported"`
+	SnapshotID                string `json:"snapshot_id"`
+	SnapshotVersion           int    `json:"snapshot_version"`
+	FilesImported             int    `json:"files_imported"`
+	PartsImported             int    `json:"parts_imported"`
+	UsedExistingRecoveryKey   bool   `json:"used_existing_recovery_key"`
+	ImportedPrivateKeyFromMap bool   `json:"imported_private_key_from_map"`
 }
 
 func (s *Store) ImportManifest(ctx context.Context, userID string, manifest Manifest) (ImportSummary, error) {
@@ -113,17 +115,6 @@ func (s *Store) ImportManifest(ctx context.Context, userID string, manifest Mani
 	if err := validateManifest(manifest); err != nil {
 		return ImportSummary{}, err
 	}
-	if manifest.User.AgePrivateIdentity == "" || manifest.User.AgePublicRecipient == "" {
-		return ImportSummary{}, fmt.Errorf("%w: missing recovery key material", ErrInvalidManifest)
-	}
-	identity, err := age.ParseX25519Identity(manifest.User.AgePrivateIdentity)
-	if err != nil {
-		return ImportSummary{}, fmt.Errorf("%w: invalid age identity", ErrInvalidManifest)
-	}
-	if identity.Recipient().String() != manifest.User.AgePublicRecipient {
-		return ImportSummary{}, fmt.Errorf("%w: age recipient mismatch", ErrInvalidManifest)
-	}
-
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return ImportSummary{}, err
@@ -138,8 +129,21 @@ func (s *Store) ImportManifest(ctx context.Context, userID string, manifest Mani
 		return ImportSummary{}, fmt.Errorf("%w: telegram id mismatch", ErrInvalidManifest)
 	}
 
-	if err := s.importUserKey(ctx, tx, userID, identity); err != nil {
+	var existingKey *userKey
+	if key, err := loadUserKey(ctx, tx, userID); err == nil {
+		existingKey = &key
+	} else if !errors.Is(err, sql.ErrNoRows) {
 		return ImportSummary{}, err
+	}
+	identity, shouldImportKey, err := resolveImportIdentity(manifest.User, existingKey)
+	if err != nil {
+		return ImportSummary{}, err
+	}
+	usedExistingRecoveryKey := !shouldImportKey
+	if shouldImportKey {
+		if err := s.importUserKey(ctx, tx, userID, identity); err != nil {
+			return ImportSummary{}, err
+		}
 	}
 	if err := ensureNoFileConflicts(ctx, tx, manifest.Files); err != nil {
 		return ImportSummary{}, err
@@ -175,11 +179,36 @@ func (s *Store) ImportManifest(ctx context.Context, userID string, manifest Mani
 	}
 
 	return ImportSummary{
-		SnapshotID:      localSnapshotID,
-		SnapshotVersion: localSnapshotVersion,
-		FilesImported:   filesImported,
-		PartsImported:   partsImported,
+		SnapshotID:                localSnapshotID,
+		SnapshotVersion:           localSnapshotVersion,
+		FilesImported:             filesImported,
+		PartsImported:             partsImported,
+		UsedExistingRecoveryKey:   usedExistingRecoveryKey,
+		ImportedPrivateKeyFromMap: shouldImportKey,
 	}, nil
+}
+
+func resolveImportIdentity(user UserEntry, existing *userKey) (*age.X25519Identity, bool, error) {
+	if user.AgePublicRecipient == "" {
+		return nil, false, fmt.Errorf("%w: missing recovery public recipient", ErrInvalidManifest)
+	}
+	if user.AgePrivateIdentity == "" {
+		if existing == nil {
+			return nil, false, fmt.Errorf("%w: missing recovery private key material", ErrInvalidManifest)
+		}
+		if existing.PublicRecipient != user.AgePublicRecipient {
+			return nil, false, fmt.Errorf("%w: existing recovery key differs", ErrConflict)
+		}
+		return nil, false, nil
+	}
+	identity, err := age.ParseX25519Identity(user.AgePrivateIdentity)
+	if err != nil {
+		return nil, false, fmt.Errorf("%w: invalid age identity", ErrInvalidManifest)
+	}
+	if identity.Recipient().String() != user.AgePublicRecipient {
+		return nil, false, fmt.Errorf("%w: age recipient mismatch", ErrInvalidManifest)
+	}
+	return identity, true, nil
 }
 
 type userRow struct {
@@ -336,7 +365,7 @@ ORDER BY created_at ASC, id ASC`,
 		if files[i].Type != "file" {
 			continue
 		}
-		parts, err := loadParts(ctx, tx, files[i].ID)
+		parts, err := loadParts(ctx, tx, files[i].ID, files[i].OwnerID)
 		if err != nil {
 			return nil, err
 		}
@@ -398,7 +427,7 @@ func scanFile(scanner interface {
 	return file, nil
 }
 
-func loadParts(ctx context.Context, tx *sql.Tx, fileID string) ([]PartEntry, error) {
+func loadParts(ctx context.Context, tx *sql.Tx, fileID string, ownerID string) ([]PartEntry, error) {
 	rows, err := tx.QueryContext(ctx, `
 SELECT id, part_number, plaintext_start, plaintext_end, plaintext_size, telegram_peer, telegram_message_id, ciphertext_size, checksum, created_at
 FROM file_parts
@@ -443,6 +472,9 @@ ORDER BY part_number ASC`,
 			value := plaintextSize.Int64
 			part.PlaintextSize = &value
 		}
+		part.StorageBackend = "telegram"
+		part.StorageLocator = part.TelegramPeer
+		part.StorageOwnerUser = ownerID
 		parts = append(parts, part)
 	}
 	return parts, rows.Err()

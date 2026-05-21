@@ -45,6 +45,9 @@ type PartEntry struct {
 	PlaintextStart    *int64    `json:"plaintext_start,omitempty"`
 	PlaintextEnd      *int64    `json:"plaintext_end,omitempty"`
 	PlaintextSize     *int64    `json:"plaintext_size,omitempty"`
+	StorageBackend    string    `json:"storage_backend,omitempty"`
+	StorageLocator    string    `json:"storage_locator,omitempty"`
+	StorageOwnerUser  string    `json:"storage_owner_user_id,omitempty"`
 	TelegramPeer      string    `json:"telegram_peer"`
 	TelegramMessageID int64     `json:"telegram_message_id"`
 	CiphertextSize    int64     `json:"ciphertext_size"`

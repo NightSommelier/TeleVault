@@ -4,6 +4,8 @@ import (
 	"errors"
 	"regexp"
 	"testing"
+
+	"filippo.io/age"
 )
 
 func TestNewUUIDFormat(t *testing.T) {
@@ -137,4 +139,65 @@ func cloneFiles(files []FileEntry) []FileEntry {
 		out[i].Parts = append([]PartEntry(nil), files[i].Parts...)
 	}
 	return out
+}
+
+func TestResolveImportIdentity(t *testing.T) {
+	identity, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatalf("age.GenerateX25519Identity() error = %v", err)
+	}
+	publicRecipient := identity.Recipient().String()
+
+	t.Run("private key provided", func(t *testing.T) {
+		resolved, shouldImport, err := resolveImportIdentity(UserEntry{
+			AgePublicRecipient: publicRecipient,
+			AgePrivateIdentity: identity.String(),
+		}, nil)
+		if err != nil {
+			t.Fatalf("resolveImportIdentity() error = %v", err)
+		}
+		if !shouldImport {
+			t.Fatalf("resolveImportIdentity() shouldImport = false, want true")
+		}
+		if resolved == nil || resolved.Recipient().String() != publicRecipient {
+			t.Fatalf("resolveImportIdentity() resolved = %#v", resolved)
+		}
+	})
+
+	t.Run("missing private key but matching existing key", func(t *testing.T) {
+		resolved, shouldImport, err := resolveImportIdentity(UserEntry{
+			AgePublicRecipient: publicRecipient,
+		}, &userKey{PublicRecipient: publicRecipient})
+		if err != nil {
+			t.Fatalf("resolveImportIdentity() error = %v", err)
+		}
+		if shouldImport {
+			t.Fatalf("resolveImportIdentity() shouldImport = true, want false")
+		}
+		if resolved != nil {
+			t.Fatalf("resolveImportIdentity() resolved = %#v, want nil", resolved)
+		}
+	})
+
+	t.Run("missing private key without existing key", func(t *testing.T) {
+		_, _, err := resolveImportIdentity(UserEntry{
+			AgePublicRecipient: publicRecipient,
+		}, nil)
+		if !errors.Is(err, ErrInvalidManifest) {
+			t.Fatalf("resolveImportIdentity() error = %v, want ErrInvalidManifest", err)
+		}
+	})
+
+	t.Run("missing private key with different existing key", func(t *testing.T) {
+		other, err := age.GenerateX25519Identity()
+		if err != nil {
+			t.Fatalf("age.GenerateX25519Identity() error = %v", err)
+		}
+		_, _, err = resolveImportIdentity(UserEntry{
+			AgePublicRecipient: publicRecipient,
+		}, &userKey{PublicRecipient: other.Recipient().String()})
+		if !errors.Is(err, ErrConflict) {
+			t.Fatalf("resolveImportIdentity() error = %v, want ErrConflict", err)
+		}
+	})
 }
