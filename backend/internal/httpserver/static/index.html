@@ -151,6 +151,7 @@
       background: white;
     }
     .actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .checkbox-line { display: flex; align-items: center; gap: 8px; }
     .row-actions { justify-content: flex-end; }
     .row-actions {
       flex-wrap: nowrap;
@@ -334,6 +335,9 @@
       background: var(--soft);
     }
     tr.drag-over td {
+      background: var(--soft);
+    }
+    tr.selected-row td {
       background: var(--soft);
     }
     .crumbs button.drag-over,
@@ -828,16 +832,53 @@
               <div class="muted">Configured Telegram account limits.</div>
             </div>
           </div>
+          <div id="adminAccountEditor" class="stack hidden">
+            <div class="muted" id="adminAccountEditorTitle">Select an account override to edit.</div>
+            <div class="field-row">
+              <div class="field">
+                <label for="adminAccountDocumentLimitInput">Document limit bytes</label>
+                <input id="adminAccountDocumentLimitInput" type="number" min="1048576" step="1048576">
+              </div>
+              <div class="field">
+                <label for="adminAccountSafetyMarginInput">Safety margin bytes</label>
+                <input id="adminAccountSafetyMarginInput" type="number" min="0" step="1048576">
+              </div>
+            </div>
+            <div class="field-row">
+              <div class="field">
+                <label for="adminAccountParallelInput">Parallel uploads</label>
+                <input id="adminAccountParallelInput" type="number" min="1" max="16" step="1" placeholder="Use global">
+              </div>
+              <div class="field">
+                <label for="adminAccountRateInput">Target bytes per second</label>
+                <input id="adminAccountRateInput" type="number" min="0" step="1048576" placeholder="Use global">
+              </div>
+            </div>
+            <div class="field-row">
+              <div class="field">
+                <label for="adminAccountCooldownInput">Cooldown ms</label>
+                <input id="adminAccountCooldownInput" type="number" min="0" step="100" placeholder="Use global">
+              </div>
+              <label class="checkbox-line">
+                <input id="adminAccountPremiumInput" type="checkbox">
+                Premium account
+              </label>
+            </div>
+            <div class="actions">
+              <button id="saveAdminAccountLimitBtn" class="primary">Save account override</button>
+            </div>
+          </div>
           <table class="table compact-table">
             <thead>
               <tr>
                 <th>User</th>
                 <th>Limit</th>
                 <th>Policy</th>
+                <th>Action</th>
               </tr>
             </thead>
             <tbody id="adminLimitsBody">
-              <tr><td colspan="3" class="muted">No account overrides.</td></tr>
+              <tr><td colspan="4" class="muted">No account overrides.</td></tr>
             </tbody>
           </table>
         </div>
@@ -869,6 +910,8 @@
       uploadDebugAllowed: false,
       uploadDebugEnabled: false,
       uploadDebugLines: [],
+      adminAccountLimits: [],
+      adminEditingAccountID: '',
     };
 
     const el = {
@@ -944,6 +987,15 @@
       adminCooldownInput: document.getElementById('adminCooldownInput'),
       saveAdminUploadSettingsBtn: document.getElementById('saveAdminUploadSettingsBtn'),
       adminStatus: document.getElementById('adminStatus'),
+      adminAccountEditor: document.getElementById('adminAccountEditor'),
+      adminAccountEditorTitle: document.getElementById('adminAccountEditorTitle'),
+      adminAccountDocumentLimitInput: document.getElementById('adminAccountDocumentLimitInput'),
+      adminAccountSafetyMarginInput: document.getElementById('adminAccountSafetyMarginInput'),
+      adminAccountParallelInput: document.getElementById('adminAccountParallelInput'),
+      adminAccountRateInput: document.getElementById('adminAccountRateInput'),
+      adminAccountCooldownInput: document.getElementById('adminAccountCooldownInput'),
+      adminAccountPremiumInput: document.getElementById('adminAccountPremiumInput'),
+      saveAdminAccountLimitBtn: document.getElementById('saveAdminAccountLimitBtn'),
       adminLimitsBody: document.getElementById('adminLimitsBody'),
     };
 
@@ -2641,6 +2693,7 @@
 
     function closeAdminPanel() {
       el.adminModal.classList.add('hidden');
+      state.adminEditingAccountID = '';
     }
 
     function fillAdminUploadSettings(settings) {
@@ -2656,6 +2709,11 @@
       const value = Number(input.value);
       if (!Number.isFinite(value) || value < 0) throw new Error(`${name} is invalid`);
       return Math.floor(value);
+    }
+
+    function optionalAdminNumber(input, name) {
+      if (input.value.trim() === '') return null;
+      return adminNumber(input, name);
     }
 
     async function saveAdminUploadSettings() {
@@ -2686,8 +2744,11 @@
     }
 
     function renderAdminAccountLimits(limits) {
+      state.adminAccountLimits = limits;
       if (!limits.length) {
-        el.adminLimitsBody.innerHTML = '<tr><td colspan="3" class="muted">No account overrides.</td></tr>';
+        el.adminAccountEditor.classList.add('hidden');
+        state.adminEditingAccountID = '';
+        el.adminLimitsBody.innerHTML = '<tr><td colspan="4" class="muted">No account overrides.</td></tr>';
         return;
       }
       el.adminLimitsBody.innerHTML = limits.map((limit) => {
@@ -2695,14 +2756,67 @@
         const speed = Number(limit.target_upload_bytes_per_second || 0);
         const cooldown = Number(limit.cooldown_between_parts_ms || 0);
         const parallel = limit.max_parallel_uploads || '-';
+        const selected = state.adminEditingAccountID === limit.user_id ? ' class="selected-row"' : '';
         return `
-          <tr>
+          <tr${selected}>
             <td>${escapeHTML(user)}</td>
             <td>${escapeHTML(formatBytes(Number(limit.telegram_document_limit_bytes || 0)))}</td>
             <td>${escapeHTML(`${parallel} parallel, ${speed ? `${formatBytes(speed)}/s` : 'unlimited'}, ${cooldown} ms`)}</td>
+            <td><button data-admin-edit-account="${escapeHTML(limit.user_id)}">Edit</button></td>
           </tr>
         `;
       }).join('');
+      el.adminLimitsBody.querySelectorAll('[data-admin-edit-account]').forEach((button) => {
+        button.addEventListener('click', () => editAdminAccountLimit(button.dataset.adminEditAccount));
+      });
+    }
+
+    function editAdminAccountLimit(userID) {
+      const limit = state.adminAccountLimits.find((item) => item.user_id === userID);
+      if (!limit) return;
+      state.adminEditingAccountID = userID;
+      const user = limit.display_name || limit.username || `Telegram ${limit.telegram_id}`;
+      el.adminAccountEditorTitle.textContent = `Editing ${user}`;
+      el.adminAccountDocumentLimitInput.value = limit.telegram_document_limit_bytes || '';
+      el.adminAccountSafetyMarginInput.value = limit.upload_safety_margin_bytes || 0;
+      el.adminAccountParallelInput.value = limit.max_parallel_uploads ?? '';
+      el.adminAccountRateInput.value = limit.target_upload_bytes_per_second ?? '';
+      el.adminAccountCooldownInput.value = limit.cooldown_between_parts_ms ?? '';
+      el.adminAccountPremiumInput.checked = Boolean(limit.is_premium);
+      el.adminAccountEditor.classList.remove('hidden');
+      renderAdminAccountLimits(state.adminAccountLimits);
+    }
+
+    async function saveAdminAccountLimit() {
+      if (!state.user || state.user.role !== 'admin' || !state.adminEditingAccountID) return;
+      setAdminStatus('Saving account override...');
+      el.saveAdminAccountLimitBtn.disabled = true;
+      try {
+        const payload = {
+          telegram_document_limit_bytes: adminNumber(el.adminAccountDocumentLimitInput, 'Account document limit'),
+          upload_safety_margin_bytes: adminNumber(el.adminAccountSafetyMarginInput, 'Account safety margin'),
+          is_premium: el.adminAccountPremiumInput.checked,
+          max_parallel_uploads: optionalAdminNumber(el.adminAccountParallelInput, 'Account parallel uploads'),
+          target_upload_bytes_per_second: optionalAdminNumber(el.adminAccountRateInput, 'Account target rate'),
+          cooldown_between_parts_ms: optionalAdminNumber(el.adminAccountCooldownInput, 'Account cooldown'),
+        };
+        const data = await api(`/admin/telegram-accounts/${encodeURIComponent(state.adminEditingAccountID)}/limits`, {
+          method: 'PATCH',
+          csrf: true,
+          body: JSON.stringify(payload),
+        });
+        const updated = data.telegram_account_limit || payload;
+        state.adminAccountLimits = state.adminAccountLimits.map((limit) => (
+          limit.user_id === state.adminEditingAccountID ? updated : limit
+        ));
+        renderAdminAccountLimits(state.adminAccountLimits);
+        editAdminAccountLimit(updated.user_id);
+        setAdminStatus('Account override saved.');
+      } catch (err) {
+        setAdminStatus(err.message, true);
+      } finally {
+        el.saveAdminAccountLimitBtn.disabled = false;
+      }
     }
 
     function setDetailsStatus(message, error = false) {
@@ -2838,6 +2952,7 @@
     el.copyPublicLinkBtn.addEventListener('click', copyPublicLink);
     el.closeAdminBtn.addEventListener('click', closeAdminPanel);
     el.saveAdminUploadSettingsBtn.addEventListener('click', saveAdminUploadSettings);
+    el.saveAdminAccountLimitBtn.addEventListener('click', saveAdminAccountLimit);
     el.adminModal.addEventListener('click', (event) => {
       if (event.target === el.adminModal) closeAdminPanel();
     });
