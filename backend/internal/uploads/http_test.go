@@ -167,15 +167,18 @@ func TestUploadProgressResponseSummarizesQueueState(t *testing.T) {
 			PartNumber:     2,
 			Status:         StatusPending,
 			CiphertextSize: sql.NullInt64{Int64: 17, Valid: true},
+			StorageBackend: sql.NullString{String: LocalStagingBackend, Valid: true},
 			StorageKey:     sql.NullString{String: "upload/part-2.age", Valid: true},
 			LeasedUntil:    sql.NullTime{Time: now.Add(time.Minute), Valid: true},
 			WorkerID:       sql.NullString{String: "worker-b", Valid: true},
 		},
 		{
-			PartNumber:    3,
-			Status:        StatusPending,
-			PlaintextSize: sql.NullInt64{Int64: 10, Valid: true},
-			AvailableAt:   now.Add(30 * time.Second),
+			PartNumber:     3,
+			Status:         StatusPending,
+			PlaintextSize:  sql.NullInt64{Int64: 10, Valid: true},
+			StorageBackend: sql.NullString{String: LocalStagingBackend, Valid: true},
+			StorageKey:     sql.NullString{String: "upload/part-3.age", Valid: true},
+			AvailableAt:    now.Add(30 * time.Second),
 		},
 	}
 
@@ -186,7 +189,7 @@ func TestUploadProgressResponseSummarizesQueueState(t *testing.T) {
 	}
 	progress := uploadProgressResponse(upload, parts, settings, func() time.Time { return now })
 	if progress["expected_parts"] != int64(3) ||
-		progress["received_parts"] != 2 ||
+		progress["received_parts"] != 3 ||
 		progress["queued_parts"] != 1 ||
 		progress["leased_parts"] != 1 ||
 		progress["complete_parts"] != 1 ||
@@ -218,5 +221,36 @@ func TestUploadProgressResponseSummarizesQueueState(t *testing.T) {
 	}
 	if _, ok := policy["telegram_peer"]; ok {
 		t.Fatalf("upload_policy exposes telegram_peer: %#v", policy)
+	}
+}
+
+func TestUploadProgressResponseTreatsFailedUploadAsTerminal(t *testing.T) {
+	now := time.Unix(1000, 0).UTC()
+	upload := Upload{
+		Status:        "failed",
+		PlaintextSize: sql.NullInt64{Int64: 20, Valid: true},
+		PartSize:      10,
+		UploadedSize:  20,
+	}
+	parts := []UploadPart{
+		{
+			PartNumber:    1,
+			Status:        StatusPending,
+			PlaintextSize: sql.NullInt64{Int64: 10, Valid: true},
+		},
+		{
+			PartNumber:    2,
+			Status:        StatusPending,
+			PlaintextSize: sql.NullInt64{Int64: 10, Valid: true},
+		},
+	}
+
+	progress := uploadProgressResponse(upload, parts, EffectiveSettings{}, func() time.Time { return now })
+	if progress["failed_parts"] != 2 ||
+		progress["queued_parts"] != 0 ||
+		progress["leased_parts"] != 0 ||
+		progress["telegram_remaining_bytes"] != int64(0) ||
+		progress["ready_to_complete"] != false {
+		t.Fatalf("uploadProgressResponse() = %+v, want failed terminal progress", progress)
 	}
 }

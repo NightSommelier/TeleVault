@@ -608,6 +608,7 @@ func uploadProgressResponse(upload Upload, parts []UploadPart, settings Effectiv
 	activeWorkers := make(map[string]struct{})
 	var nextRetry sql.NullTime
 	currentTime := now()
+	terminalFailedUpload := upload.Status == "failed" || upload.Status == "expired"
 	for _, part := range parts {
 		if part.CiphertextSize.Valid || len(part.Checksum) > 0 || part.StorageKey.Valid || part.TelegramPeer.Valid || part.MessageID.Valid || part.Status == StatusComplete || part.Status == "failed" {
 			receivedParts++
@@ -630,6 +631,13 @@ func uploadProgressResponse(upload Upload, parts []UploadPart, settings Effectiv
 		case "failed":
 			progress["failed_parts"] = progress["failed_parts"].(int) + 1
 		default:
+			if terminalFailedUpload {
+				progress["failed_parts"] = progress["failed_parts"].(int) + 1
+				continue
+			}
+			if !part.StorageBackend.Valid || !part.StorageKey.Valid {
+				continue
+			}
 			remainingTelegramParts++
 			if part.CiphertextSize.Valid {
 				remainingTelegramBytes += part.CiphertextSize.Int64
@@ -670,6 +678,7 @@ func uploadProgressResponse(upload Upload, parts []UploadPart, settings Effectiv
 	sort.Strings(workers)
 	progress["active_workers"] = workers
 	progress["ready_to_complete"] = upload.Status != StatusComplete &&
+		!terminalFailedUpload &&
 		expectedParts > 0 &&
 		int64(progress["complete_parts"].(int)) == expectedParts &&
 		progress["failed_parts"].(int) == 0
