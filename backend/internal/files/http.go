@@ -10,6 +10,8 @@ import (
 	"errors"
 	"html/template"
 	"io"
+	"log/slog"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -71,14 +73,26 @@ var publicLinkPageTemplate = template.Must(template.New("public-link").Parse(`<!
 
 type Handler struct {
 	store         *Store
+	logger        *slog.Logger
+	downloads     *DownloadTracker
+	publicLimiter *PublicDownloadRateLimiter
 	sessionCrypto auth.TelegramSessionCrypto
 	ageIdentity   age.Identity
 	telegram      auth.TelegramStorageClient
 }
 
-func NewHandler(db *sql.DB, sessionCrypto auth.TelegramSessionCrypto, ageIdentity age.Identity, telegram auth.TelegramStorageClient) *Handler {
+func NewHandler(db *sql.DB, logger *slog.Logger, downloads *DownloadTracker, publicLimiter *PublicDownloadRateLimiter, sessionCrypto auth.TelegramSessionCrypto, ageIdentity age.Identity, telegram auth.TelegramStorageClient) *Handler {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	if downloads == nil {
+		downloads = NewDownloadTracker()
+	}
 	return &Handler{
 		store:         NewStore(db),
+		logger:        logger,
+		downloads:     downloads,
+		publicLimiter: publicLimiter,
 		sessionCrypto: sessionCrypto,
 		ageIdentity:   ageIdentity,
 		telegram:      telegram,
@@ -212,6 +226,39 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"file": response,
+	})
+}
+
+func (h *Handler) DownloadActivity(w http.ResponseWriter, r *http.Request) {
+	user, ok := auth.UserFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "missing_authenticated_user")
+		return
+	}
+
+	id := strings.TrimSpace(r.PathValue("id"))
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "file_id_required")
+		return
+	}
+
+	_, err := h.store.GetAccessibleByID(r.Context(), user.ID, id)
+	if errors.Is(err, ErrNotFound) {
+		writeError(w, http.StatusNotFound, "file_not_found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "file_get_failed")
+		return
+	}
+
+	activity := h.downloads.Snapshot(id)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"download_activity": map[string]any{
+			"total":  activity.Total,
+			"auth":   activity.Auth,
+			"public": activity.Public,
+		},
 	})
 }
 
@@ -521,7 +568,13 @@ func (h *Handler) CreatePublicLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	password, ok := derivePublicLinkPassword(request.Password)
+	minPasswordLength, err := h.store.PublicLinkPasswordMinLength(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "public_link_policy_load_failed")
+		return
+	}
+
+	password, ok := derivePublicLinkPassword(request.Password, minPasswordLength)
 	if !ok {
 		writeError(w, http.StatusBadRequest, "invalid_public_link_password")
 		return
@@ -600,7 +653,11 @@ func (h *Handler) Download(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.streamDownload(w, r, file, parts, session)
+	h.streamDownload(w, r, file, parts, session, downloadStreamMeta{
+		Source: "auth",
+		FileID: file.ID,
+		UserID: user.ID,
+	})
 }
 
 func (h *Handler) PublicMetadata(w http.ResponseWriter, r *http.Request) {
@@ -637,6 +694,16 @@ func (h *Handler) PublicDownload(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "public_token_required")
 		return
 	}
+	if h.publicLimiter != nil {
+		decision := h.publicLimiter.Allow(r, token)
+		if decision.Err != nil {
+			h.logger.Warn("public download rate limit store failed", "error", decision.Err)
+		}
+		if !decision.Allowed {
+			applyRateLimitResponse(w, decision)
+			return
+		}
+	}
 
 	file, link, err := h.store.PublicFileByTokenHash(r.Context(), publicLinkTokenHash(token))
 	if errors.Is(err, ErrNotFound) {
@@ -668,10 +735,32 @@ func (h *Handler) PublicDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.streamDownload(w, r, file, parts, session)
+	h.streamDownload(w, r, file, parts, session, downloadStreamMeta{
+		Source:       "public",
+		FileID:       file.ID,
+		PublicLinkID: link.ID,
+	})
 }
 
-func (h *Handler) streamDownload(w http.ResponseWriter, r *http.Request, file File, parts []FilePart, session string) {
+type downloadStreamMeta struct {
+	Source       string
+	FileID       string
+	UserID       string
+	PublicLinkID string
+}
+
+type countingWriter struct {
+	dst io.Writer
+	n   int64
+}
+
+func (w *countingWriter) Write(p []byte) (int, error) {
+	n, err := w.dst.Write(p)
+	w.n += int64(n)
+	return n, err
+}
+
+func (h *Handler) streamDownload(w http.ResponseWriter, r *http.Request, file File, parts []FilePart, session string, meta downloadStreamMeta) {
 	name := nullableString(file.NamePlain)
 	if name == "" {
 		name = "download"
@@ -686,6 +775,12 @@ func (h *Handler) streamDownload(w http.ResponseWriter, r *http.Request, file Fi
 	if file.PlaintextSize.Valid {
 		w.Header().Set("Content-Length", strconv.FormatInt(file.PlaintextSize.Int64, 10))
 	}
+
+	totalWritten := int64(0)
+	clientIP := requestClientIP(r)
+	startedAt := time.Now()
+	h.downloads.Increment(meta.FileID, meta.Source)
+	defer h.downloads.Decrement(meta.FileID, meta.Source)
 
 	for _, part := range parts {
 		reader, writer := io.Pipe()
@@ -703,12 +798,59 @@ func (h *Handler) streamDownload(w http.ResponseWriter, r *http.Request, file Fi
 			return
 		}
 
-		decryptErr := agefile.DecryptStream(w, unwrapReader, h.ageIdentity)
+		partWriter := &countingWriter{dst: w}
+		decryptErr := agefile.DecryptStream(partWriter, unwrapReader, h.ageIdentity)
 		downloadErr := <-errCh
 		if decryptErr != nil || downloadErr != nil {
+			h.logger.Warn("download stream failed",
+				"source", meta.Source,
+				"file_id", meta.FileID,
+				"user_id", meta.UserID,
+				"public_link_id", meta.PublicLinkID,
+				"client_ip", clientIP,
+				"part_number", part.PartNumber,
+				"telegram_message_id", part.TelegramMessageID,
+				"part_plaintext_size", part.PlaintextSize,
+				"part_written_bytes", partWriter.n,
+				"total_written_bytes", totalWritten+partWriter.n,
+				"decrypt_error", errorString(decryptErr),
+				"telegram_download_error", errorString(downloadErr),
+				"context_error", errorString(r.Context().Err()),
+				"duration_ms", time.Since(startedAt).Milliseconds(),
+			)
 			return
 		}
+		totalWritten += partWriter.n
 	}
+
+	h.logger.Info("download stream completed",
+		"source", meta.Source,
+		"file_id", meta.FileID,
+		"user_id", meta.UserID,
+		"public_link_id", meta.PublicLinkID,
+		"client_ip", clientIP,
+		"parts", len(parts),
+		"written_bytes", totalWritten,
+		"duration_ms", time.Since(startedAt).Milliseconds(),
+	)
+}
+
+func requestClientIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err == nil && host != "" {
+		return host
+	}
+	if r.RemoteAddr != "" {
+		return r.RemoteAddr
+	}
+	return "unknown"
+}
+
+func errorString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 type createFolderRequest struct {
@@ -857,12 +999,15 @@ func publicLinkURL(r *http.Request, token string) string {
 	return scheme + "://" + strings.TrimSpace(host) + "/public/" + token
 }
 
-func derivePublicLinkPassword(password string) (PublicLinkPassword, bool) {
+func derivePublicLinkPassword(password string, minLength int) (PublicLinkPassword, bool) {
 	password = strings.TrimSpace(password)
 	if password == "" {
 		return PublicLinkPassword{}, true
 	}
-	if len(password) < publicLinkPasswordMinLength || len(password) > publicLinkPasswordMaxLength {
+	if minLength <= 0 {
+		minLength = publicLinkPasswordMinLength
+	}
+	if len(password) < minLength || len(password) > publicLinkPasswordMaxLength {
 		return PublicLinkPassword{}, false
 	}
 	salt := make([]byte, publicLinkPasswordSaltBytes)

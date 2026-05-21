@@ -27,16 +27,17 @@ type Handler struct {
 }
 
 func NewHandler(cfg config.Config, logger *slog.Logger, database *sql.DB, sessionCrypto TelegramSessionCrypto, telegram TelegramAuthClient) *Handler {
-	return NewHandlerWithRateLimiter(cfg, logger, database, sessionCrypto, telegram, nil)
+	return NewHandlerWithRateLimiter(cfg, logger, database, sessionCrypto, telegram, nil, nil)
 }
 
-func NewHandlerWithRateLimiter(cfg config.Config, logger *slog.Logger, database *sql.DB, sessionCrypto TelegramSessionCrypto, telegram TelegramAuthClient, rateLimitStore RateLimitStore) *Handler {
+func NewHandlerWithRateLimiter(cfg config.Config, logger *slog.Logger, database *sql.DB, sessionCrypto TelegramSessionCrypto, telegram TelegramAuthClient, rateLimitStore RateLimitStore, clientIP func(*http.Request) string) *Handler {
 	var rateLimiter *RateLimiter
 	if cfg.AuthRateLimitEnabled {
 		rateLimiter = NewRateLimiterWithStore(RateLimitSettings{
 			IPLimitPerMinute:       cfg.TelegramAuthIPLimitPerMinute,
 			SendCodePhoneLimitHour: cfg.TelegramSendCodePhoneLimitPerHour,
 			LoginPhoneLimitHour:    cfg.TelegramLoginPhoneLimitPerHour,
+			ClientIP:               clientIP,
 		}, rateLimitStore)
 	}
 

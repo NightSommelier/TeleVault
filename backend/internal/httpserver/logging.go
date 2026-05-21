@@ -58,7 +58,7 @@ func (s *Server) requestLogger(next http.Handler) http.Handler {
 			"duration_ms", time.Since(started).Milliseconds(),
 			"request_id", redactedHeaderValue(r.Header, "X-Request-ID"),
 			"user_agent", r.UserAgent(),
-			"remote_addr", r.RemoteAddr,
+			"remote_addr", s.clientIP(r),
 		)
 		if s.cfg.AppDebug {
 			s.logger.Debug(

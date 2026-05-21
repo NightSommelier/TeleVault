@@ -13,6 +13,7 @@ import (
 	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/adminsettings"
 	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/auth"
 	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/buildinfo"
+	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/clientip"
 	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/config"
 	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/crypto/secrets"
 	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/db"
@@ -33,6 +34,7 @@ type Server struct {
 	ageRecipient age.Recipient
 	ageIdentity  age.Identity
 	telegram     telegramClient
+	clientIP     func(*http.Request) string
 	mux          *http.ServeMux
 }
 
@@ -42,6 +44,10 @@ type telegramClient interface {
 }
 
 func New(cfg config.Config, logger *slog.Logger, database *sql.DB, secretsBox *secrets.Box, ageRecipient age.Recipient, ageIdentity age.Identity, telegram telegramClient) http.Handler {
+	resolver, err := clientip.New(cfg.TrustedProxyCIDRs)
+	if err != nil {
+		panic(err)
+	}
 	server := &Server{
 		cfg:          cfg,
 		logger:       logger,
@@ -50,6 +56,7 @@ func New(cfg config.Config, logger *slog.Logger, database *sql.DB, secretsBox *s
 		ageRecipient: ageRecipient,
 		ageIdentity:  ageIdentity,
 		telegram:     telegram,
+		clientIP:     resolver.ClientIP,
 		mux:          http.NewServeMux(),
 	}
 
@@ -70,7 +77,7 @@ func (s *Server) routes() {
 	if s.cfg.AuthRateLimitEnabled && s.cfg.ValkeyAddr != "" {
 		rateLimitStore = auth.NewValkeyRateLimitStore(valkey.NewClient(s.cfg.ValkeyAddr), "t2d:auth_rate_limit")
 	}
-	authHandler := auth.NewHandlerWithRateLimiter(s.cfg, s.logger, s.db, telegramSessionCrypto, s.telegram, rateLimitStore)
+	authHandler := auth.NewHandlerWithRateLimiter(s.cfg, s.logger, s.db, telegramSessionCrypto, s.telegram, rateLimitStore, s.clientIP)
 	s.mux.HandleFunc("POST /auth/telegram/send-code", authHandler.SendTelegramCode)
 	s.mux.HandleFunc("POST /auth/telegram/login", authHandler.LoginWithTelegram)
 	s.mux.HandleFunc("POST /auth/telegram/qr/start", authHandler.StartTelegramQRLogin)
@@ -79,11 +86,26 @@ func (s *Server) routes() {
 	s.mux.Handle("POST /auth/logout", authHandler.RequireCSRF(http.HandlerFunc(authHandler.Logout)))
 	s.mux.Handle("GET /me", authHandler.RequireAuth(http.HandlerFunc(authHandler.Me)))
 
-	filesHandler := files.NewHandler(s.db, telegramSessionCrypto, s.ageIdentity, s.telegram)
+	downloadTracker := files.NewDownloadTracker()
+	var publicRateLimitStore auth.RateLimitStore
+	if s.cfg.PublicDownloadRateLimitEnabled {
+		publicRateLimitStore = auth.NewMemoryRateLimitStore()
+		if s.cfg.ValkeyAddr != "" {
+			publicRateLimitStore = auth.NewValkeyRateLimitStore(valkey.NewClient(s.cfg.ValkeyAddr), "t2d:public_download_rate_limit")
+		}
+	}
+	publicLimiter := files.NewPublicDownloadRateLimiter(files.PublicRateLimitSettings{
+		Enabled:             s.cfg.PublicDownloadRateLimitEnabled,
+		IPLimitPerMinute:    s.cfg.PublicDownloadIPLimitPerMinute,
+		TokenLimitPerMinute: s.cfg.PublicDownloadTokenLimitPerMinute,
+		ClientIP:            s.clientIP,
+	}, publicRateLimitStore)
+	filesHandler := files.NewHandler(s.db, s.logger, downloadTracker, publicLimiter, telegramSessionCrypto, s.ageIdentity, s.telegram)
 	s.mux.Handle("GET /files", authHandler.RequireAuth(http.HandlerFunc(filesHandler.List)))
 	s.mux.Handle("GET /shared", authHandler.RequireAuth(http.HandlerFunc(filesHandler.ListSharedWithMe)))
 	s.mux.Handle("POST /folders", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(filesHandler.CreateFolder))))
 	s.mux.Handle("GET /files/{id}", authHandler.RequireAuth(http.HandlerFunc(filesHandler.Get)))
+	s.mux.Handle("GET /files/{id}/activity", authHandler.RequireAuth(http.HandlerFunc(filesHandler.DownloadActivity)))
 	s.mux.Handle("PATCH /files/{id}", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(filesHandler.Patch))))
 	s.mux.Handle("DELETE /files/{id}", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(filesHandler.Delete))))
 	s.mux.Handle("PATCH /files/bulk-move", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(filesHandler.BulkMove))))

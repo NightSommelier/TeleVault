@@ -151,6 +151,33 @@ func TestValidateRejectsInvalidEnabledRateLimits(t *testing.T) {
 	assertErrorContains(t, err, "TELEGRAM_LOGIN_PHONE_LIMIT_PER_HOUR must be greater than 0 when auth rate limiting is enabled")
 }
 
+func TestValidateRejectsInvalidPublicDownloadRateLimits(t *testing.T) {
+	cfg := validConfig()
+	cfg.PublicDownloadRateLimitEnabled = true
+	cfg.PublicDownloadIPLimitPerMinute = 0
+	cfg.PublicDownloadTokenLimitPerMinute = 0
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("Validate() error = nil, want public download rate limit errors")
+	}
+
+	assertErrorContains(t, err, "PUBLIC_DOWNLOAD_IP_LIMIT_PER_MINUTE must be greater than 0 when public download rate limiting is enabled")
+	assertErrorContains(t, err, "PUBLIC_DOWNLOAD_TOKEN_LIMIT_PER_MINUTE must be greater than 0 when public download rate limiting is enabled")
+}
+
+func TestValidateRejectsInvalidTrustedProxyCIDR(t *testing.T) {
+	cfg := validConfig()
+	cfg.TrustedProxyCIDRs = []string{"bad-cidr"}
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("Validate() error = nil, want trusted proxy cidr error")
+	}
+
+	assertErrorContains(t, err, "TRUSTED_PROXY_CIDRS must contain valid CIDR entries")
+}
+
 func TestValidateRejectsInvalidAgeIdentityShape(t *testing.T) {
 	cfg := validConfig()
 	cfg.AppAgeIdentity = "not-an-age-identity"
@@ -199,6 +226,10 @@ func validConfig() Config {
 		TelegramAuthIPLimitPerMinute:      DefaultTelegramAuthIPLimitPerMinute,
 		TelegramSendCodePhoneLimitPerHour: DefaultTelegramSendCodePhoneLimitPerHour,
 		TelegramLoginPhoneLimitPerHour:    DefaultTelegramLoginPhoneLimitPerHour,
+		PublicDownloadRateLimitEnabled:    true,
+		PublicDownloadIPLimitPerMinute:    DefaultPublicDownloadIPLimitPerMinute,
+		PublicDownloadTokenLimitPerMinute: DefaultPublicDownloadTokenLimitPerMinute,
+		TrustedProxyCIDRs:                 nil,
 	}
 }
 

@@ -118,9 +118,30 @@ ORDER BY type DESC, name_plain ASC, created_at ASC`,
 		rows, err = s.db.QueryContext(ctx, `
 SELECT id, owner_id, parent_id, name_plain, mime_type, plaintext_size, ciphertext_size, type, status, created_at, updated_at
 FROM files
-WHERE owner_id = $1
-  AND parent_id = $2
+WHERE parent_id = $2
   AND deleted_at IS NULL
+  AND (
+      owner_id = $1
+      OR EXISTS (
+          WITH RECURSIVE ancestors AS (
+              SELECT id, parent_id
+              FROM files
+              WHERE id = $2
+                AND deleted_at IS NULL
+              UNION ALL
+              SELECT f.id, f.parent_id
+              FROM files f
+              JOIN ancestors a ON a.parent_id = f.id
+              WHERE f.deleted_at IS NULL
+          )
+          SELECT 1
+          FROM file_shares s
+          WHERE s.grantee_user_id = $1
+            AND s.revoked_at IS NULL
+            AND (s.expires_at IS NULL OR s.expires_at > now())
+            AND s.file_id IN (SELECT id FROM ancestors)
+      )
+  )
 ORDER BY type DESC, name_plain ASC, created_at ASC`,
 			ownerID,
 			parentID,
@@ -175,9 +196,20 @@ WHERE f.id = $2
   AND (
       f.owner_id = $1
       OR EXISTS (
+          WITH RECURSIVE ancestors AS (
+              SELECT id, parent_id
+              FROM files
+              WHERE id = f.id
+                AND deleted_at IS NULL
+              UNION ALL
+              SELECT parent.id, parent.parent_id
+              FROM files parent
+              JOIN ancestors child ON child.parent_id = parent.id
+              WHERE parent.deleted_at IS NULL
+          )
           SELECT 1
           FROM file_shares s
-          WHERE s.file_id = f.id
+          WHERE s.file_id IN (SELECT id FROM ancestors)
             AND s.grantee_user_id = $1
             AND s.revoked_at IS NULL
             AND (s.expires_at IS NULL OR s.expires_at > now())
@@ -525,6 +557,29 @@ WHERE ts.user_id = $1`,
 	return file, parts, session, nil
 }
 
+func (s *Store) PublicLinkPasswordMinLength(ctx context.Context) (int, error) {
+	const fallback = 8
+	var value int
+	err := s.db.QueryRowContext(ctx, `
+SELECT public_link_password_min_length
+FROM admin_settings
+WHERE id = TRUE`,
+	).Scan(&value)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fallback, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	if value < 1 {
+		return fallback, nil
+	}
+	if value > 1024 {
+		return 1024, nil
+	}
+	return value, nil
+}
+
 func (s *Store) CreatePublicLink(ctx context.Context, ownerID string, fileID string, tokenHash []byte, expiresAt sql.NullTime, password PublicLinkPassword) (PublicLink, error) {
 	file, err := s.GetByID(ctx, ownerID, fileID)
 	if err != nil {
@@ -659,7 +714,7 @@ func (s *Store) CreateShare(ctx context.Context, ownerID string, fileID string, 
 	if err != nil {
 		return Share{}, err
 	}
-	if file.Type != TypeFile || file.Status != StatusReady {
+	if file.Type != TypeFolder && (file.Type != TypeFile || file.Status != StatusReady) {
 		return Share{}, ErrNotFound
 	}
 

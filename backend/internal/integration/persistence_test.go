@@ -437,6 +437,121 @@ WHERE file_id = $1
 	}
 }
 
+func TestFolderShareGrantsRecursiveAccessToDescendants(t *testing.T) {
+	database := openIntegrationDB(t)
+	sessionStore := auth.NewSessionStore(database)
+	fileStore := files.NewStore(database)
+	uploadStore := uploads.NewStore(database)
+	ctx := context.Background()
+
+	owner, cleanupOwner := createUserThroughLogin(t, database, sessionStore, 960_000_000_000+time.Now().UnixNano()%1_000_000_000)
+	defer cleanupOwner()
+	grantee, cleanupGrantee := createUserThroughLogin(t, database, sessionStore, 970_000_000_000+time.Now().UnixNano()%1_000_000_000)
+	defer cleanupGrantee()
+
+	root, err := fileStore.CreateFolder(ctx, owner.ID, "", "shared-root")
+	if err != nil {
+		t.Fatalf("CreateFolder(root) error = %v", err)
+	}
+	child, err := fileStore.CreateFolder(ctx, owner.ID, root.ID, "child")
+	if err != nil {
+		t.Fatalf("CreateFolder(child) error = %v", err)
+	}
+	grandchild, err := fileStore.CreateFolder(ctx, owner.ID, child.ID, "grandchild")
+	if err != nil {
+		t.Fatalf("CreateFolder(grandchild) error = %v", err)
+	}
+
+	upload, err := uploadStore.Create(ctx, uploads.CreateUploadParams{
+		OwnerID:       owner.ID,
+		ParentID:      grandchild.ID,
+		Name:          "nested.txt",
+		MimeType:      "text/plain",
+		PlaintextSize: 5,
+		PartSize:      5,
+		ExpiresAt:     time.Now().Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("Create upload error = %v", err)
+	}
+	if _, err := uploadStore.CompletePart(ctx, uploads.CompletePartParams{
+		OwnerID:        owner.ID,
+		UploadID:       upload.ID,
+		PartNumber:     1,
+		PlaintextSize:  5,
+		CiphertextSize: 10,
+		Checksum:       []byte("nested-part"),
+		UploadedSize:   5,
+		TelegramPeer:   "self",
+		MessageID:      201,
+		Now:            time.Now(),
+	}); err != nil {
+		t.Fatalf("CompletePart() error = %v", err)
+	}
+	file, err := uploadStore.CompleteUpload(ctx, uploads.CompleteUploadParams{
+		OwnerID:  owner.ID,
+		UploadID: upload.ID,
+		Now:      time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("CompleteUpload() error = %v", err)
+	}
+
+	if _, err := fileStore.GetAccessibleByID(ctx, grantee.ID, root.ID); !errors.Is(err, files.ErrNotFound) {
+		t.Fatalf("grantee root access before share error = %v, want files.ErrNotFound", err)
+	}
+	if _, _, _, err := fileStore.DownloadData(ctx, grantee.ID, file.ID); !errors.Is(err, files.ErrNotFound) {
+		t.Fatalf("grantee download before share error = %v, want files.ErrNotFound", err)
+	}
+
+	share, err := fileStore.CreateShare(ctx, owner.ID, root.ID, grantee.TelegramID, sql.NullTime{})
+	if err != nil {
+		t.Fatalf("CreateShare(folder) error = %v", err)
+	}
+
+	for _, id := range []string{root.ID, child.ID, grandchild.ID, file.ID} {
+		if _, err := fileStore.GetAccessibleByID(ctx, grantee.ID, id); err != nil {
+			t.Fatalf("GetAccessibleByID(%s) after share error = %v", id, err)
+		}
+	}
+
+	rootChildren, err := fileStore.ListChildren(ctx, grantee.ID, root.ID)
+	if err != nil {
+		t.Fatalf("ListChildren(root) error = %v", err)
+	}
+	if len(rootChildren) != 1 || rootChildren[0].ID != child.ID {
+		t.Fatalf("ListChildren(root) = %+v, want child %s", rootChildren, child.ID)
+	}
+	childChildren, err := fileStore.ListChildren(ctx, grantee.ID, child.ID)
+	if err != nil {
+		t.Fatalf("ListChildren(child) error = %v", err)
+	}
+	if len(childChildren) != 1 || childChildren[0].ID != grandchild.ID {
+		t.Fatalf("ListChildren(child) = %+v, want grandchild %s", childChildren, grandchild.ID)
+	}
+	grandchildChildren, err := fileStore.ListChildren(ctx, grantee.ID, grandchild.ID)
+	if err != nil {
+		t.Fatalf("ListChildren(grandchild) error = %v", err)
+	}
+	if len(grandchildChildren) != 1 || grandchildChildren[0].ID != file.ID {
+		t.Fatalf("ListChildren(grandchild) = %+v, want file %s", grandchildChildren, file.ID)
+	}
+
+	if _, _, _, err := fileStore.DownloadData(ctx, grantee.ID, file.ID); err != nil {
+		t.Fatalf("grantee DownloadData() after folder share error = %v", err)
+	}
+
+	if err := fileStore.RevokeShare(ctx, owner.ID, root.ID, share.ID, time.Now()); err != nil {
+		t.Fatalf("RevokeShare(folder) error = %v", err)
+	}
+	if _, err := fileStore.GetAccessibleByID(ctx, grantee.ID, grandchild.ID); !errors.Is(err, files.ErrNotFound) {
+		t.Fatalf("grantee nested folder access after revoke error = %v, want files.ErrNotFound", err)
+	}
+	if _, _, _, err := fileStore.DownloadData(ctx, grantee.ID, file.ID); !errors.Is(err, files.ErrNotFound) {
+		t.Fatalf("grantee download after revoke error = %v, want files.ErrNotFound", err)
+	}
+}
+
 func TestUploadPartQueueLeaseRetryAndFail(t *testing.T) {
 	database := openIntegrationDB(t)
 	sessionStore := auth.NewSessionStore(database)
@@ -780,6 +895,7 @@ func TestClaimQueuedPartWorkRespectsAccountParallelLimit(t *testing.T) {
 		MaxParallelUploads:           4,
 		TargetUploadBytesPerSecond:   0,
 		CooldownBetweenPartsMillisec: 0,
+		PublicLinkPasswordMinLength:  8,
 	}, owner.ID); err != nil {
 		t.Fatalf("UpdateUploadSettings() error = %v", err)
 	}
@@ -791,6 +907,7 @@ func TestClaimQueuedPartWorkRespectsAccountParallelLimit(t *testing.T) {
 			MaxParallelUploads:           1,
 			TargetUploadBytesPerSecond:   0,
 			CooldownBetweenPartsMillisec: 0,
+			PublicLinkPasswordMinLength:  8,
 		}, "")
 	})
 
@@ -867,6 +984,7 @@ func TestAdminUploadSettingsVaultUploadPartSize(t *testing.T) {
 		MaxParallelUploads:           1,
 		TargetUploadBytesPerSecond:   0,
 		CooldownBetweenPartsMillisec: 0,
+		PublicLinkPasswordMinLength:  8,
 	}, admin.ID)
 	if err != nil {
 		t.Fatalf("UpdateUploadSettings() error = %v", err)
@@ -882,6 +1000,7 @@ func TestAdminUploadSettingsVaultUploadPartSize(t *testing.T) {
 			MaxParallelUploads:           1,
 			TargetUploadBytesPerSecond:   0,
 			CooldownBetweenPartsMillisec: 0,
+			PublicLinkPasswordMinLength:  8,
 		}, "")
 	})
 
@@ -920,6 +1039,7 @@ func TestEffectiveUploadSettingsUseAccountLimit(t *testing.T) {
 		MaxParallelUploads:           1,
 		TargetUploadBytesPerSecond:   0,
 		CooldownBetweenPartsMillisec: 0,
+		PublicLinkPasswordMinLength:  8,
 	}, admin.ID); err != nil {
 		t.Fatalf("UpdateUploadSettings() error = %v", err)
 	}
@@ -931,6 +1051,7 @@ func TestEffectiveUploadSettingsUseAccountLimit(t *testing.T) {
 			MaxParallelUploads:           1,
 			TargetUploadBytesPerSecond:   0,
 			CooldownBetweenPartsMillisec: 0,
+			PublicLinkPasswordMinLength:  8,
 		}, "")
 	})
 

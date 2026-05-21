@@ -57,6 +57,7 @@ func (h *Handler) PatchUploadSettings(w http.ResponseWriter, r *http.Request) {
 		MaxParallelUploads:           request.MaxParallelUploads,
 		TargetUploadBytesPerSecond:   request.TargetUploadBytesPerSecond,
 		CooldownBetweenPartsMillisec: request.CooldownBetweenPartsMillisec,
+		PublicLinkPasswordMinLength:  request.PublicLinkPasswordMinLength,
 	}, user.ID)
 	if errors.Is(err, ErrInvalidSettings) {
 		writeError(w, http.StatusBadRequest, "admin_settings_invalid")
@@ -120,6 +121,7 @@ type uploadSettingsRequest struct {
 	MaxParallelUploads           int   `json:"max_parallel_uploads"`
 	TargetUploadBytesPerSecond   int64 `json:"target_upload_bytes_per_second"`
 	CooldownBetweenPartsMillisec int   `json:"cooldown_between_parts_ms"`
+	PublicLinkPasswordMinLength  int   `json:"public_link_password_min_length"`
 }
 
 type telegramAccountLimitRequest struct {
@@ -133,13 +135,14 @@ type telegramAccountLimitRequest struct {
 
 func uploadSettingsResponse(settings UploadSettings) map[string]any {
 	return map[string]any{
-		"upload_part_size_bytes":         settings.UploadPartSizeBytes,
-		"telegram_document_limit_bytes":  settings.TelegramDocumentLimitBytes,
-		"upload_safety_margin_bytes":     settings.UploadSafetyMarginBytes,
-		"max_parallel_uploads":           settings.MaxParallelUploads,
-		"target_upload_bytes_per_second": settings.TargetUploadBytesPerSecond,
-		"cooldown_between_parts_ms":      settings.CooldownBetweenPartsMillisec,
-		"updated_at":                     settings.UpdatedAt,
+		"upload_part_size_bytes":          settings.UploadPartSizeBytes,
+		"telegram_document_limit_bytes":   settings.TelegramDocumentLimitBytes,
+		"upload_safety_margin_bytes":      settings.UploadSafetyMarginBytes,
+		"max_parallel_uploads":            settings.MaxParallelUploads,
+		"target_upload_bytes_per_second":  settings.TargetUploadBytesPerSecond,
+		"cooldown_between_parts_ms":       settings.CooldownBetweenPartsMillisec,
+		"public_link_password_min_length": settings.PublicLinkPasswordMinLength,
+		"updated_at":                      settings.UpdatedAt,
 	}
 }
 

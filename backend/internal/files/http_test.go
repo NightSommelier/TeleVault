@@ -20,7 +20,7 @@ func TestNormalizeName(t *testing.T) {
 }
 
 func TestPublicLinkPasswordRoundTrip(t *testing.T) {
-	password, ok := derivePublicLinkPassword("correct horse battery staple")
+	password, ok := derivePublicLinkPassword("correct horse battery staple", 8)
 	if !ok {
 		t.Fatal("derivePublicLinkPassword() ok = false, want true")
 	}
@@ -44,7 +44,7 @@ func TestPublicLinkPasswordRoundTrip(t *testing.T) {
 }
 
 func TestPublicLinkPasswordRejectsShortPasswords(t *testing.T) {
-	if _, ok := derivePublicLinkPassword("short"); ok {
+	if _, ok := derivePublicLinkPassword("short", 8); ok {
 		t.Fatal("derivePublicLinkPassword(short) ok = true, want false")
 	}
 }

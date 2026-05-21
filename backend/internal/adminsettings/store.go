@@ -18,6 +18,7 @@ type UploadSettings struct {
 	MaxParallelUploads           int   `json:"max_parallel_uploads"`
 	TargetUploadBytesPerSecond   int64 `json:"target_upload_bytes_per_second"`
 	CooldownBetweenPartsMillisec int   `json:"cooldown_between_parts_ms"`
+	PublicLinkPasswordMinLength  int   `json:"public_link_password_min_length"`
 	UpdatedAt                    time.Time
 }
 
@@ -65,6 +66,7 @@ func NewStore(db *sql.DB, cfg config.Config) *Store {
 			MaxParallelUploads:           1,
 			TargetUploadBytesPerSecond:   0,
 			CooldownBetweenPartsMillisec: 0,
+			PublicLinkPasswordMinLength:  8,
 		},
 	}
 }
@@ -73,7 +75,8 @@ func (s *Store) UploadSettings(ctx context.Context) (UploadSettings, error) {
 	settings := s.fallback
 	err := s.db.QueryRowContext(ctx, `
 SELECT upload_part_size_bytes, telegram_document_limit_bytes, upload_safety_margin_bytes,
-       max_parallel_uploads, target_upload_bytes_per_second, cooldown_between_parts_ms, updated_at
+       max_parallel_uploads, target_upload_bytes_per_second, cooldown_between_parts_ms,
+       public_link_password_min_length, updated_at
 FROM admin_settings
 WHERE id = TRUE`,
 	).Scan(
@@ -83,6 +86,7 @@ WHERE id = TRUE`,
 		&settings.MaxParallelUploads,
 		&settings.TargetUploadBytesPerSecond,
 		&settings.CooldownBetweenPartsMillisec,
+		&settings.PublicLinkPasswordMinLength,
 		&settings.UpdatedAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -174,10 +178,11 @@ INSERT INTO admin_settings (
     max_parallel_uploads,
     target_upload_bytes_per_second,
     cooldown_between_parts_ms,
+    public_link_password_min_length,
     updated_by,
     updated_at
 )
-VALUES (TRUE, $1, $2, $3, $4, $5, $6, NULLIF($7, '')::uuid, now())
+VALUES (TRUE, $1, $2, $3, $4, $5, $6, $7, NULLIF($8, '')::uuid, now())
 ON CONFLICT (id)
 DO UPDATE SET
     upload_part_size_bytes = EXCLUDED.upload_part_size_bytes,
@@ -186,16 +191,19 @@ DO UPDATE SET
     max_parallel_uploads = EXCLUDED.max_parallel_uploads,
     target_upload_bytes_per_second = EXCLUDED.target_upload_bytes_per_second,
     cooldown_between_parts_ms = EXCLUDED.cooldown_between_parts_ms,
+    public_link_password_min_length = EXCLUDED.public_link_password_min_length,
     updated_by = EXCLUDED.updated_by,
     updated_at = now()
 RETURNING upload_part_size_bytes, telegram_document_limit_bytes, upload_safety_margin_bytes,
-          max_parallel_uploads, target_upload_bytes_per_second, cooldown_between_parts_ms, updated_at`,
+          max_parallel_uploads, target_upload_bytes_per_second, cooldown_between_parts_ms,
+          public_link_password_min_length, updated_at`,
 		settings.UploadPartSizeBytes,
 		settings.TelegramDocumentLimitBytes,
 		settings.UploadSafetyMarginBytes,
 		settings.MaxParallelUploads,
 		settings.TargetUploadBytesPerSecond,
 		settings.CooldownBetweenPartsMillisec,
+		settings.PublicLinkPasswordMinLength,
 		updatedBy,
 	))
 }
@@ -310,7 +318,9 @@ func validateUploadSettings(settings UploadSettings) error {
 		settings.UploadPartSizeBytes > settings.TelegramDocumentLimitBytes-settings.UploadSafetyMarginBytes ||
 		settings.MaxParallelUploads <= 0 ||
 		settings.TargetUploadBytesPerSecond < 0 ||
-		settings.CooldownBetweenPartsMillisec < 0 {
+		settings.CooldownBetweenPartsMillisec < 0 ||
+		settings.PublicLinkPasswordMinLength < 1 ||
+		settings.PublicLinkPasswordMinLength > 1024 {
 		return ErrInvalidSettings
 	}
 	return nil
@@ -355,6 +365,7 @@ func scanUploadSettings(row rowScanner) (UploadSettings, error) {
 		&settings.MaxParallelUploads,
 		&settings.TargetUploadBytesPerSecond,
 		&settings.CooldownBetweenPartsMillisec,
+		&settings.PublicLinkPasswordMinLength,
 		&settings.UpdatedAt,
 	)
 	if err != nil {

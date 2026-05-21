@@ -14,6 +14,7 @@ type RateLimitSettings struct {
 	IPLimitPerMinute       int
 	SendCodePhoneLimitHour int
 	LoginPhoneLimitHour    int
+	ClientIP               func(*http.Request) string
 }
 
 type RateLimitDecision struct {
@@ -55,7 +56,7 @@ func (l *RateLimiter) CheckSendCode(r *http.Request, phoneHash []byte) RateLimit
 	if l == nil {
 		return allowDecision()
 	}
-	if decision := l.allow(r.Context(), "telegram_auth_ip:"+clientIP(r), l.settings.IPLimitPerMinute, time.Minute); !decision.Allowed || decision.Err != nil {
+	if decision := l.allow(r.Context(), "telegram_auth_ip:"+l.clientIP(r), l.settings.IPLimitPerMinute, time.Minute); !decision.Allowed || decision.Err != nil {
 		return decision
 	}
 	return l.allow(r.Context(), "telegram_send_code_phone:"+hex.EncodeToString(phoneHash), l.settings.SendCodePhoneLimitHour, time.Hour)
@@ -65,7 +66,7 @@ func (l *RateLimiter) CheckLogin(r *http.Request, phoneHash []byte) RateLimitDec
 	if l == nil {
 		return allowDecision()
 	}
-	if decision := l.allow(r.Context(), "telegram_auth_ip:"+clientIP(r), l.settings.IPLimitPerMinute, time.Minute); !decision.Allowed || decision.Err != nil {
+	if decision := l.allow(r.Context(), "telegram_auth_ip:"+l.clientIP(r), l.settings.IPLimitPerMinute, time.Minute); !decision.Allowed || decision.Err != nil {
 		return decision
 	}
 	return l.allow(r.Context(), "telegram_login_phone:"+hex.EncodeToString(phoneHash), l.settings.LoginPhoneLimitHour, time.Hour)
@@ -75,7 +76,7 @@ func (l *RateLimiter) CheckQRStart(r *http.Request) RateLimitDecision {
 	if l == nil {
 		return allowDecision()
 	}
-	return l.allow(r.Context(), "telegram_auth_ip:"+clientIP(r), l.settings.IPLimitPerMinute, time.Minute)
+	return l.allow(r.Context(), "telegram_auth_ip:"+l.clientIP(r), l.settings.IPLimitPerMinute, time.Minute)
 }
 
 func (l *RateLimiter) allow(ctx context.Context, key string, limit int, window time.Duration) RateLimitDecision {
@@ -199,6 +200,13 @@ func (s *ValkeyRateLimitStore) Allow(ctx context.Context, key string, limit int,
 
 func allowDecision() RateLimitDecision {
 	return RateLimitDecision{Allowed: true}
+}
+
+func (l *RateLimiter) clientIP(r *http.Request) string {
+	if l != nil && l.settings.ClientIP != nil {
+		return l.settings.ClientIP(r)
+	}
+	return clientIP(r)
 }
 
 func clientIP(r *http.Request) string {

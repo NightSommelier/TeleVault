@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -23,6 +24,8 @@ const (
 	DefaultTelegramAuthIPLimitPerMinute      = 30
 	DefaultTelegramSendCodePhoneLimitPerHour = 5
 	DefaultTelegramLoginPhoneLimitPerHour    = 10
+	DefaultPublicDownloadIPLimitPerMinute    = 120
+	DefaultPublicDownloadTokenLimitPerMinute = 240
 )
 
 type Config struct {
@@ -53,6 +56,10 @@ type Config struct {
 	TelegramAuthIPLimitPerMinute      int
 	TelegramSendCodePhoneLimitPerHour int
 	TelegramLoginPhoneLimitPerHour    int
+	PublicDownloadRateLimitEnabled    bool
+	PublicDownloadIPLimitPerMinute    int
+	PublicDownloadTokenLimitPerMinute int
+	TrustedProxyCIDRs                 []string
 }
 
 type DatabaseConfig struct {
@@ -97,11 +104,19 @@ func Load() (Config, error) {
 	if cfg.TelegramLoginPhoneLimitPerHour, err = parseIntDefault(os.Getenv("TELEGRAM_LOGIN_PHONE_LIMIT_PER_HOUR"), DefaultTelegramLoginPhoneLimitPerHour); err != nil {
 		return Config{}, fmt.Errorf("TELEGRAM_LOGIN_PHONE_LIMIT_PER_HOUR must be an integer: %w", err)
 	}
+	if cfg.PublicDownloadIPLimitPerMinute, err = parseIntDefault(os.Getenv("PUBLIC_DOWNLOAD_IP_LIMIT_PER_MINUTE"), DefaultPublicDownloadIPLimitPerMinute); err != nil {
+		return Config{}, fmt.Errorf("PUBLIC_DOWNLOAD_IP_LIMIT_PER_MINUTE must be an integer: %w", err)
+	}
+	if cfg.PublicDownloadTokenLimitPerMinute, err = parseIntDefault(os.Getenv("PUBLIC_DOWNLOAD_TOKEN_LIMIT_PER_MINUTE"), DefaultPublicDownloadTokenLimitPerMinute); err != nil {
+		return Config{}, fmt.Errorf("PUBLIC_DOWNLOAD_TOKEN_LIMIT_PER_MINUTE must be an integer: %w", err)
+	}
 
 	cfg.CORSAllowedOrigins = splitCSV(os.Getenv("CORS_ALLOWED_ORIGINS"))
 	cfg.SecureCookie = parseBoolDefault(os.Getenv("SECURE_COOKIE"), cfg.Env == EnvProduction)
 	cfg.CredentialsCORSMode = parseBoolDefault(os.Getenv("CORS_ALLOW_CREDENTIALS"), true)
 	cfg.AuthRateLimitEnabled = parseBoolDefault(os.Getenv("AUTH_RATE_LIMIT_ENABLED"), true)
+	cfg.PublicDownloadRateLimitEnabled = parseBoolDefault(os.Getenv("PUBLIC_DOWNLOAD_RATE_LIMIT_ENABLED"), true)
+	cfg.TrustedProxyCIDRs = splitCSV(os.Getenv("TRUSTED_PROXY_CIDRS"))
 
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
@@ -208,6 +223,24 @@ func (cfg Config) Validate() error {
 		}
 		if cfg.TelegramLoginPhoneLimitPerHour <= 0 {
 			problems = append(problems, "TELEGRAM_LOGIN_PHONE_LIMIT_PER_HOUR must be greater than 0 when auth rate limiting is enabled")
+		}
+	}
+	if cfg.PublicDownloadRateLimitEnabled {
+		if cfg.PublicDownloadIPLimitPerMinute <= 0 {
+			problems = append(problems, "PUBLIC_DOWNLOAD_IP_LIMIT_PER_MINUTE must be greater than 0 when public download rate limiting is enabled")
+		}
+		if cfg.PublicDownloadTokenLimitPerMinute <= 0 {
+			problems = append(problems, "PUBLIC_DOWNLOAD_TOKEN_LIMIT_PER_MINUTE must be greater than 0 when public download rate limiting is enabled")
+		}
+	}
+	for _, cidr := range cfg.TrustedProxyCIDRs {
+		cidr = strings.TrimSpace(cidr)
+		if cidr == "" {
+			continue
+		}
+		if _, _, err := net.ParseCIDR(cidr); err != nil {
+			problems = append(problems, "TRUSTED_PROXY_CIDRS must contain valid CIDR entries")
+			break
 		}
 	}
 
