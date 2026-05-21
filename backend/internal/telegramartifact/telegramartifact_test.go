@@ -72,6 +72,37 @@ func TestWrapReaderAndUnwrapReaderRoundTrip(t *testing.T) {
 	}
 }
 
+func TestWrapReaderAndUnwrapReaderRoundTripAcrossSizeBuckets(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		size int64
+	}{
+		{name: "small", size: 4 * 1024 * 1024},
+		{name: "medium", size: 32 * 1024 * 1024},
+		{name: "large", size: 256 * 1024 * 1024},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ciphertext := []byte("age-encrypted bytes")
+			wrapped, err := io.ReadAll(WrapReaderForSize("part-"+tc.name, tc.size, bytes.NewReader(ciphertext)))
+			if err != nil {
+				t.Fatalf("ReadAll(WrapReaderForSize()) error = %v", err)
+			}
+
+			unwrap, err := UnwrapReader(bytes.NewReader(wrapped))
+			if err != nil {
+				t.Fatalf("UnwrapReader() error = %v", err)
+			}
+			roundTrip, err := io.ReadAll(unwrap)
+			if err != nil {
+				t.Fatalf("ReadAll(UnwrapReader()) error = %v", err)
+			}
+			if !bytes.Equal(roundTrip, ciphertext) {
+				t.Fatal("unwrapped bytes did not match original ciphertext")
+			}
+		})
+	}
+}
+
 func TestUnwrapReaderPassesThroughLegacyWrappedCiphertext(t *testing.T) {
 	identity, err := age.GenerateX25519Identity()
 	if err != nil {

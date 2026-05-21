@@ -136,11 +136,10 @@ func UnwrapReader(src io.Reader) (io.Reader, error) {
 }
 
 func matchWrappedSpec(peek []byte) (ArtifactSpec, byte, bool) {
-	for idx, profile := range allProfiles() {
-		spec := ArtifactSpec{ProfileIndex: idx, Profile: profile}
+	for _, spec := range wrappedSpecs() {
 		for _, version := range []byte{wrapperVersionXOR, wrapperVersionPlain} {
-			header := wrapperHeader(idx, version)
-			expected := append([]byte{}, profile.Prefix...)
+			header := wrapperHeader(spec.ProfileIndex, version)
+			expected := append([]byte{}, spec.Profile.Prefix...)
 			expected = append(expected, header...)
 			if bytes.HasPrefix(peek, expected) {
 				return spec, version, true
@@ -148,6 +147,21 @@ func matchWrappedSpec(peek []byte) (ArtifactSpec, byte, bool) {
 		}
 	}
 	return ArtifactSpec{}, 0, false
+}
+
+func wrappedSpecs() []ArtifactSpec {
+	groups := [][]DecoyProfile{smallProfiles, mediumProfiles, largeProfiles}
+	count := len(allProfiles()) + len(smallProfiles) + len(mediumProfiles) + len(largeProfiles)
+	specs := make([]ArtifactSpec, 0, count)
+	for _, profiles := range groups {
+		for idx, profile := range profiles {
+			specs = append(specs, ArtifactSpec{ProfileIndex: idx, Profile: profile})
+		}
+	}
+	for idx, profile := range allProfiles() {
+		specs = append(specs, ArtifactSpec{ProfileIndex: idx, Profile: profile})
+	}
+	return specs
 }
 
 func wrapperHeader(profileIndex int, version byte) []byte {
