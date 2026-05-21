@@ -9,6 +9,7 @@ import (
 	"os"
 	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 const (
 	defaultRetryBaseDelay = 30 * time.Second
 	defaultRetryMaxDelay  = 30 * time.Minute
+	slowdownRetryDelay    = 2 * time.Minute
 )
 
 var floodWaitPattern = regexp.MustCompile(`(?i)FLOOD_WAIT_?(\d+)`)
@@ -374,10 +376,28 @@ func retryDelay(err error, attempts int, base time.Duration, maxDelay time.Durat
 		power = 10
 	}
 	delay := time.Duration(math.Pow(2, float64(power))) * base
+	if isTelegramSlowdown(err) && delay < slowdownRetryDelay {
+		delay = slowdownRetryDelay
+	}
 	if delay > maxDelay {
 		return maxDelay
 	}
 	return delay
+}
+
+func isTelegramSlowdown(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "timeout") ||
+		strings.Contains(message, "too many requests") ||
+		strings.Contains(message, "rate limit") ||
+		strings.Contains(message, "upload freeze") ||
+		strings.Contains(message, "temporarily unavailable")
 }
 
 func (w *DrainWorker) throttleAfterUpload(ctx context.Context, work QueuedPartWork, startedAt time.Time) error {

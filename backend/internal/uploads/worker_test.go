@@ -468,6 +468,23 @@ func TestUploadPolicyDelayUsesCooldownAndTargetRate(t *testing.T) {
 	}
 }
 
+func TestRetryDelayTreatsTelegramSlowdownsConservatively(t *testing.T) {
+	delay := retryDelay(context.DeadlineExceeded, 1, time.Second, time.Hour)
+	if delay != slowdownRetryDelay {
+		t.Fatalf("retryDelay(context deadline) = %v, want %v", delay, slowdownRetryDelay)
+	}
+
+	delay = retryDelay(errors.New("Timeout while fetching dc"), 1, time.Second, time.Hour)
+	if delay != slowdownRetryDelay {
+		t.Fatalf("retryDelay(timeout) = %v, want %v", delay, slowdownRetryDelay)
+	}
+
+	delay = retryDelay(errors.New("FLOOD_WAIT_42"), 1, time.Second, time.Hour)
+	if delay != 42*time.Second {
+		t.Fatalf("retryDelay(FLOOD_WAIT_42) = %v, want 42s", delay)
+	}
+}
+
 func testSessionCrypto(t *testing.T) auth.TelegramSessionCrypto {
 	t.Helper()
 	box, err := secrets.NewBox(bytes.Repeat([]byte{1}, secrets.KeyBytes))
