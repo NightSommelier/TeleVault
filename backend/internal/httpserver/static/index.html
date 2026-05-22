@@ -575,7 +575,7 @@
                 <button id="createFolderBtn">Create</button>
               </div>
             </div>
-            <div id="dropZone" class="dropzone" tabindex="0">Drop file here or click to choose</div>
+            <div id="dropZone" class="dropzone" tabindex="0">Drop files or folders here or click to choose</div>
             <input id="fileInput" class="hidden-input" type="file" multiple>
             <button id="uploadBtn" class="primary">Add to queue</button>
             <div id="uploadStatus" class="status"></div>
@@ -1367,7 +1367,10 @@
             await moveFiles(ids, row.dataset.fileId);
             return;
           }
-          await uploadDroppedFilesToFolder(event.dataTransfer.files, row.dataset.fileId);
+          const queued = await enqueueDroppedStructure(event.dataTransfer, row.dataset.fileId);
+          if (!queued) return;
+          setUploadStatus(`Queued ${queued} file${queued === 1 ? '' : 's'} for this folder.`);
+          runUploadQueue();
         });
       });
     }
@@ -2119,20 +2122,17 @@
       return state.droppedFiles.length ? state.droppedFiles : Array.from(el.fileInput.files || []);
     }
 
-    async function uploadDroppedFilesToFolder(fileList, parentID) {
-      const files = Array.from(fileList || []).filter((file) => file && file.size >= 0);
-      if (!files.length) return;
-      enqueueFiles(files, parentID || '');
-      setUploadStatus(`Queued ${files.length} file${files.length === 1 ? '' : 's'} for this folder.`);
-      runUploadQueue();
-    }
-
     function enqueueFiles(files, parentID) {
-      for (const file of files) {
+      for (const entry of files) {
+        const file = entry && entry.file ? entry.file : entry;
+        const resolvedParentID = entry && typeof entry.parentID === 'string' ? entry.parentID : parentID;
+        const displayPath = entry && typeof entry.displayPath === 'string' ? entry.displayPath : '';
+        if (!file) continue;
         state.uploadQueue.push({
           id: state.nextUploadQueueID,
           file,
-          parentID: parentID || '',
+          parentID: resolvedParentID || '',
+          displayPath,
           status: 'queued',
           progress: 0,
           message: 'Waiting',
@@ -2259,7 +2259,7 @@
     function updateDropZone() {
       const files = selectedUploadFiles();
       if (!files.length) {
-        el.dropZone.textContent = 'Drop files here or click to choose';
+        el.dropZone.textContent = 'Drop files or folders here or click to choose';
       } else if (files.length === 1) {
         el.dropZone.textContent = files[0].name;
       } else {
@@ -2999,6 +2999,118 @@
       return dataTransfer && Array.from(dataTransfer.types || []).includes('Files');
     }
 
+    function getDataTransferEntries(dataTransfer) {
+      if (!dataTransfer || !dataTransfer.items || !dataTransfer.items.length) return [];
+      const entries = [];
+      for (const item of Array.from(dataTransfer.items)) {
+        if (!item || item.kind !== 'file' || typeof item.webkitGetAsEntry !== 'function') continue;
+        const entry = item.webkitGetAsEntry();
+        if (entry) entries.push(entry);
+      }
+      return entries;
+    }
+
+    function readAllDirectoryEntries(dirEntry) {
+      return new Promise((resolve, reject) => {
+        const reader = dirEntry.createReader();
+        const all = [];
+        const readBatch = () => {
+          reader.readEntries((batch) => {
+            if (!batch.length) {
+              resolve(all);
+              return;
+            }
+            all.push(...batch);
+            readBatch();
+          }, reject);
+        };
+        readBatch();
+      });
+    }
+
+    function readFileEntry(fileEntry) {
+      return new Promise((resolve, reject) => {
+        fileEntry.file(resolve, reject);
+      });
+    }
+
+    async function collectEntryUploads(entry, relPath = '') {
+      if (!entry) return [];
+      if (entry.isFile) {
+        const file = await readFileEntry(entry);
+        if (!file || file.size < 0) return [];
+        return [{
+          file,
+          pathParts: relPath ? relPath.split('/').filter(Boolean) : [],
+        }];
+      }
+      if (!entry.isDirectory) return [];
+      const children = await readAllDirectoryEntries(entry);
+      let uploads = [];
+      for (const child of children) {
+        const childRel = relPath ? `${relPath}/${child.name}` : child.name;
+        uploads = uploads.concat(await collectEntryUploads(child, childRel));
+      }
+      return uploads;
+    }
+
+    async function collectDroppedUploads(dataTransfer) {
+      const entries = getDataTransferEntries(dataTransfer);
+      if (entries.length) {
+        let uploads = [];
+        for (const entry of entries) {
+          uploads = uploads.concat(await collectEntryUploads(entry, entry.name));
+        }
+        if (uploads.length) return uploads;
+      }
+      return Array.from((dataTransfer && dataTransfer.files) || [])
+        .filter((file) => file && file.size >= 0)
+        .map((file) => ({ file, pathParts: [] }));
+    }
+
+    async function ensureFolderByPath(parentID, pathParts, cache) {
+      let currentParent = parentID || '';
+      const cleanParts = Array.isArray(pathParts) ? pathParts.filter(Boolean) : [];
+      for (const part of cleanParts) {
+        const key = `${currentParent}|${part}`;
+        if (cache.has(key)) {
+          currentParent = cache.get(key);
+          continue;
+        }
+        const created = await api('/folders', {
+          method: 'POST',
+          csrf: true,
+          body: JSON.stringify({
+            name: part,
+            parent_id: currentParent || undefined,
+          }),
+        });
+        const folderID = created && created.file && created.file.id ? created.file.id : '';
+        if (!folderID) throw new Error('folder_create_failed');
+        cache.set(key, folderID);
+        currentParent = folderID;
+      }
+      return currentParent;
+    }
+
+    async function enqueueDroppedStructure(dataTransfer, parentID) {
+      const uploads = await collectDroppedUploads(dataTransfer);
+      if (!uploads.length) return 0;
+      const folderCache = new Map();
+      const queueEntries = [];
+      for (const upload of uploads) {
+        const folderParts = upload.pathParts.slice(0, -1);
+        const resolvedParentID = await ensureFolderByPath(parentID || '', folderParts, folderCache);
+        queueEntries.push({
+          file: upload.file,
+          parentID: resolvedParentID,
+          displayPath: upload.pathParts.join('/'),
+        });
+      }
+      enqueueFiles(queueEntries, parentID || '');
+      return queueEntries.length;
+    }
+
     function setAdminStatus(message, error = false) {
       el.adminStatus.textContent = message;
       el.adminStatus.classList.toggle('error', error);
@@ -3228,10 +3340,23 @@
     el.dropZone.addEventListener('dragleave', () => {
       el.dropZone.classList.remove('dragging');
     });
-    el.dropZone.addEventListener('drop', (event) => {
+    el.dropZone.addEventListener('drop', async (event) => {
       event.preventDefault();
       el.dropZone.classList.remove('dragging');
-      acceptDroppedFiles(event.dataTransfer.files);
+      try {
+        const queued = await enqueueDroppedStructure(event.dataTransfer, state.currentFolderId || '');
+        if (!queued) {
+          acceptDroppedFiles(event.dataTransfer.files);
+          return;
+        }
+        state.droppedFiles = [];
+        el.fileInput.value = '';
+        updateDropZone();
+        setUploadStatus(`Queued ${queued} file${queued === 1 ? '' : 's'}.`);
+        runUploadQueue();
+      } catch (err) {
+        setUploadStatus(normalizeUploadError(err).message, true);
+      }
     });
     el.filePanel.addEventListener('dragover', (event) => {
       if (state.draggingItems.length || state.view !== 'own') return;
@@ -3242,12 +3367,19 @@
     el.filePanel.addEventListener('dragleave', (event) => {
       if (!el.filePanel.contains(event.relatedTarget)) el.filePanel.classList.remove('dragging');
     });
-    el.filePanel.addEventListener('drop', (event) => {
+    el.filePanel.addEventListener('drop', async (event) => {
       if (state.draggingItems.length || state.view !== 'own') return;
       if (!hasExternalFiles(event.dataTransfer)) return;
       event.preventDefault();
       el.filePanel.classList.remove('dragging');
-      uploadDroppedFilesToFolder(event.dataTransfer.files, state.currentFolderId || '');
+      try {
+        const queued = await enqueueDroppedStructure(event.dataTransfer, state.currentFolderId || '');
+        if (!queued) return;
+        setUploadStatus(`Queued ${queued} file${queued === 1 ? '' : 's'} for this folder.`);
+        runUploadQueue();
+      } catch (err) {
+        setUploadStatus(normalizeUploadError(err).message, true);
+      }
     });
     function acceptDroppedFiles(fileList) {
       state.droppedFiles = Array.from(fileList || []).filter((file) => file && file.size >= 0);
