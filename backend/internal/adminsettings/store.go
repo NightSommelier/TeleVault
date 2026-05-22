@@ -134,6 +134,7 @@ WHERE user_id = $1`,
 		userID,
 	).Scan(&manualLimit, &margin, &detectedLimit, &maxParallelUploads, &targetUploadBytesPerSecond, &cooldownBetweenPartsMillisec)
 	if errors.Is(err, sql.ErrNoRows) {
+		effective.UploadPartSizeBytes = minInt64(effective.UploadPartSizeBytes, MaxBrowserUploadPartSizeBytes)
 		return effective, nil
 	}
 	if err != nil {
