@@ -61,10 +61,16 @@ type TelegramQRLoginResult struct {
 }
 
 type TelegramQRLoginAttempt struct {
-	Token   TelegramQRLoginToken
-	Tokens  <-chan TelegramQRLoginToken
-	Results <-chan TelegramQRLoginResult
-	Cancel  func()
+	Token     TelegramQRLoginToken
+	Tokens    <-chan TelegramQRLoginToken
+	Results   <-chan TelegramQRLoginResult
+	Passwords chan<- TelegramQRLoginPasswordAttempt
+	Cancel    func()
+}
+
+type TelegramQRLoginPasswordAttempt struct {
+	Password string
+	Result   chan TelegramQRLoginResult
 }
 
 type TelegramUploadResult struct {

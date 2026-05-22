@@ -12,6 +12,8 @@ type qrLoginSession struct {
 	id        string
 	token     TelegramQRLoginToken
 	results   <-chan TelegramQRLoginResult
+	passwords chan<- TelegramQRLoginPasswordAttempt
+	mfaNeeded bool
 	cancel    func()
 	expiresAt time.Time
 }
@@ -34,6 +36,7 @@ func (s *qrLoginSessions) add(id string, attempt TelegramQRLoginAttempt) {
 		id:        id,
 		token:     attempt.Token,
 		results:   attempt.Results,
+		passwords: attempt.Passwords,
 		cancel:    attempt.Cancel,
 		expiresAt: attempt.Token.ExpiresAt,
 	}
@@ -52,6 +55,44 @@ func (s *qrLoginSessions) add(id string, attempt TelegramQRLoginAttempt) {
 			s.mu.Unlock()
 		}
 	}()
+}
+
+func (s *qrLoginSessions) markMFARequired(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	session, ok := s.sessions[id]
+	if !ok {
+		return ErrQRLoginNotFound
+	}
+	session.mfaNeeded = true
+	return nil
+}
+
+func (s *qrLoginSessions) submitPassword(id string, password string) (TelegramQRLoginResult, error) {
+	s.mu.Lock()
+	session, ok := s.sessions[id]
+	s.mu.Unlock()
+	if !ok {
+		return TelegramQRLoginResult{}, ErrQRLoginNotFound
+	}
+	if !session.mfaNeeded {
+		return TelegramQRLoginResult{}, errors.New("qr login mfa not required")
+	}
+	if session.passwords == nil {
+		return TelegramQRLoginResult{}, errors.New("qr login password channel unavailable")
+	}
+
+	response := make(chan TelegramQRLoginResult, 1)
+	session.passwords <- TelegramQRLoginPasswordAttempt{
+		Password: password,
+		Result:   response,
+	}
+	result, ok := <-response
+	if !ok {
+		return TelegramQRLoginResult{}, errors.New("qr login password response closed")
+	}
+	return result, nil
 }
 
 func (s *qrLoginSessions) get(id string) (*qrLoginSession, error) {

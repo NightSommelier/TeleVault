@@ -555,12 +555,12 @@
           <button id="startQrBtn" class="primary">Start QR</button>
         </div>
         <div class="panel-body stack">
-          <div class="field-row">
+          <div id="loginPhoneRow" class="field-row">
             <div class="field">
               <label for="loginPhoneInput">Phone</label>
               <input id="loginPhoneInput" type="text" autocomplete="tel" placeholder="+380...">
             </div>
-            <div class="field">
+            <div id="loginCodeField" class="field hidden">
               <label for="loginCodeInput">Code</label>
               <input id="loginCodeInput" type="text" inputmode="numeric" autocomplete="one-time-code" placeholder="12345">
             </div>
@@ -571,7 +571,7 @@
           </div>
           <div class="actions">
             <button id="sendCodeBtn">Send code</button>
-            <button id="loginWithCodeBtn" class="primary">Sign in with code</button>
+            <button id="loginWithCodeBtn" class="primary hidden">Sign in</button>
           </div>
           <img id="qrImage" class="qr hidden" alt="Telegram login QR code">
           <div id="loginStatus" class="status">Not signed in.</div>
@@ -950,6 +950,7 @@
       user: null,
       qrLoginId: null,
       qrTimer: null,
+      loginMFAContext: '',
       uploadTimer: null,
       currentFolderId: '',
       folderStack: [],
@@ -985,6 +986,8 @@
       startQrBtn: document.getElementById('startQrBtn'),
       sendCodeBtn: document.getElementById('sendCodeBtn'),
       loginWithCodeBtn: document.getElementById('loginWithCodeBtn'),
+      loginPhoneRow: document.getElementById('loginPhoneRow'),
+      loginCodeField: document.getElementById('loginCodeField'),
       loginPhoneInput: document.getElementById('loginPhoneInput'),
       loginCodeInput: document.getElementById('loginCodeInput'),
       loginPasswordField: document.getElementById('loginPasswordField'),
@@ -1159,8 +1162,23 @@
       el.appView.classList.add('hidden');
       el.userbar.classList.add('hidden');
       el.adminBtn.classList.add('hidden');
+      resetLoginForm();
       el.loginStatus.textContent = message || 'Not signed in.';
       updateTabSafetyIndicator();
+    }
+
+    function resetLoginForm() {
+      clearInterval(state.qrTimer);
+      state.qrLoginId = null;
+      state.loginMFAContext = '';
+      el.loginStatus.classList.remove('error');
+      el.qrImage.classList.add('hidden');
+      el.qrImage.src = '';
+      el.loginCodeField.classList.add('hidden');
+      el.loginPasswordField.classList.add('hidden');
+      el.loginWithCodeBtn.classList.add('hidden');
+      el.loginCodeInput.value = '';
+      el.loginPasswordInput.value = '';
     }
 
     async function loadMe() {
@@ -1189,10 +1207,15 @@
 
     async function startQR() {
       clearInterval(state.qrTimer);
+      state.qrLoginId = null;
+      state.loginMFAContext = '';
+      el.loginCodeField.classList.add('hidden');
+      el.loginPasswordField.classList.add('hidden');
+      el.loginWithCodeBtn.classList.add('hidden');
+      el.loginPasswordInput.value = '';
       el.startQrBtn.disabled = true;
       el.loginStatus.classList.remove('error');
       el.loginStatus.textContent = 'Starting...';
-      showLoginMFA(false);
       try {
         const data = await api('/auth/telegram/qr/start', { method: 'POST' });
         updateQR(data.qr_login);
@@ -1206,6 +1229,12 @@
     }
 
     async function sendTelegramCode() {
+      clearInterval(state.qrTimer);
+      state.qrLoginId = null;
+      el.qrImage.classList.add('hidden');
+      state.loginMFAContext = '';
+      el.loginPasswordField.classList.add('hidden');
+      el.loginPasswordInput.value = '';
       const phone = String(el.loginPhoneInput.value || '').trim();
       if (!phone) {
         el.loginStatus.classList.add('error');
@@ -1220,7 +1249,11 @@
           method: 'POST',
           body: JSON.stringify({ phone }),
         });
+        state.loginMFAContext = 'phone';
+        el.loginCodeField.classList.remove('hidden');
+        el.loginWithCodeBtn.classList.remove('hidden');
         el.loginStatus.textContent = 'Code sent. Enter the code and sign in.';
+        el.loginCodeInput.focus();
       } catch (err) {
         el.loginStatus.classList.add('error');
         el.loginStatus.textContent = err.message;
@@ -1242,8 +1275,21 @@
       el.loginStatus.classList.remove('error');
       el.loginStatus.textContent = 'Signing in...';
       try {
+        if (state.qrLoginId && state.loginMFAContext === 'qr') {
+          const qrPayload = { qr_login_id: state.qrLoginId, password };
+          const data = await api('/auth/telegram/qr/complete', {
+            method: 'POST',
+            body: JSON.stringify(qrPayload),
+          });
+          clearInterval(state.qrTimer);
+          state.qrLoginId = null;
+          el.qrImage.classList.add('hidden');
+          showApp(data.user);
+          return;
+        }
+
         const payload = { phone, code };
-        if (!el.loginPasswordField.classList.contains('hidden') || password) {
+        if (password) {
           payload.password = password;
         }
         const data = await api('/auth/telegram/login', {
@@ -1256,13 +1302,14 @@
         showApp(data.user);
       } catch (err) {
         if (err && err.message === 'telegram_mfa_required') {
-          showLoginMFA(true);
+          state.loginMFAContext = state.qrLoginId ? 'qr' : 'phone';
+          showLoginMFA(true, state.loginMFAContext);
           el.loginStatus.textContent = 'Telegram two-step password required.';
           el.loginPasswordInput.focus();
         } else {
           el.loginStatus.classList.add('error');
           if (err && err.message === 'telegram_mfa_invalid') {
-            showLoginMFA(true);
+            showLoginMFA(true, state.loginMFAContext || (state.qrLoginId ? 'qr' : 'phone'));
             el.loginPasswordInput.value = '';
             el.loginPasswordInput.focus();
           }
@@ -1273,8 +1320,12 @@
       }
     }
 
-    function showLoginMFA(focus) {
+    function showLoginMFA(focus, context) {
+      if (context === 'qr') {
+        el.loginCodeField.classList.add('hidden');
+      }
       el.loginPasswordField.classList.remove('hidden');
+      el.loginWithCodeBtn.classList.remove('hidden');
       if (focus) {
         el.loginPasswordInput.focus();
       }
@@ -1304,6 +1355,13 @@
         el.qrImage.classList.add('hidden');
         showApp(data.user);
       } catch (err) {
+        if (err && err.message === 'telegram_mfa_required') {
+          clearInterval(state.qrTimer);
+          state.loginMFAContext = 'qr';
+          showLoginMFA(true, 'qr');
+          el.loginStatus.textContent = 'Telegram two-step password required.';
+          return;
+        }
         clearInterval(state.qrTimer);
         el.loginStatus.classList.add('error');
         el.loginStatus.textContent = err.message;

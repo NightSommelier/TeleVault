@@ -18,6 +18,7 @@ import (
 	"github.com/gotd/td/telegram/downloader"
 	"github.com/gotd/td/telegram/uploader"
 	"github.com/gotd/td/tg"
+	"github.com/gotd/td/tgerr"
 
 	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/auth"
 )
@@ -161,13 +162,16 @@ func (c *Client) StartQRLogin(ctx context.Context) (auth.TelegramQRLoginAttempt,
 	firstToken := make(chan auth.TelegramQRLoginToken, 1)
 	tokenUpdates := make(chan auth.TelegramQRLoginToken, 4)
 	results := make(chan auth.TelegramQRLoginResult, 1)
+	passwords := make(chan auth.TelegramQRLoginPasswordAttempt, 1)
 	startErr := make(chan error, 1)
 
 	go func() {
 		defer close(tokenUpdates)
 		defer close(results)
+		defer close(passwords)
 
 		err := client.Run(runCtx, func(ctx context.Context) error {
+			userAuth := gotdauth.NewClient(client.API(), rand.Reader, c.appID, c.appHash)
 			authorization, err := client.QR().Auth(ctx, loggedIn, func(ctx context.Context, token qrlogin.Token) error {
 				converted := auth.TelegramQRLoginToken{
 					URL:       token.URL(),
@@ -184,6 +188,56 @@ func (c *Client) StartQRLogin(ctx context.Context) (auth.TelegramQRLoginAttempt,
 				return nil
 			})
 			if err != nil {
+				if errors.Is(err, gotdauth.ErrPasswordAuthNeeded) || tgerr.Is(err, "SESSION_PASSWORD_NEEDED") {
+					select {
+					case results <- auth.TelegramQRLoginResult{Err: auth.ErrTelegramMFARequired}:
+					case <-ctx.Done():
+						return ctx.Err()
+					}
+					for {
+						select {
+						case <-ctx.Done():
+							return ctx.Err()
+						case attempt, ok := <-passwords:
+							if !ok {
+								return errors.New("qr password channel closed")
+							}
+							password := strings.TrimSpace(attempt.Password)
+							if password == "" {
+								attempt.Result <- auth.TelegramQRLoginResult{Err: auth.ErrTelegramMFARequired}
+								continue
+							}
+							authorization, err = userAuth.Password(ctx, password)
+							if errors.Is(err, gotdauth.ErrPasswordInvalid) || tg.IsPasswordHashInvalid(err) {
+								attempt.Result <- auth.TelegramQRLoginResult{Err: auth.ErrTelegramMFAInvalid}
+								continue
+							}
+							if err != nil {
+								attempt.Result <- auth.TelegramQRLoginResult{Err: err}
+								return err
+							}
+							user, ok := authorization.User.(*tg.User)
+							if !ok {
+								return fmt.Errorf("unexpected qr auth user %T", authorization.User)
+							}
+							sessionBytes, err := storage.Bytes(nil)
+							if err != nil {
+								attempt.Result <- auth.TelegramQRLoginResult{Err: err}
+								return err
+							}
+							success := auth.TelegramQRLoginResult{
+								Session: base64.StdEncoding.EncodeToString(sessionBytes),
+								Profile: auth.TelegramProfile{
+									TelegramID:  user.ID,
+									Username:    user.Username,
+									DisplayName: displayName(user.FirstName, user.LastName),
+								},
+							}
+							attempt.Result <- success
+							return nil
+						}
+					}
+				}
 				return err
 			}
 
@@ -227,10 +281,11 @@ func (c *Client) StartQRLogin(ctx context.Context) (auth.TelegramQRLoginAttempt,
 		return auth.TelegramQRLoginAttempt{}, err
 	case token := <-firstToken:
 		return auth.TelegramQRLoginAttempt{
-			Token:   token,
-			Tokens:  tokenUpdates,
-			Results: results,
-			Cancel:  cancel,
+			Token:     token,
+			Tokens:    tokenUpdates,
+			Results:   results,
+			Passwords: passwords,
+			Cancel:    cancel,
 		}, nil
 	}
 }

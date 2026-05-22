@@ -94,6 +94,7 @@ func (h *Handler) CompleteTelegramQRLogin(w http.ResponseWriter, r *http.Request
 		return
 	}
 	id := strings.TrimSpace(request.QRLoginID)
+	request.Password = strings.TrimSpace(request.Password)
 	if id == "" {
 		writeError(w, http.StatusBadRequest, "qr_login_id_required")
 		return
@@ -109,19 +110,62 @@ func (h *Handler) CompleteTelegramQRLogin(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	if request.Password != "" {
+		result, err := h.qrLogins.submitPassword(id, request.Password)
+		if errors.Is(err, ErrQRLoginNotFound) {
+			writeError(w, http.StatusNotFound, "qr_login_not_found")
+			return
+		}
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "telegram_qr_password_not_expected")
+			return
+		}
+		if result.Err != nil {
+			if errors.Is(result.Err, ErrTelegramMFARequired) {
+				writeJSON(w, http.StatusUnauthorized, map[string]any{
+					"error":        "telegram_mfa_required",
+					"mfa_required": true,
+				})
+				return
+			}
+			if errors.Is(result.Err, ErrTelegramMFAInvalid) {
+				writeError(w, http.StatusUnauthorized, "telegram_mfa_invalid")
+				return
+			}
+			h.qrLogins.remove(id)
+			h.logger.Warn("telegram qr login password failed", "error", result.Err)
+			h.store.RecordAuditEvent(r.Context(), "", AuditAuthLoginFailure, r)
+			writeError(w, http.StatusUnauthorized, "telegram_qr_login_failed")
+			return
+		}
+		h.qrLogins.remove(id)
+		h.completeTelegramLogin(w, r, result.Session, result.Profile)
+		return
+	}
+
 	select {
 	case result, ok := <-session.results:
-		h.qrLogins.remove(id)
 		if !ok {
+			h.qrLogins.remove(id)
 			writeError(w, http.StatusUnauthorized, "telegram_qr_login_failed")
 			return
 		}
 		if result.Err != nil {
+			if errors.Is(result.Err, ErrTelegramMFARequired) {
+				_ = h.qrLogins.markMFARequired(id)
+				writeJSON(w, http.StatusUnauthorized, map[string]any{
+					"error":        "telegram_mfa_required",
+					"mfa_required": true,
+				})
+				return
+			}
+			h.qrLogins.remove(id)
 			h.logger.Warn("telegram qr login failed", "error", result.Err)
 			h.store.RecordAuditEvent(r.Context(), "", AuditAuthLoginFailure, r)
 			writeError(w, http.StatusUnauthorized, "telegram_qr_login_failed")
 			return
 		}
+		h.qrLogins.remove(id)
 		h.completeTelegramLogin(w, r, result.Session, result.Profile)
 	default:
 		writeJSON(w, http.StatusAccepted, map[string]any{
@@ -275,6 +319,7 @@ type telegramLoginRequest struct {
 
 type telegramQRCompleteRequest struct {
 	QRLoginID string `json:"qr_login_id"`
+	Password  string `json:"password"`
 }
 
 func (h *Handler) completeTelegramLogin(w http.ResponseWriter, r *http.Request, telegramSession string, profile TelegramProfile) {
