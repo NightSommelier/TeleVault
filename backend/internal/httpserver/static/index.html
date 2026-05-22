@@ -1156,6 +1156,8 @@
         invalid_download_limit_mode: 'Download limit mode must be hard or soft.',
         telegram_mfa_required: 'Telegram two-step password required.',
         telegram_mfa_invalid: 'Incorrect Telegram two-step password.',
+        telegram_code_invalid: 'Incorrect Telegram login code.',
+        telegram_code_expired: 'Telegram login code expired. Send a new code.',
       };
       return mapped[key] || key;
     }
@@ -1297,19 +1299,18 @@
     }
 
     async function loginWithCode() {
-      const phone = String(el.loginPhoneInput.value || '').trim();
-      const code = String(el.loginCodeInput.value || '').trim();
       const password = String(el.loginPasswordInput.value || '');
-      if (!phone || !code) {
-        el.loginStatus.classList.add('error');
-        el.loginStatus.textContent = 'Phone and code are required.';
-        return;
-      }
       el.loginWithCodeBtn.disabled = true;
       el.loginStatus.classList.remove('error');
       el.loginStatus.textContent = 'Signing in...';
       try {
         if (state.qrLoginId && state.loginMFAContext === 'qr') {
+          if (!password) {
+            el.loginStatus.classList.add('error');
+            el.loginStatus.textContent = 'Telegram two-step password required.';
+            el.loginPasswordInput.focus();
+            return;
+          }
           const qrPayload = { qr_login_id: state.qrLoginId, password };
           const data = await api('/auth/telegram/qr/complete', {
             method: 'POST',
@@ -1322,6 +1323,13 @@
           return;
         }
 
+        const phone = String(el.loginPhoneInput.value || '').trim();
+        const code = String(el.loginCodeInput.value || '').trim();
+        if (!phone || !code) {
+          el.loginStatus.classList.add('error');
+          el.loginStatus.textContent = 'Phone and code are required.';
+          return;
+        }
         const payload = { phone, code };
         if (password) {
           payload.password = password;
@@ -1393,6 +1401,7 @@
           clearInterval(state.qrTimer);
           state.loginMFAContext = 'qr';
           showLoginMFA(true, 'qr');
+          el.qrImage.classList.add('hidden');
           el.loginStatus.textContent = 'Telegram two-step password required.';
           return;
         }

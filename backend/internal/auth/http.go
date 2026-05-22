@@ -293,6 +293,14 @@ func (h *Handler) LoginWithTelegram(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusUnauthorized, "telegram_mfa_invalid")
 			return
 		}
+		if errors.Is(err, ErrTelegramCodeInvalid) {
+			writeError(w, http.StatusUnauthorized, "telegram_code_invalid")
+			return
+		}
+		if errors.Is(err, ErrTelegramCodeExpired) {
+			writeError(w, http.StatusUnauthorized, "telegram_code_expired")
+			return
+		}
 		h.logger.Warn("telegram login failed", "error", err)
 		h.store.RecordAuditEvent(r.Context(), "", AuditAuthLoginFailure, r)
 		writeError(w, http.StatusUnauthorized, "telegram_login_failed")

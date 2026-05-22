@@ -19,6 +19,8 @@ const telegramChallengeTTL = 10 * time.Minute
 var ErrInvalidChallenge = errors.New("invalid auth challenge")
 var ErrTelegramMFARequired = errors.New("telegram mfa required")
 var ErrTelegramMFAInvalid = errors.New("telegram mfa invalid")
+var ErrTelegramCodeInvalid = errors.New("telegram code invalid")
+var ErrTelegramCodeExpired = errors.New("telegram code expired")
 
 type TelegramProfile struct {
 	TelegramID  int64

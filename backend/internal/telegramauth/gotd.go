@@ -23,6 +23,17 @@ import (
 	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/auth"
 )
 
+func mapTelegramSignInError(err error) error {
+	switch {
+	case tgerr.Is(err, "PHONE_CODE_INVALID"), tgerr.Is(err, "PHONE_CODE_EMPTY"):
+		return auth.ErrTelegramCodeInvalid
+	case tgerr.Is(err, "PHONE_CODE_EXPIRED"):
+		return auth.ErrTelegramCodeExpired
+	default:
+		return err
+	}
+}
+
 type Client struct {
 	appID   int
 	appHash string
@@ -119,7 +130,7 @@ func (c *Client) SignIn(ctx context.Context, request auth.TelegramLoginRequest) 
 			}
 		}
 		if err != nil {
-			return err
+			return mapTelegramSignInError(err)
 		}
 
 		authz := authorization
