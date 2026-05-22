@@ -565,7 +565,7 @@
               <input id="loginCodeInput" type="text" inputmode="numeric" autocomplete="one-time-code" placeholder="12345">
             </div>
           </div>
-          <div class="field">
+          <div id="loginPasswordField" class="field hidden">
             <label for="loginPasswordInput">2FA password (if required)</label>
             <input id="loginPasswordInput" type="password" autocomplete="current-password" placeholder="Telegram two-step password">
           </div>
@@ -987,6 +987,7 @@
       loginWithCodeBtn: document.getElementById('loginWithCodeBtn'),
       loginPhoneInput: document.getElementById('loginPhoneInput'),
       loginCodeInput: document.getElementById('loginCodeInput'),
+      loginPasswordField: document.getElementById('loginPasswordField'),
       loginPasswordInput: document.getElementById('loginPasswordInput'),
       qrImage: document.getElementById('qrImage'),
       loginStatus: document.getElementById('loginStatus'),
@@ -1191,6 +1192,7 @@
       el.startQrBtn.disabled = true;
       el.loginStatus.classList.remove('error');
       el.loginStatus.textContent = 'Starting...';
+      showLoginMFA(false);
       try {
         const data = await api('/auth/telegram/qr/start', { method: 'POST' });
         updateQR(data.qr_login);
@@ -1240,9 +1242,13 @@
       el.loginStatus.classList.remove('error');
       el.loginStatus.textContent = 'Signing in...';
       try {
+        const payload = { phone, code };
+        if (!el.loginPasswordField.classList.contains('hidden') || password) {
+          payload.password = password;
+        }
         const data = await api('/auth/telegram/login', {
           method: 'POST',
-          body: JSON.stringify({ phone, code, password }),
+          body: JSON.stringify(payload),
         });
         clearInterval(state.qrTimer);
         state.qrLoginId = null;
@@ -1250,14 +1256,27 @@
         showApp(data.user);
       } catch (err) {
         if (err && err.message === 'telegram_mfa_required') {
+          showLoginMFA(true);
           el.loginStatus.textContent = 'Telegram two-step password required.';
           el.loginPasswordInput.focus();
         } else {
           el.loginStatus.classList.add('error');
+          if (err && err.message === 'telegram_mfa_invalid') {
+            showLoginMFA(true);
+            el.loginPasswordInput.value = '';
+            el.loginPasswordInput.focus();
+          }
           el.loginStatus.textContent = err.message;
         }
       } finally {
         el.loginWithCodeBtn.disabled = false;
+      }
+    }
+
+    function showLoginMFA(focus) {
+      el.loginPasswordField.classList.remove('hidden');
+      if (focus) {
+        el.loginPasswordInput.focus();
       }
     }
 
