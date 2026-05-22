@@ -1179,6 +1179,40 @@ func TestEffectiveUploadSettingsUseAccountLimit(t *testing.T) {
 	}
 }
 
+func TestEffectiveUploadSettingsClampPartSizeForBrowser(t *testing.T) {
+	database := openIntegrationDB(t)
+	sessionStore := auth.NewSessionStore(database)
+	settingsStore := adminsettings.NewStore(database, config.Config{
+		UploadPartSizeBytes:        384 * 1024 * 1024,
+		TelegramDocumentLimitBytes: 2 * 1024 * 1024 * 1024,
+		UploadSafetyMarginBytes:    64 * 1024 * 1024,
+	})
+	ctx := context.Background()
+
+	admin, cleanupAdmin := createUserThroughLogin(t, database, sessionStore, 951_000_000_000+time.Now().UnixNano()%1_000_000_000)
+	defer cleanupAdmin()
+
+	if _, err := settingsStore.UpdateUploadSettings(ctx, adminsettings.UploadSettings{
+		UploadPartSizeBytes:          384 * 1024 * 1024,
+		TelegramDocumentLimitBytes:   2 * 1024 * 1024 * 1024,
+		UploadSafetyMarginBytes:      64 * 1024 * 1024,
+		MaxParallelUploads:           1,
+		TargetUploadBytesPerSecond:   0,
+		CooldownBetweenPartsMillisec: 0,
+		PublicLinkPasswordMinLength:  8,
+	}, admin.ID); err != nil {
+		t.Fatalf("UpdateUploadSettings() error = %v", err)
+	}
+
+	effective, err := settingsStore.EffectiveUploadSettings(ctx, admin.ID)
+	if err != nil {
+		t.Fatalf("EffectiveUploadSettings() error = %v", err)
+	}
+	if effective.UploadPartSizeBytes != adminsettings.MaxBrowserUploadPartSizeBytes {
+		t.Fatalf("UploadPartSizeBytes = %d, want browser clamp %d", effective.UploadPartSizeBytes, adminsettings.MaxBrowserUploadPartSizeBytes)
+	}
+}
+
 func TestAdminUsersPromoteAndDemoteByTelegramID(t *testing.T) {
 	database := openIntegrationDB(t)
 	sessionStore := auth.NewSessionStore(database)

@@ -2164,17 +2164,20 @@
           try {
             await uploadQueueItem(next);
           } catch (err) {
+            const uploadError = normalizeUploadError(err);
             debugUpload('upload:failed', {
               file: next.file.name,
               size: next.file.size,
-              message: err.message || 'Upload failed',
+              name: uploadError.name,
+              message: uploadError.message,
+              stack: uploadError.stack || '',
             });
             updateQueueItem(next.id, {
               status: 'failed',
-              message: err.message || 'Upload failed',
-              error: err.message || 'Upload failed',
+              message: uploadError.message,
+              error: uploadError.message,
             });
-            setUploadStatus(`Failed: ${next.file.name} (${err.message || 'upload error'})`, true);
+            setUploadStatus(`Failed: ${next.file.name} (${uploadError.message})`, true);
           }
         }
       } finally {
@@ -2388,16 +2391,32 @@
         });
         const abortController = new AbortController();
         updateQueueItem(item.id, { abortController });
-        const response = await fetch(`/uploads/${upload.id}/parts/${part}`, {
-          method: 'POST',
-          credentials: 'same-origin',
-          signal: abortController.signal,
-          headers: {
-            'Content-Type': 'application/octet-stream',
-            'X-CSRF-Token': csrfToken(),
-          },
-          body: item.file.slice(start, end),
-        });
+        let response;
+        try {
+          response = await fetch(`/uploads/${upload.id}/parts/${part}`, {
+            method: 'POST',
+            credentials: 'same-origin',
+            signal: abortController.signal,
+            headers: {
+              'Content-Type': 'application/octet-stream',
+              'X-CSRF-Token': csrfToken(),
+            },
+            body: item.file.slice(start, end),
+          });
+        } catch (err) {
+          updateQueueItem(item.id, { abortController: null });
+          const networkError = normalizeUploadError(err);
+          debugUpload('part:network-error', {
+            upload_id: upload.id,
+            part,
+            count,
+            size: end - start,
+            name: networkError.name,
+            message: networkError.message,
+            stack: networkError.stack || '',
+          });
+          throw networkError;
+        }
         updateQueueItem(item.id, { abortController: null });
         debugUpload('part:response', {
           upload_id: upload.id,
@@ -2758,13 +2777,45 @@
       let offset = 0;
       while (offset < file.size) {
         const end = Math.min(offset + chunkSize, file.size);
-        const chunk = new Uint8Array(await file.slice(offset, end).arrayBuffer());
+        let chunkBuffer;
+        try {
+          chunkBuffer = await file.slice(offset, end).arrayBuffer();
+        } catch (err) {
+          debugUpload('upload:file-read-error', {
+            file: file && file.name ? file.name : '',
+            offset,
+            end,
+            name: err && err.name ? err.name : '',
+            message: err && err.message ? err.message : '',
+          });
+          const wrapped = new Error('file_read_failed');
+          wrapped.cause = err;
+          throw wrapped;
+        }
+        const chunk = new Uint8Array(chunkBuffer);
         sha.update(chunk);
         offset = end;
         if (onProgress) onProgress({ loaded: offset, total: file.size });
         await yieldToBrowser();
       }
       return sha.hex();
+    }
+
+    function normalizeUploadError(err) {
+      if (!err) return new Error('upload_failed');
+      if (err.message === 'upload_canceled' || err.name === 'AbortError') {
+        return new Error('upload_canceled');
+      }
+      if (err.message === 'network_upload_failed' || err.message === 'file_read_failed') {
+        return err;
+      }
+      if (err instanceof TypeError) {
+        return new Error('network_upload_failed');
+      }
+      if (typeof err.message === 'string' && err.message.trim()) {
+        return err;
+      }
+      return new Error('upload_failed');
     }
 
     function yieldToBrowser() {

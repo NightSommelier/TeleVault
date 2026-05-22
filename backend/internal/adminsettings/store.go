@@ -11,6 +11,8 @@ import (
 
 var ErrInvalidSettings = errors.New("invalid admin settings")
 
+const MaxBrowserUploadPartSizeBytes int64 = 16 * 1024 * 1024
+
 type UploadSettings struct {
 	UploadPartSizeBytes          int64 `json:"upload_part_size_bytes"`
 	TelegramDocumentLimitBytes   int64 `json:"telegram_document_limit_bytes"`
@@ -114,6 +116,7 @@ func (s *Store) EffectiveUploadSettings(ctx context.Context, userID string) (Eff
 		Source:                       "global",
 	}
 	if userID == "" {
+		effective.UploadPartSizeBytes = minInt64(effective.UploadPartSizeBytes, MaxBrowserUploadPartSizeBytes)
 		return effective, nil
 	}
 
@@ -148,6 +151,7 @@ WHERE user_id = $1`,
 	effective.UploadSafetyMarginBytes = margin
 	effective.Source = source
 	effective.UploadPartSizeBytes = minInt64(settings.UploadPartSizeBytes, documentLimit-margin)
+	effective.UploadPartSizeBytes = minInt64(effective.UploadPartSizeBytes, MaxBrowserUploadPartSizeBytes)
 	if maxParallelUploads.Valid {
 		effective.MaxParallelUploads = int(maxParallelUploads.Int64)
 	}
