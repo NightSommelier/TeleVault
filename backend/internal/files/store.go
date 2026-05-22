@@ -743,7 +743,7 @@ WITH claimed AS (
 		OR (download_limit_mode = 'soft' AND download_count < max_downloads)
 	  )
 	RETURNING id, file_id, owner_id, permission, expires_at, revoked_at, max_downloads, download_count,
-	          CASE WHEN download_limit_mode = 'hard' THEN active_download_count + 1 ELSE active_download_count END AS active_download_count,
+	          active_download_count,
 	          download_limit_mode,
 	          (password_hash IS NOT NULL) AS password_required, password_kdf, password_salt, password_hash, password_argon_time, password_argon_memory_kib,
 	          password_argon_threads, created_at, updated_at

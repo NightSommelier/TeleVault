@@ -369,8 +369,15 @@ func TestFilesUploadsPersistenceOwnerIsolationAndCompletion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreatePublicLink(limited) error = %v", err)
 	}
-	if _, _, claimed, err := fileStore.ReservePublicLinkDownloadSlot(ctx, limitedTokenHash[:]); err != nil || !claimed {
-		t.Fatalf("ReservePublicLinkDownloadSlot(limited before count) claimed=%v error=%v", claimed, err)
+	if _, reservedLink, claimed, err := fileStore.ReservePublicLinkDownloadSlot(ctx, limitedTokenHash[:]); err != nil || !claimed {
+		t.Fatalf("ReservePublicLinkDownloadSlot(limited first active) claimed=%v error=%v", claimed, err)
+	} else if reservedLink.ActiveDownloadCount != 1 {
+		t.Fatalf("ReservePublicLinkDownloadSlot(limited first active) active_download_count=%d, want 1", reservedLink.ActiveDownloadCount)
+	}
+	if _, _, claimed, err := fileStore.ReservePublicLinkDownloadSlot(ctx, limitedTokenHash[:]); err != nil {
+		t.Fatalf("ReservePublicLinkDownloadSlot(limited second active) error = %v", err)
+	} else if claimed {
+		t.Fatal("ReservePublicLinkDownloadSlot(limited second active) claimed = true, want false")
 	}
 	if err := fileStore.FinishPublicLinkDownload(ctx, limitedLink.ID, true); err != nil {
 		t.Fatalf("FinishPublicLinkDownload(true) error = %v", err)
