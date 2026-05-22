@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/http/httptest"
 	"os"
 	"testing"
 	"time"
@@ -465,6 +466,73 @@ WHERE file_id = $1
 	}
 	if maxAvailable.Sub(minAvailable) < 15*time.Second {
 		t.Fatalf("deleted file cleanup delay = %s, want at least 15s", maxAvailable.Sub(minAvailable))
+	}
+}
+
+func TestFilesAuditEventPersistence(t *testing.T) {
+	database := openIntegrationDB(t)
+	sessionStore := auth.NewSessionStore(database)
+	fileStore := files.NewStore(database)
+	ctx := context.Background()
+
+	actor, cleanupActor := createUserThroughLogin(t, database, sessionStore, 950_000_000_000+time.Now().UnixNano()%1_000_000_000)
+	defer cleanupActor()
+	target, cleanupTarget := createUserThroughLogin(t, database, sessionStore, 951_000_000_000+time.Now().UnixNano()%1_000_000_000)
+	defer cleanupTarget()
+
+	request := httptest.NewRequest("POST", "/files/audit-test", nil)
+	request.RemoteAddr = "198.51.100.20:51234"
+	request.Header.Set("User-Agent", "integration-audit-test")
+
+	fileStore.RecordAuditEvent(ctx, actor.ID, files.AuditPublicLinkCreate, "public_link", target.ID, request)
+	fileStore.RecordAuditEvent(ctx, "", files.AuditPublicLinkDownload, "public_link", target.ID, request)
+
+	rows, err := database.QueryContext(ctx, `
+SELECT actor_user_id, action, resource_type, resource_id, ip_hash, user_agent
+FROM audit_events
+WHERE resource_type = 'public_link' AND resource_id = $1
+ORDER BY created_at DESC
+LIMIT 2`, target.ID)
+	if err != nil {
+		t.Fatalf("audit_events query error = %v", err)
+	}
+	defer rows.Close()
+
+	type auditRow struct {
+		actorID      sql.NullString
+		action       string
+		resourceType sql.NullString
+		resourceID   sql.NullString
+		ipHash       []byte
+		userAgent    sql.NullString
+	}
+	var got []auditRow
+	for rows.Next() {
+		var row auditRow
+		if err := rows.Scan(&row.actorID, &row.action, &row.resourceType, &row.resourceID, &row.ipHash, &row.userAgent); err != nil {
+			t.Fatalf("audit_events scan error = %v", err)
+		}
+		got = append(got, row)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("audit_events rows error = %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("audit_events rows = %d, want 2", len(got))
+	}
+
+	if got[0].action != files.AuditPublicLinkDownload || got[0].actorID.Valid {
+		t.Fatalf("latest audit row = %+v, want download with empty actor", got[0])
+	}
+	if !got[0].resourceType.Valid || got[0].resourceType.String != "public_link" || !got[0].resourceID.Valid || got[0].resourceID.String != target.ID {
+		t.Fatalf("latest resource columns = %+v, want public_link/%s", got[0], target.ID)
+	}
+	if len(got[0].ipHash) == 0 || !got[0].userAgent.Valid || got[0].userAgent.String != "integration-audit-test" {
+		t.Fatalf("latest audit request fields invalid: ip_hash=%d user_agent=%q", len(got[0].ipHash), got[0].userAgent.String)
+	}
+
+	if got[1].action != files.AuditPublicLinkCreate || !got[1].actorID.Valid || got[1].actorID.String != actor.ID {
+		t.Fatalf("previous audit row = %+v, want create with actor %s", got[1], actor.ID)
 	}
 }
 

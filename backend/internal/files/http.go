@@ -508,6 +508,7 @@ func (h *Handler) CreateShare(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"share": shareResponse(share),
 	})
+	h.store.RecordAuditEvent(r.Context(), user.ID, AuditFileShareCreate, auditResourceTypeShare, share.ID, r)
 }
 
 func (h *Handler) RevokeShare(w http.ResponseWriter, r *http.Request) {
@@ -534,6 +535,7 @@ func (h *Handler) RevokeShare(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.store.RecordAuditEvent(r.Context(), user.ID, AuditFileShareRevoke, auditResourceTypeShare, shareID, r)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -633,6 +635,7 @@ func (h *Handler) CreatePublicLink(w http.ResponseWriter, r *http.Request) {
 		"token":       token,
 		"url":         publicLinkURL(r, token),
 	})
+	h.store.RecordAuditEvent(r.Context(), user.ID, AuditPublicLinkCreate, auditResourceTypePubLink, link.ID, r)
 }
 
 func (h *Handler) RevokePublicLink(w http.ResponseWriter, r *http.Request) {
@@ -659,6 +662,7 @@ func (h *Handler) RevokePublicLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.store.RecordAuditEvent(r.Context(), user.ID, AuditPublicLinkRevoke, auditResourceTypePubLink, linkID, r)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -691,11 +695,14 @@ func (h *Handler) Download(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_ = h.streamDownload(w, r, file, parts, session, downloadStreamMeta{
+	completed := h.streamDownload(w, r, file, parts, session, downloadStreamMeta{
 		Source: "auth",
 		FileID: file.ID,
 		UserID: user.ID,
 	})
+	if completed && file.OwnerID != user.ID {
+		h.store.RecordAuditEvent(r.Context(), user.ID, AuditFileShareDownload, auditResourceTypeFile, file.ID, r)
+	}
 }
 
 func (h *Handler) PublicMetadata(w http.ResponseWriter, r *http.Request) {
@@ -796,6 +803,9 @@ func (h *Handler) PublicDownload(w http.ResponseWriter, r *http.Request) {
 		FileID:       file.ID,
 		PublicLinkID: link.ID,
 	})
+	if completed {
+		h.store.RecordAuditEvent(r.Context(), "", AuditPublicLinkDownload, auditResourceTypePubLink, link.ID, r)
+	}
 }
 
 type downloadStreamMeta struct {
