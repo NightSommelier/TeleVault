@@ -555,6 +555,24 @@
           <button id="startQrBtn" class="primary">Start QR</button>
         </div>
         <div class="panel-body stack">
+          <div class="field-row">
+            <div class="field">
+              <label for="loginPhoneInput">Phone</label>
+              <input id="loginPhoneInput" type="text" autocomplete="tel" placeholder="+380...">
+            </div>
+            <div class="field">
+              <label for="loginCodeInput">Code</label>
+              <input id="loginCodeInput" type="text" inputmode="numeric" autocomplete="one-time-code" placeholder="12345">
+            </div>
+          </div>
+          <div class="field">
+            <label for="loginPasswordInput">2FA password (if required)</label>
+            <input id="loginPasswordInput" type="password" autocomplete="current-password" placeholder="Telegram two-step password">
+          </div>
+          <div class="actions">
+            <button id="sendCodeBtn">Send code</button>
+            <button id="loginWithCodeBtn" class="primary">Sign in with code</button>
+          </div>
           <img id="qrImage" class="qr hidden" alt="Telegram login QR code">
           <div id="loginStatus" class="status">Not signed in.</div>
         </div>
@@ -965,6 +983,11 @@
       userName: document.getElementById('userName'),
       adminBtn: document.getElementById('adminBtn'),
       startQrBtn: document.getElementById('startQrBtn'),
+      sendCodeBtn: document.getElementById('sendCodeBtn'),
+      loginWithCodeBtn: document.getElementById('loginWithCodeBtn'),
+      loginPhoneInput: document.getElementById('loginPhoneInput'),
+      loginCodeInput: document.getElementById('loginCodeInput'),
+      loginPasswordInput: document.getElementById('loginPasswordInput'),
       qrImage: document.getElementById('qrImage'),
       loginStatus: document.getElementById('loginStatus'),
       logoutBtn: document.getElementById('logoutBtn'),
@@ -1093,6 +1116,8 @@
         telegram_id_required: 'Telegram ID is required.',
         invalid_max_downloads: 'Download limit must be a positive integer.',
         invalid_download_limit_mode: 'Download limit mode must be hard or soft.',
+        telegram_mfa_required: 'Telegram two-step password required.',
+        telegram_mfa_invalid: 'Incorrect Telegram two-step password.',
       };
       return mapped[key] || key;
     }
@@ -1175,6 +1200,64 @@
         el.loginStatus.textContent = err.message;
       } finally {
         el.startQrBtn.disabled = false;
+      }
+    }
+
+    async function sendTelegramCode() {
+      const phone = String(el.loginPhoneInput.value || '').trim();
+      if (!phone) {
+        el.loginStatus.classList.add('error');
+        el.loginStatus.textContent = 'Phone is required.';
+        return;
+      }
+      el.sendCodeBtn.disabled = true;
+      el.loginStatus.classList.remove('error');
+      el.loginStatus.textContent = 'Sending code...';
+      try {
+        await api('/auth/telegram/send-code', {
+          method: 'POST',
+          body: JSON.stringify({ phone }),
+        });
+        el.loginStatus.textContent = 'Code sent. Enter the code and sign in.';
+      } catch (err) {
+        el.loginStatus.classList.add('error');
+        el.loginStatus.textContent = err.message;
+      } finally {
+        el.sendCodeBtn.disabled = false;
+      }
+    }
+
+    async function loginWithCode() {
+      const phone = String(el.loginPhoneInput.value || '').trim();
+      const code = String(el.loginCodeInput.value || '').trim();
+      const password = String(el.loginPasswordInput.value || '');
+      if (!phone || !code) {
+        el.loginStatus.classList.add('error');
+        el.loginStatus.textContent = 'Phone and code are required.';
+        return;
+      }
+      el.loginWithCodeBtn.disabled = true;
+      el.loginStatus.classList.remove('error');
+      el.loginStatus.textContent = 'Signing in...';
+      try {
+        const data = await api('/auth/telegram/login', {
+          method: 'POST',
+          body: JSON.stringify({ phone, code, password }),
+        });
+        clearInterval(state.qrTimer);
+        state.qrLoginId = null;
+        el.qrImage.classList.add('hidden');
+        showApp(data.user);
+      } catch (err) {
+        if (err && err.message === 'telegram_mfa_required') {
+          el.loginStatus.textContent = 'Telegram two-step password required.';
+          el.loginPasswordInput.focus();
+        } else {
+          el.loginStatus.classList.add('error');
+          el.loginStatus.textContent = err.message;
+        }
+      } finally {
+        el.loginWithCodeBtn.disabled = false;
       }
     }
 
@@ -3297,6 +3380,17 @@
     }
 
     el.startQrBtn.addEventListener('click', startQR);
+    el.sendCodeBtn.addEventListener('click', sendTelegramCode);
+    el.loginWithCodeBtn.addEventListener('click', loginWithCode);
+    el.loginPhoneInput.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') sendTelegramCode();
+    });
+    el.loginCodeInput.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') loginWithCode();
+    });
+    el.loginPasswordInput.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') loginWithCode();
+    });
     el.logoutBtn.addEventListener('click', logout);
     el.adminBtn.addEventListener('click', openAdminPanel);
     el.refreshBtn.addEventListener('click', refreshFiles);

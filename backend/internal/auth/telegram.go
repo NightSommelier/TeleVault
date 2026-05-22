@@ -17,6 +17,8 @@ import (
 const telegramChallengeTTL = 10 * time.Minute
 
 var ErrInvalidChallenge = errors.New("invalid auth challenge")
+var ErrTelegramMFARequired = errors.New("telegram mfa required")
+var ErrTelegramMFAInvalid = errors.New("telegram mfa invalid")
 
 type TelegramProfile struct {
 	TelegramID  int64
@@ -29,6 +31,13 @@ type TelegramCodeChallenge struct {
 	Session       string
 }
 
+type TelegramLoginRequest struct {
+	Phone     string
+	Code      string
+	Password  string
+	Challenge TelegramCodeChallenge
+}
+
 type StoredAuthChallenge struct {
 	PhoneCodeHash          string
 	EncryptedClientSession []byte
@@ -36,7 +45,7 @@ type StoredAuthChallenge struct {
 
 type TelegramAuthClient interface {
 	SendCode(ctx context.Context, phone string) (TelegramCodeChallenge, error)
-	SignIn(ctx context.Context, phone string, code string, challenge TelegramCodeChallenge) (session string, profile TelegramProfile, err error)
+	SignIn(ctx context.Context, request TelegramLoginRequest) (session string, profile TelegramProfile, err error)
 	StartQRLogin(ctx context.Context) (TelegramQRLoginAttempt, error)
 }
 

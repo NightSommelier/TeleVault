@@ -195,6 +195,7 @@ func (h *Handler) LoginWithTelegram(w http.ResponseWriter, r *http.Request) {
 	}
 	request.Phone = strings.TrimSpace(request.Phone)
 	request.Code = strings.TrimSpace(request.Code)
+	request.Password = strings.TrimSpace(request.Password)
 	if request.Phone == "" || request.Code == "" {
 		writeError(w, http.StatusBadRequest, "phone_and_code_required")
 		return
@@ -230,8 +231,24 @@ func (h *Handler) LoginWithTelegram(w http.ResponseWriter, r *http.Request) {
 		Session:       clientSession,
 	}
 
-	telegramSession, profile, err := h.telegram.SignIn(r.Context(), request.Phone, request.Code, challenge)
+	telegramSession, profile, err := h.telegram.SignIn(r.Context(), TelegramLoginRequest{
+		Phone:     request.Phone,
+		Code:      request.Code,
+		Password:  request.Password,
+		Challenge: challenge,
+	})
 	if err != nil {
+		if errors.Is(err, ErrTelegramMFARequired) {
+			writeJSON(w, http.StatusUnauthorized, map[string]any{
+				"error":        "telegram_mfa_required",
+				"mfa_required": true,
+			})
+			return
+		}
+		if errors.Is(err, ErrTelegramMFAInvalid) {
+			writeError(w, http.StatusUnauthorized, "telegram_mfa_invalid")
+			return
+		}
 		h.logger.Warn("telegram login failed", "error", err)
 		h.store.RecordAuditEvent(r.Context(), "", AuditAuthLoginFailure, r)
 		writeError(w, http.StatusUnauthorized, "telegram_login_failed")
@@ -251,8 +268,9 @@ type telegramCodeRequest struct {
 }
 
 type telegramLoginRequest struct {
-	Phone string `json:"phone"`
-	Code  string `json:"code"`
+	Phone    string `json:"phone"`
+	Code     string `json:"code"`
+	Password string `json:"password"`
 }
 
 type telegramQRCompleteRequest struct {

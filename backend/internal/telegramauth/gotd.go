@@ -13,6 +13,7 @@ import (
 
 	"github.com/gotd/td/session"
 	"github.com/gotd/td/telegram"
+	gotdauth "github.com/gotd/td/telegram/auth"
 	"github.com/gotd/td/telegram/auth/qrlogin"
 	"github.com/gotd/td/telegram/downloader"
 	"github.com/gotd/td/telegram/uploader"
@@ -80,8 +81,8 @@ func (c *Client) SendCode(ctx context.Context, phone string) (auth.TelegramCodeC
 	}, nil
 }
 
-func (c *Client) SignIn(ctx context.Context, phone string, code string, challenge auth.TelegramCodeChallenge) (string, auth.TelegramProfile, error) {
-	sessionBytes, err := base64.StdEncoding.DecodeString(challenge.Session)
+func (c *Client) SignIn(ctx context.Context, request auth.TelegramLoginRequest) (string, auth.TelegramProfile, error) {
+	sessionBytes, err := base64.StdEncoding.DecodeString(request.Challenge.Session)
 	if err != nil {
 		return "", auth.TelegramProfile{}, err
 	}
@@ -101,20 +102,26 @@ func (c *Client) SignIn(ctx context.Context, phone string, code string, challeng
 
 	var profile auth.TelegramProfile
 	if err := client.Run(ctx, func(ctx context.Context) error {
-		authorization, err := client.API().AuthSignIn(ctx, &tg.AuthSignInRequest{
-			PhoneNumber:   phone,
-			PhoneCodeHash: challenge.PhoneCodeHash,
-			PhoneCode:     code,
-		})
+		userAuth := gotdauth.NewClient(client.API(), rand.Reader, c.appID, c.appHash)
+		authorization, err := userAuth.SignIn(ctx, request.Phone, request.Code, request.Challenge.PhoneCodeHash)
+		if errors.Is(err, gotdauth.ErrPasswordAuthNeeded) {
+			password := strings.TrimSpace(request.Password)
+			if password == "" {
+				return auth.ErrTelegramMFARequired
+			}
+			authorization, err = userAuth.Password(ctx, password)
+			if errors.Is(err, gotdauth.ErrPasswordInvalid) || tg.IsPasswordHashInvalid(err) {
+				return auth.ErrTelegramMFAInvalid
+			}
+			if err != nil {
+				return err
+			}
+		}
 		if err != nil {
 			return err
 		}
 
-		authz, ok := authorization.(*tg.AuthAuthorization)
-		if !ok {
-			return fmt.Errorf("unexpected auth.signIn response %T", authorization)
-		}
-
+		authz := authorization
 		user, ok := authz.User.(*tg.User)
 		if !ok {
 			return fmt.Errorf("unexpected auth.signIn user %T", authz.User)
