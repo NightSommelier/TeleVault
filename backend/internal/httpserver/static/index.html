@@ -1074,10 +1074,27 @@
           const body = await response.json();
           message = body.error || message;
         } catch (_) {}
-        throw new Error(message);
+        throw new Error(humanizeError(message));
       }
       if (response.status === 204) return null;
       return response.json();
+    }
+
+    function humanizeError(message) {
+      const key = String(message || '').trim();
+      if (!key) return 'Request failed.';
+      const mapped = {
+        share_list_failed: 'Failed to load shares.',
+        share_create_failed: 'Failed to create share.',
+        share_revoke_failed: 'Failed to revoke share.',
+        public_link_list_failed: 'Failed to load public links.',
+        public_link_create_failed: 'Failed to create public link.',
+        public_link_revoke_failed: 'Failed to revoke public link.',
+        telegram_id_required: 'Telegram ID is required.',
+        invalid_max_downloads: 'Download limit must be a positive integer.',
+        invalid_download_limit_mode: 'Download limit mode must be hard or soft.',
+      };
+      return mapped[key] || key;
     }
 
     function showApp(user) {
