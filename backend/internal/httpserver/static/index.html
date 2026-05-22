@@ -494,6 +494,36 @@
       width: min(420px, 100%);
       padding: 18px;
     }
+    .login-box .panel-head {
+      justify-content: center;
+      text-align: center;
+      flex-wrap: wrap;
+    }
+    .login-box .panel-body {
+      display: grid;
+      justify-items: center;
+      text-align: center;
+    }
+    .login-box .field {
+      width: min(340px, 100%);
+      text-align: left;
+    }
+    .login-box .field-row {
+      width: min(340px, 100%);
+      grid-template-columns: 1fr;
+      justify-items: stretch;
+    }
+    .login-box .actions {
+      width: min(340px, 100%);
+      justify-content: center;
+    }
+    .login-box .status {
+      text-align: center;
+    }
+    .login-box .qr {
+      display: block;
+      margin: 0 auto;
+    }
     .modal-backdrop {
       position: fixed;
       inset: 0;
@@ -1096,12 +1126,16 @@
         credentials: 'same-origin',
       });
       if (!response.ok) {
+        let code = '';
         let message = response.statusText;
         try {
           const body = await response.json();
-          message = body.error || message;
+          code = String(body.error || '').trim();
+          message = code || message;
         } catch (_) {}
-        throw new Error(humanizeError(message));
+        const err = new Error(humanizeError(message));
+        err.code = code || String(message || '').trim();
+        throw err;
       }
       if (response.status === 204) return null;
       return response.json();
@@ -1301,14 +1335,14 @@
         el.qrImage.classList.add('hidden');
         showApp(data.user);
       } catch (err) {
-        if (err && err.message === 'telegram_mfa_required') {
+        if (err && err.code === 'telegram_mfa_required') {
           state.loginMFAContext = state.qrLoginId ? 'qr' : 'phone';
           showLoginMFA(true, state.loginMFAContext);
           el.loginStatus.textContent = 'Telegram two-step password required.';
           el.loginPasswordInput.focus();
         } else {
           el.loginStatus.classList.add('error');
-          if (err && err.message === 'telegram_mfa_invalid') {
+          if (err && err.code === 'telegram_mfa_invalid') {
             showLoginMFA(true, state.loginMFAContext || (state.qrLoginId ? 'qr' : 'phone'));
             el.loginPasswordInput.value = '';
             el.loginPasswordInput.focus();
@@ -1355,7 +1389,7 @@
         el.qrImage.classList.add('hidden');
         showApp(data.user);
       } catch (err) {
-        if (err && err.message === 'telegram_mfa_required') {
+        if (err && err.code === 'telegram_mfa_required') {
           clearInterval(state.qrTimer);
           state.loginMFAContext = 'qr';
           showLoginMFA(true, 'qr');
