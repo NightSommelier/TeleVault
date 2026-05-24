@@ -2552,6 +2552,7 @@
           safeToClose: false,
           cancelRequested: false,
           abortController: null,
+          createIdempotencyKey: newUploadIdempotencyKey(),
         });
         state.nextUploadQueueID += 1;
       }
@@ -2631,12 +2632,14 @@
           mime_type: item.file.type || 'application/octet-stream',
           plaintext_size: item.file.size,
           checksum,
+          idempotency_key: item.createIdempotencyKey || newUploadIdempotencyKey(),
         }),
       });
       debugUpload('upload:created', {
         upload_id: created.upload.id,
         part_size: created.upload.part_size,
         part_count: created.upload.part_count,
+        next_part_number: created.upload.next_part_number,
         plan: (created.upload.part_plan || []).map((part) => `${part.part_number}:${formatBytes(part.size || (part.end - part.start))}`).join(', '),
       });
       updateQueueItem(item.id, {
@@ -2784,7 +2787,11 @@
     async function uploadParts(upload, item) {
       const plan = uploadPartPlan(upload, item.file.size);
       const count = plan.length;
+      const startPartNumber = uploadStartPartNumber(upload, count);
       for (const partInfo of plan) {
+        if (partInfo.partNumber < startPartNumber) {
+          continue;
+        }
         if (item.cancelRequested) throw new Error('upload_canceled');
         const part = partInfo.partNumber;
         const start = partInfo.start;
@@ -2904,6 +2911,16 @@
             total: lastProgress.total || end - start,
             elapsed_ms: Date.now() - startedAt,
           });
+          const recovered = await recoverUploadPartProgress(upload.id, part);
+          if (recovered.accepted) {
+            debugUpload('part:recovered-after-transport-failure', {
+              upload_id: upload.id,
+              part,
+              next_part_number: recovered.nextPartNumber || null,
+              upload_status: recovered.status || null,
+            });
+            continue;
+          }
           throw networkError;
         }
         updateQueueItem(item.id, { abortController: null });
@@ -2917,6 +2934,18 @@
           const body = response.body || {};
           const code = body.error || 'upload_part_http_failed';
           const message = uploadHTTPErrorMessage(response.status, response.statusText, code);
+          if (response.status === 409 && code === 'upload_part_out_of_order') {
+            const recovered = await recoverUploadPartProgress(upload.id, part);
+            if (recovered.accepted) {
+              debugUpload('part:recovered-after-out-of-order', {
+                upload_id: upload.id,
+                part,
+                next_part_number: recovered.nextPartNumber || null,
+                upload_status: recovered.status || null,
+              });
+              continue;
+            }
+          }
           const err = new Error(message);
           err.code = code;
           err.status = response.status;
@@ -2946,6 +2975,44 @@
           throw err;
         }
       }
+    }
+
+    function uploadStartPartNumber(upload, count) {
+      const nextPartNumber = Number(upload && upload.next_part_number);
+      if (!Number.isInteger(nextPartNumber) || nextPartNumber < 1) return 1;
+      if (nextPartNumber > count + 1) return count + 1;
+      return nextPartNumber;
+    }
+
+    async function recoverUploadPartProgress(uploadID, partNumber) {
+      try {
+        const data = await api(`/uploads/${uploadID}`);
+        const nextPartNumber = Number(data && data.upload ? data.upload.next_part_number : 0);
+        const uploadStatus = String(data && data.upload && data.upload.status ? data.upload.status : '');
+        const acceptedByCursor = Number.isInteger(nextPartNumber) && nextPartNumber > partNumber;
+        const acceptedByStatus = uploadStatus === 'complete';
+        if (acceptedByCursor || acceptedByStatus) {
+          return { accepted: true, nextPartNumber, status: uploadStatus };
+        }
+      } catch (err) {
+        debugUpload('part:recover-check-failed', {
+          upload_id: uploadID,
+          part: partNumber,
+          message: err && err.message ? err.message : 'recover check failed',
+        });
+      }
+      return { accepted: false };
+    }
+
+    function newUploadIdempotencyKey() {
+      const prefix = 'upload-';
+      const randomLength = 16;
+      if (window.crypto && window.crypto.getRandomValues) {
+        const bytes = new Uint8Array(randomLength);
+        window.crypto.getRandomValues(bytes);
+        return `${prefix}${Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('')}`;
+      }
+      return `${prefix}${Date.now().toString(16)}${Math.floor(Math.random() * 0xFFFFFFFF).toString(16).padStart(8, '0')}`;
     }
 
     function uploadPartPlan(upload, fileSize) {
