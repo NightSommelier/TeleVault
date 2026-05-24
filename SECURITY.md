@@ -2,6 +2,12 @@
 
 TeleVault is a self-hosted encrypted file management utility with Telegram integration.
 
+## Security Contact
+
+Preferred reporting channel: GitHub Security Advisories.
+
+Fallback email: `security@televault.example` (replace with a real mailbox before the first public release).
+
 ## Reporting a Vulnerability
 
 Report security issues privately to the maintainer. Do not open public issues for exploitable vulnerabilities before a fix is available.
@@ -55,11 +61,16 @@ Do not commit these assets. Do not paste them into public issues, chats, or logs
 
 ## Recovery Map Handling
 
-Current recovery export may include private AGE identity material and Telegram placement metadata.
+Current recovery export may include private AGE identity material and Telegram file placement metadata.
 
 - Handle exported recovery metadata as a secret.
 - Do not store raw recovery bundles in shared backups without additional encryption.
 - Do not attach recovery bundles to tickets or bug reports.
+
+## Terminology
+
+Recovery bundle:
+Encrypted recovery/export package containing metadata and recovery material.
 
 ## Guarantees and Non-Guarantees
 

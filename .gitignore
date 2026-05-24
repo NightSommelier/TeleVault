@@ -5,15 +5,29 @@
 config.env
 docker-compose.override.yml
 docker-compose.override.yaml
+app-data/
+logs/
+*.log
+recovery*.json
+recovery*.bundle
+recovery*.zip
+recovery*.tar
 *.key
 *.pem
 *.p8
 *.p12
 *.crt
 *.pub
+*.age
+*.agekey
+*.age-key
 
 # Local database/session/cache artifacts
 var/
+*.sqlite-wal
+*.sqlite-shm
+*.db-wal
+*.db-shm
 *.sqlite
 *.sqlite3
 *.db
