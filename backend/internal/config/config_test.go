@@ -223,6 +223,7 @@ func validConfig() Config {
 		UploadStagingDir:           DefaultUploadStagingDir,
 
 		AuthRateLimitEnabled:              true,
+		AuthSingleUserMode:                true,
 		TelegramAuthIPLimitPerMinute:      DefaultTelegramAuthIPLimitPerMinute,
 		TelegramSendCodePhoneLimitPerHour: DefaultTelegramSendCodePhoneLimitPerHour,
 		TelegramLoginPhoneLimitPerHour:    DefaultTelegramLoginPhoneLimitPerHour,

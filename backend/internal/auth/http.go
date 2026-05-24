@@ -350,7 +350,7 @@ func (h *Handler) completeTelegramLogin(w http.ResponseWriter, r *http.Request, 
 	}
 
 	expiresAt := time.Now().Add(refreshTokenTTL)
-	user, err := h.store.CompleteTelegramLogin(
+	user, err := h.store.CompleteTelegramLoginWithPolicy(
 		r.Context(),
 		profile,
 		encryptedTelegramSession,
@@ -358,7 +358,13 @@ func (h *Handler) completeTelegramLogin(w http.ResponseWriter, r *http.Request, 
 		r.UserAgent(),
 		nil,
 		expiresAt,
+		h.cfg.AuthSingleUserMode,
 	)
+	if errors.Is(err, ErrCommunityUserLimitReached) {
+		h.store.RecordAuditEvent(r.Context(), "", AuditAuthLoginFailure, r)
+		writeError(w, http.StatusForbidden, "community_user_limit_reached")
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "login_persist_failed")
 		return

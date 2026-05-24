@@ -8,6 +8,7 @@ import (
 )
 
 var ErrInvalidSession = errors.New("invalid session")
+var ErrCommunityUserLimitReached = errors.New("community user limit reached")
 
 type User struct {
 	ID          string
@@ -39,11 +40,21 @@ VALUES ($1, $2, $3, $4, $5)`,
 }
 
 func (s *SessionStore) CompleteTelegramLogin(ctx context.Context, profile TelegramProfile, encryptedSession []byte, refreshTokenHash []byte, userAgent string, ipHash []byte, expiresAt time.Time) (User, error) {
+	return s.CompleteTelegramLoginWithPolicy(ctx, profile, encryptedSession, refreshTokenHash, userAgent, ipHash, expiresAt, false)
+}
+
+func (s *SessionStore) CompleteTelegramLoginWithPolicy(ctx context.Context, profile TelegramProfile, encryptedSession []byte, refreshTokenHash []byte, userAgent string, ipHash []byte, expiresAt time.Time, singleUserMode bool) (User, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return User{}, err
 	}
 	defer tx.Rollback()
+
+	if singleUserMode {
+		if err := enforceSingleUserMode(ctx, tx, profile.TelegramID); err != nil {
+			return User{}, err
+		}
+	}
 
 	var user User
 	err = tx.QueryRowContext(ctx, `
@@ -93,6 +104,21 @@ VALUES ($1, $2, $3, $4, $5)`,
 	}
 
 	return user, nil
+}
+
+func enforceSingleUserMode(ctx context.Context, tx *sql.Tx, telegramID int64) error {
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, int64(6471320)); err != nil {
+		return err
+	}
+
+	var count int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM users WHERE telegram_id <> $1`, telegramID).Scan(&count); err != nil {
+		return err
+	}
+	if count > 0 {
+		return ErrCommunityUserLimitReached
+	}
+	return nil
 }
 
 func (s *SessionStore) RotateRefreshToken(ctx context.Context, oldHash []byte, newHash []byte, expiresAt time.Time) (User, error) {

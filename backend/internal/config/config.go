@@ -58,6 +58,7 @@ type Config struct {
 	UploadStagingDir           string
 
 	AuthRateLimitEnabled              bool
+	AuthSingleUserMode                bool
 	TelegramAuthIPLimitPerMinute      int
 	TelegramSendCodePhoneLimitPerHour int
 	TelegramLoginPhoneLimitPerHour    int
@@ -127,6 +128,7 @@ func Load() (Config, error) {
 	cfg.SecureCookie = parseBoolDefault(os.Getenv("SECURE_COOKIE"), cfg.Env == EnvProduction)
 	cfg.CredentialsCORSMode = parseBoolDefault(os.Getenv("CORS_ALLOW_CREDENTIALS"), true)
 	cfg.AuthRateLimitEnabled = parseBoolDefault(os.Getenv("AUTH_RATE_LIMIT_ENABLED"), true)
+	cfg.AuthSingleUserMode = parseBoolDefault(os.Getenv("AUTH_SINGLE_USER_MODE"), true)
 	cfg.PublicDownloadRateLimitEnabled = parseBoolDefault(os.Getenv("PUBLIC_DOWNLOAD_RATE_LIMIT_ENABLED"), true)
 	cfg.TrustedProxyCIDRs = splitCSV(os.Getenv("TRUSTED_PROXY_CIDRS"))
 

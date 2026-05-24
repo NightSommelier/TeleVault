@@ -82,6 +82,72 @@ func TestAuthPersistenceChallengeAndSessionLifecycle(t *testing.T) {
 	}
 }
 
+func TestAuthPersistenceSingleUserModeBlocksSecondTelegramIdentity(t *testing.T) {
+	database := openIntegrationDB(t)
+	store := auth.NewSessionStore(database)
+	ctx := context.Background()
+
+	firstTelegramID := int64(915_000_000_000 + time.Now().UnixNano()%1_000_000_000)
+	secondTelegramID := firstTelegramID + 1
+	t.Cleanup(func() {
+		_, _ = database.ExecContext(context.Background(), `DELETE FROM users WHERE telegram_id IN ($1, $2)`, firstTelegramID, secondTelegramID)
+	})
+
+	_, err := store.CompleteTelegramLoginWithPolicy(
+		ctx,
+		auth.TelegramProfile{
+			TelegramID:  firstTelegramID,
+			Username:    fmt.Sprintf("integration_%d", firstTelegramID),
+			DisplayName: "Integration Test",
+		},
+		[]byte("encrypted-telegram-session"),
+		[]byte(fmt.Sprintf("initial-refresh-%d", firstTelegramID)),
+		"integration-test",
+		nil,
+		time.Now().Add(time.Hour),
+		true,
+	)
+	if err != nil {
+		t.Fatalf("CompleteTelegramLoginWithPolicy(first) error = %v", err)
+	}
+
+	_, err = store.CompleteTelegramLoginWithPolicy(
+		ctx,
+		auth.TelegramProfile{
+			TelegramID:  secondTelegramID,
+			Username:    fmt.Sprintf("integration_%d", secondTelegramID),
+			DisplayName: "Integration Test",
+		},
+		[]byte("encrypted-telegram-session"),
+		[]byte(fmt.Sprintf("initial-refresh-%d", secondTelegramID)),
+		"integration-test",
+		nil,
+		time.Now().Add(time.Hour),
+		true,
+	)
+	if !errors.Is(err, auth.ErrCommunityUserLimitReached) {
+		t.Fatalf("CompleteTelegramLoginWithPolicy(second) error = %v, want ErrCommunityUserLimitReached", err)
+	}
+
+	_, err = store.CompleteTelegramLoginWithPolicy(
+		ctx,
+		auth.TelegramProfile{
+			TelegramID:  firstTelegramID,
+			Username:    fmt.Sprintf("integration_%d_updated", firstTelegramID),
+			DisplayName: "Integration Test Updated",
+		},
+		[]byte("encrypted-telegram-session"),
+		[]byte(fmt.Sprintf("second-refresh-%d", firstTelegramID)),
+		"integration-test",
+		nil,
+		time.Now().Add(time.Hour),
+		true,
+	)
+	if err != nil {
+		t.Fatalf("CompleteTelegramLoginWithPolicy(relogin same identity) error = %v", err)
+	}
+}
+
 func TestFilesUploadsPersistenceOwnerIsolationAndCompletion(t *testing.T) {
 	database := openIntegrationDB(t)
 	sessionStore := auth.NewSessionStore(database)
