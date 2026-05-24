@@ -12,6 +12,7 @@ Date: 2026-05-19
 - Sharing: user-to-user shares, public links, expiring links, revoke, and password-protected public links are implemented and must be treated as in-scope attack surface.
 - Upload path: API encrypts and stages file parts locally, then a leased worker queue drains ciphertext to Telegram.
 - Frontend: embedded web UI is available and must follow the same cookie, CSRF, authorization, and sharing controls as direct API clients.
+- Processing model: temporary processing-time access depends on deployment and configuration; data is streamed and not intended for durable plaintext persistence.
 
 ## Assets
 
@@ -67,6 +68,19 @@ Date: 2026-05-19
 - Do not claim unlimited storage.
 - Do not claim bypass of provider limits.
 - Do not claim full zero-knowledge in the current server-side encryption mode.
+- Do not present TeleVault as a Telegram storage provider or hosted cloud replacement.
+
+## Metadata Limitations
+
+- PostgreSQL metadata includes file names, folder structure, part mappings, share metadata, and audit events.
+- Recovery metadata can include part placement and key-related material needed for restore paths.
+- Metadata protection is critical and should be treated separately from ciphertext-at-rest guarantees.
+
+## Telegram Visibility Limitations
+
+- Telegram receives encrypted artifacts and transport metadata such as object sizes, upload timing, and account-level activity.
+- Artifact masking reduces obvious signatures but does not remove size analysis or traffic analysis risks.
+- Telegram integration does not imply hosting by TeleVault; the user remains responsible for connected account usage and provider terms.
 
 ## Required Controls
 

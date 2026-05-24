@@ -1,0 +1,6 @@
+TeleVault Community Edition is licensed under the GNU Affero General Public License v3.0 only (AGPL-3.0-only).
+
+SPDX-License-Identifier: AGPL-3.0-only
+
+License text and terms:
+https://www.gnu.org/licenses/agpl-3.0.html
