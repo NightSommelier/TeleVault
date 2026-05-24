@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"sort"
 	"time"
 )
 
@@ -68,6 +69,13 @@ type Share struct {
 	RevokedAt         sql.NullTime
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
+}
+
+type ShareRecipient struct {
+	UserID      string
+	TelegramID  int64
+	Username    sql.NullString
+	DisplayName sql.NullString
 }
 
 type PublicLink struct {
@@ -571,6 +579,24 @@ WHERE ts.user_id = $1`,
 	return file, parts, session, nil
 }
 
+func (s *Store) TelegramSession(ctx context.Context, ownerID string) (TelegramSession, error) {
+	var session TelegramSession
+	err := s.db.QueryRowContext(ctx, `
+SELECT ts.encrypted_session, ts.storage_peer, u.telegram_id
+FROM telegram_sessions ts
+JOIN users u ON u.id = ts.user_id
+WHERE ts.user_id = $1`,
+		ownerID,
+	).Scan(&session.EncryptedSession, &session.StoragePeer, &session.OwnerTelegramID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return TelegramSession{}, ErrNotFound
+	}
+	if err != nil {
+		return TelegramSession{}, err
+	}
+	return session, nil
+}
+
 func (s *Store) PublicLinkPasswordMinLength(ctx context.Context) (int, error) {
 	const fallback = 8
 	var value int
@@ -919,6 +945,64 @@ ORDER BY s.created_at DESC`,
 	return shares, nil
 }
 
+func (s *Store) ListShareRecipients(ctx context.Context, ownerID string, candidateTelegramIDs []int64) ([]ShareRecipient, error) {
+	normalized := normalizeTelegramIDs(candidateTelegramIDs)
+	if len(normalized) == 0 {
+		return []ShareRecipient{}, nil
+	}
+	allowed := make(map[int64]struct{}, len(normalized))
+	for _, telegramID := range normalized {
+		allowed[telegramID] = struct{}{}
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+SELECT id, telegram_id, username, display_name
+FROM users
+WHERE id <> $1
+ORDER BY COALESCE(NULLIF(display_name, ''), NULLIF(username, ''), telegram_id::text) ASC,
+         telegram_id ASC`,
+		ownerID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	recipients := make([]ShareRecipient, 0, len(normalized))
+	for rows.Next() {
+		var recipient ShareRecipient
+		if err := rows.Scan(&recipient.UserID, &recipient.TelegramID, &recipient.Username, &recipient.DisplayName); err != nil {
+			return nil, err
+		}
+		if _, ok := allowed[recipient.TelegramID]; !ok {
+			continue
+		}
+		recipients = append(recipients, recipient)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	sort.Slice(recipients, func(i, j int) bool {
+		left := recipients[i]
+		right := recipients[j]
+		leftName := left.DisplayName.String
+		if !left.DisplayName.Valid || leftName == "" {
+			leftName = left.Username.String
+		}
+		rightName := right.DisplayName.String
+		if !right.DisplayName.Valid || rightName == "" {
+			rightName = right.Username.String
+		}
+		if leftName == rightName {
+			return left.TelegramID < right.TelegramID
+		}
+		return leftName < rightName
+	})
+
+	return recipients, nil
+}
+
 func (s *Store) RevokeShare(ctx context.Context, ownerID string, fileID string, shareID string, now time.Time) error {
 	result, err := s.db.ExecContext(ctx, `
 UPDATE file_shares
@@ -1055,6 +1139,25 @@ SELECT EXISTS (SELECT 1 FROM descendants WHERE id = $3)`,
 		candidateID,
 	).Scan(&descendant)
 	return descendant, err
+}
+
+func normalizeTelegramIDs(ids []int64) []int64 {
+	if len(ids) == 0 {
+		return nil
+	}
+	seen := make(map[int64]struct{}, len(ids))
+	out := make([]int64, 0, len(ids))
+	for _, id := range ids {
+		if id <= 0 {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
 }
 
 type rowScanner interface {

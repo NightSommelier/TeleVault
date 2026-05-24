@@ -1,6 +1,7 @@
 package files
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -136,6 +137,10 @@ type Handler struct {
 	sessionCrypto auth.TelegramSessionCrypto
 	ageIdentity   age.Identity
 	telegram      auth.TelegramStorageClient
+}
+
+type shareRecipientDiscovery interface {
+	ListKnownUserIDs(ctx context.Context, session string, storagePeer string) ([]int64, error)
 }
 
 func NewHandler(db *sql.DB, logger *slog.Logger, downloads *DownloadTracker, publicLimiter *PublicDownloadRateLimiter, sessionCrypto auth.TelegramSessionCrypto, ageIdentity age.Identity, telegram auth.TelegramStorageClient) *Handler {
@@ -492,6 +497,52 @@ func (h *Handler) ListShares(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"shares": sharesResponse(shares),
+	})
+}
+
+func (h *Handler) ListShareRecipients(w http.ResponseWriter, r *http.Request) {
+	user, ok := auth.UserFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "missing_authenticated_user")
+		return
+	}
+
+	discovery, ok := h.telegram.(shareRecipientDiscovery)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "share_recipients_list_failed")
+		return
+	}
+
+	telegramSession, err := h.store.TelegramSession(r.Context(), user.ID)
+	if errors.Is(err, ErrNotFound) {
+		writeError(w, http.StatusNotFound, "telegram_session_not_found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "share_recipients_list_failed")
+		return
+	}
+
+	session, err := h.sessionCrypto.DecryptForTelegramID(telegramSession.OwnerTelegramID, telegramSession.EncryptedSession)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "share_recipients_list_failed")
+		return
+	}
+
+	telegramIDs, err := discovery.ListKnownUserIDs(r.Context(), session, nullableString(telegramSession.StoragePeer))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "share_recipients_list_failed")
+		return
+	}
+
+	recipients, err := h.store.ListShareRecipients(r.Context(), user.ID, telegramIDs)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "share_recipients_list_failed")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"recipients": shareRecipientsResponse(recipients),
 	})
 }
 
@@ -1036,6 +1087,19 @@ func sharesResponse(shares []Share) []map[string]any {
 	out := make([]map[string]any, 0, len(shares))
 	for _, share := range shares {
 		out = append(out, shareResponse(share))
+	}
+	return out
+}
+
+func shareRecipientsResponse(recipients []ShareRecipient) []map[string]any {
+	out := make([]map[string]any, 0, len(recipients))
+	for _, recipient := range recipients {
+		out = append(out, map[string]any{
+			"user_id":      recipient.UserID,
+			"telegram_id":  recipient.TelegramID,
+			"username":     nullableStringValue(recipient.Username),
+			"display_name": nullableStringValue(recipient.DisplayName),
+		})
 	}
 	return out
 }

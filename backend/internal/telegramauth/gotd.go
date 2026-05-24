@@ -9,6 +9,7 @@ import (
 	"io"
 	"math"
 	"math/big"
+	"sort"
 	"strings"
 
 	"github.com/gotd/td/session"
@@ -454,6 +455,71 @@ func (c *Client) DeleteEncryptedPart(ctx context.Context, encodedSession string,
 	})
 }
 
+func (c *Client) ListKnownUserIDs(ctx context.Context, encodedSession string, storagePeer string) ([]int64, error) {
+	sessionBytes, err := base64.StdEncoding.DecodeString(encodedSession)
+	if err != nil {
+		return nil, err
+	}
+
+	storage := &session.StorageMemory{}
+	if err := storage.StoreSession(ctx, sessionBytes); err != nil {
+		return nil, err
+	}
+
+	client := telegram.NewClient(c.appID, c.appHash, telegram.Options{
+		NoUpdates:         true,
+		SessionStorage:    storage,
+		UpdateHandler:     nil,
+		Device:            telegram.DeviceConfig{AppVersion: "TeleVault"},
+		CompressThreshold: -1,
+	})
+
+	peer := storagePeer
+	if peer == "" {
+		peer = "self"
+	}
+	if peer != "self" {
+		return nil, fmt.Errorf("unsupported telegram storage peer %q", peer)
+	}
+
+	userIDs := make(map[int64]struct{})
+	if err := client.Run(ctx, func(ctx context.Context) error {
+		var contactsErr error
+		contacts, err := client.API().ContactsGetContacts(ctx, 0)
+		if err != nil {
+			contactsErr = err
+		} else if modified, ok := contacts.AsModified(); ok {
+			collectTelegramUserIDs(userIDs, modified.GetUsers())
+		}
+
+		var dialogsErr error
+		dialogs, err := client.API().MessagesGetDialogs(ctx, &tg.MessagesGetDialogsRequest{
+			OffsetPeer: &tg.InputPeerEmpty{},
+			Limit:      100,
+			Hash:       0,
+		})
+		if err != nil {
+			dialogsErr = err
+		} else if modified, ok := dialogs.AsModified(); ok {
+			collectTelegramUserIDs(userIDs, modified.GetUsers())
+		}
+
+		if contactsErr != nil && dialogsErr != nil {
+			return fmt.Errorf("contacts and dialogs lookup failed: contacts=%v dialogs=%v", contactsErr, dialogsErr)
+		}
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+
+	out := make([]int64, 0, len(userIDs))
+	for userID := range userIDs {
+		out = append(out, userID)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out, nil
+}
+
 func randomInt64() (int64, error) {
 	n, err := rand.Int(rand.Reader, big.NewInt(math.MaxInt64))
 	if err != nil {
@@ -552,5 +618,15 @@ func displayName(firstName string, lastName string) string {
 		return firstName
 	default:
 		return lastName
+	}
+}
+
+func collectTelegramUserIDs(target map[int64]struct{}, users []tg.UserClass) {
+	for _, user := range users {
+		userID := user.GetID()
+		if userID <= 0 {
+			continue
+		}
+		target[userID] = struct{}{}
 	}
 }

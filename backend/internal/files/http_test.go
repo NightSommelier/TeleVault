@@ -1,8 +1,8 @@
 package files
 
 import (
-	"encoding/hex"
 	"database/sql"
+	"encoding/hex"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -98,6 +98,20 @@ func TestAcceptsHTML(t *testing.T) {
 	r.Header.Set("Accept", "application/json, text/html")
 	if !acceptsHTML(r) {
 		t.Fatal("acceptsHTML(mixed) = false, want true")
+	}
+}
+
+func TestNormalizeTelegramIDs(t *testing.T) {
+	input := []int64{0, 11, -5, 11, 42, 42, 7}
+	got := normalizeTelegramIDs(input)
+	want := []int64{11, 42, 7}
+	if len(got) != len(want) {
+		t.Fatalf("normalizeTelegramIDs() len = %d, want %d (%v)", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("normalizeTelegramIDs()[%d] = %d, want %d (got=%v)", i, got[i], want[i], got)
+		}
 	}
 }
 

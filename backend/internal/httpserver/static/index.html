@@ -729,8 +729,12 @@
         <div class="modal-body stack">
           <div class="field-row">
             <div class="field">
-              <label for="shareTelegramInput">Telegram ID</label>
-              <input id="shareTelegramInput" type="number" min="1" step="1" placeholder="123456789">
+              <label for="shareRecipientSelect">Recipient</label>
+              <select id="shareRecipientSelect">
+                <option value="">Loading...</option>
+              </select>
+              <div id="shareRecipientHint" class="muted">Only registered TeleVault users from your Telegram contacts/chats are listed.</div>
+              <button id="shareManualToggleBtn" type="button">Enter ID manually</button>
             </div>
             <div class="field">
               <label for="shareExpirySelect">Access</label>
@@ -741,6 +745,10 @@
                 <option value="7d">7 days</option>
               </select>
             </div>
+          </div>
+          <div id="shareManualField" class="field hidden">
+            <label for="shareTelegramInput">Telegram ID</label>
+            <input id="shareTelegramInput" type="number" min="1" step="1" placeholder="123456789">
           </div>
           <div class="actions">
             <button id="createShareBtn" class="primary">Share</button>
@@ -999,6 +1007,7 @@
       selectedFileIds: new Set(),
       draggingItems: [],
       shareFile: null,
+      shareRecipients: [],
       detailsFile: null,
       detailsDownloadActivity: null,
       detailsRequestID: 0,
@@ -1063,6 +1072,10 @@
       shareModal: document.getElementById('shareModal'),
       closeShareBtn: document.getElementById('closeShareBtn'),
       shareFileName: document.getElementById('shareFileName'),
+      shareRecipientSelect: document.getElementById('shareRecipientSelect'),
+      shareRecipientHint: document.getElementById('shareRecipientHint'),
+      shareManualToggleBtn: document.getElementById('shareManualToggleBtn'),
+      shareManualField: document.getElementById('shareManualField'),
       shareTelegramInput: document.getElementById('shareTelegramInput'),
       shareExpirySelect: document.getElementById('shareExpirySelect'),
       createShareBtn: document.getElementById('createShareBtn'),
@@ -1157,12 +1170,15 @@
       if (!key) return 'Request failed.';
       const mapped = {
         share_list_failed: 'Failed to load shares.',
+        share_recipients_list_failed: 'Failed to load share recipients.',
+        telegram_session_not_found: 'Telegram session not found. Sign in again.',
         share_create_failed: 'Failed to create share.',
         share_revoke_failed: 'Failed to revoke share.',
         public_link_list_failed: 'Failed to load public links.',
         public_link_create_failed: 'Failed to create public link.',
         public_link_revoke_failed: 'Failed to revoke public link.',
         telegram_id_required: 'Telegram ID is required.',
+        share_recipient_required: 'Select a recipient or enter Telegram ID.',
         invalid_max_downloads: 'Download limit must be a positive integer.',
         invalid_download_limit_mode: 'Download limit mode must be hard or soft.',
         invalid_public_link_password: 'Public link password does not match current policy.',
@@ -2068,7 +2084,12 @@
       if (!file) return;
       closeDetailsDialog();
       state.shareFile = file;
+      state.shareRecipients = [];
       el.shareFileName.textContent = file.name || 'Untitled';
+      el.shareRecipientSelect.innerHTML = '<option value="">Loading...</option>';
+      el.shareRecipientSelect.value = '';
+      el.shareRecipientHint.textContent = 'Only registered TeleVault users from your Telegram contacts/chats are listed.';
+      toggleShareManualInput(false);
       el.shareTelegramInput.value = '';
       el.shareExpirySelect.value = '';
       el.publicExpirySelect.value = '1d';
@@ -2079,9 +2100,14 @@
       el.publicLinkResult.classList.add('hidden');
       setShareStatus('');
       el.shareModal.classList.remove('hidden');
+      await refreshShareRecipients();
       await refreshShares();
       await refreshPublicLinks();
-      el.shareTelegramInput.focus();
+      if (el.shareManualField.classList.contains('hidden')) {
+        el.shareRecipientSelect.focus();
+      } else {
+        el.shareTelegramInput.focus();
+      }
     }
 
     function closeShareDialog() {
@@ -2137,6 +2163,49 @@
       }
     }
 
+    function renderShareRecipients(recipients) {
+      if (!Array.isArray(recipients) || recipients.length === 0) {
+        state.shareRecipients = [];
+        el.shareRecipientSelect.innerHTML = '<option value="">No matching users found</option>';
+        el.shareRecipientSelect.value = '';
+        el.shareRecipientHint.textContent = 'Internal share works only for users who already logged into this TeleVault instance.';
+        return;
+      }
+      state.shareRecipients = recipients;
+      el.shareRecipientSelect.innerHTML = '<option value="">Select recipient</option>' + recipients.map((recipient) => {
+        const displayName = String(recipient.display_name || '').trim();
+        const username = String(recipient.username || '').trim();
+        const label = displayName || username || `Telegram ${recipient.telegram_id}`;
+        const subtitle = username ? ` @${username}` : '';
+        return `<option value="${escapeHTML(String(recipient.telegram_id))}">${escapeHTML(label + subtitle)}</option>`;
+      }).join('');
+      el.shareRecipientHint.textContent = 'Only registered TeleVault users from your Telegram contacts/chats are listed.';
+    }
+
+    async function refreshShareRecipients() {
+      el.shareRecipientSelect.innerHTML = '<option value="">Loading...</option>';
+      el.shareRecipientHint.textContent = 'Loading recipients...';
+      try {
+        const data = await api('/share-recipients');
+        renderShareRecipients(data.recipients || []);
+      } catch (err) {
+        state.shareRecipients = [];
+        el.shareRecipientSelect.innerHTML = `<option value="">${escapeHTML(err.message)}</option>`;
+        el.shareRecipientHint.textContent = 'Recipient discovery is unavailable right now.';
+      }
+    }
+
+    function toggleShareManualInput(forceShow) {
+      const showManual = typeof forceShow === 'boolean'
+        ? forceShow
+        : el.shareManualField.classList.contains('hidden');
+      el.shareManualField.classList.toggle('hidden', !showManual);
+      el.shareManualToggleBtn.textContent = showManual ? 'Use recipient list' : 'Enter ID manually';
+      if (!showManual) {
+        el.shareTelegramInput.value = '';
+      }
+    }
+
     async function refreshPublicLinks() {
       if (!state.shareFile) return;
       el.publicLinksBody.innerHTML = `<tr><td colspan="4" class="muted">Loading...</td></tr>`;
@@ -2167,9 +2236,12 @@
 
     async function createShare() {
       if (!state.shareFile) return;
-      const telegramID = Number(el.shareTelegramInput.value);
+      const useManual = !el.shareManualField.classList.contains('hidden');
+      const selectedID = Number(el.shareRecipientSelect.value);
+      const manualID = Number(el.shareTelegramInput.value);
+      const telegramID = useManual ? manualID : selectedID;
       if (!Number.isInteger(telegramID) || telegramID <= 0) {
-        setShareStatus('telegram_id_required', true);
+        setShareStatus(useManual ? 'telegram_id_required' : 'share_recipient_required', true);
         return;
       }
       try {
@@ -2182,7 +2254,11 @@
             expires_at: selectedShareExpiry(),
           }),
         });
-        el.shareTelegramInput.value = '';
+        if (useManual) {
+          el.shareTelegramInput.value = '';
+        } else {
+          el.shareRecipientSelect.value = '';
+        }
         el.shareExpirySelect.value = '';
         setShareStatus('Share created.');
         await refreshShares();
@@ -3927,6 +4003,14 @@
     el.closeShareBtn.addEventListener('click', closeShareDialog);
     el.closeMoveBtn.addEventListener('click', closeMoveDialog);
     el.confirmMoveBtn.addEventListener('click', confirmMoveSelected);
+    el.shareManualToggleBtn.addEventListener('click', () => {
+      toggleShareManualInput();
+      if (el.shareManualField.classList.contains('hidden')) {
+        el.shareRecipientSelect.focus();
+      } else {
+        el.shareTelegramInput.focus();
+      }
+    });
     el.createShareBtn.addEventListener('click', createShare);
     el.createPublicLinkBtn.addEventListener('click', createPublicLink);
     el.copyPublicLinkBtn.addEventListener('click', copyPublicLink);
