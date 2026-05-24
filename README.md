@@ -2,13 +2,13 @@
 
 Self-hosted encrypted file management utility with Telegram integration.
 
-Built for self-hosters, homelabs, Linux users, privacy-focused users, power users, and archival/synchronization enthusiasts.
+Built for self-hosters, homelabs, Linux users, privacy-focused users, power users, and backup and archival enthusiasts.
 
 ## Product Identity
 
 - Primary identity: self-hosted encrypted file management utility.
 - Secondary identity: encrypted file management vault.
-- Telegram integration is backend integration and synchronization transport, not hosted storage provided by TeleVault.
+- Telegram integration is used as a connected backend and synchronization layer, not hosted storage provided by TeleVault.
 
 ## Edition Summary
 
@@ -27,8 +27,8 @@ Community remains fully usable and practical for real deployments. It is not a d
 
 See:
 
-- [SECURITY.md](/home/sommelier/televault/SECURITY.md)
-- [Threat model](/home/sommelier/televault/docs/threat-model.md)
+- [SECURITY.md](./SECURITY.md)
+- [Threat model](./docs/threat-model.md)
 
 ## Compliance and Disclaimer
 

@@ -1,6 +1,6 @@
 # Security Policy
 
-TeleVault is a self-hosted encrypted file management platform with Telegram integration.
+TeleVault is a self-hosted encrypted file management utility with Telegram integration.
 
 ## Reporting a Vulnerability
 
@@ -23,7 +23,7 @@ In scope:
 - public-link expiry/revoke/password bypass;
 - secret leakage in responses, logs, or telemetry;
 - Telegram session exposure;
-- recovery map leakage paths;
+- recovery metadata exposure paths;
 - upload staging exposure, path traversal, or unsafe file handling.
 
 Out of scope:
@@ -36,7 +36,7 @@ Out of scope:
 
 - Telegram stores ciphertext, not plaintext files.
 - Server-side encryption is the current baseline.
-- The backend can handle plaintext in memory during upload and download streams.
+- The backend may temporarily process decrypted file data in memory during upload/download operations depending on deployment configuration.
 - Current mode is not full zero-knowledge.
 
 ## Sensitive Secrets and Data
@@ -47,7 +47,7 @@ Treat the following as high-sensitivity:
 - `APP_AGE_IDENTITY`;
 - `TELEGRAM_SESSION_KEY`;
 - encrypted Telegram sessions;
-- recovery maps and recovery key material;
+- recovery metadata and recovery key material;
 - upload staging data;
 - PostgreSQL backups with file metadata/part placement.
 
@@ -57,7 +57,7 @@ Do not commit these assets. Do not paste them into public issues, chats, or logs
 
 Current recovery export may include private AGE identity material and Telegram placement metadata.
 
-- Handle exported recovery JSON as a secret.
+- Handle exported recovery metadata as a secret.
 - Do not store raw recovery bundles in shared backups without additional encryption.
 - Do not attach recovery bundles to tickets or bug reports.
 
@@ -69,5 +69,5 @@ TeleVault does not claim unlimited storage, full zero-knowledge guarantees, or b
 
 ## Hardening References
 
-- [Threat model](/home/sommelier/televault/docs/threat-model.md)
-- [Recovery bundles](/home/sommelier/televault/docs/development/recovery.md)
+- [Threat model](./docs/threat-model.md)
+- [Recovery bundles](./docs/development/recovery.md)
