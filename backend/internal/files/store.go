@@ -115,7 +115,7 @@ func (s *Store) ListChildren(ctx context.Context, ownerID string, parentID strin
 	var err error
 	if parentID == "" {
 		rows, err = s.db.QueryContext(ctx, `
-SELECT id, owner_id, parent_id, name_plain, mime_type, plaintext_size, ciphertext_size, type, status, created_at, updated_at
+SELECT id, owner_id, parent_id, name_plain, mime_type, plaintext_size, ciphertext_size, type, status, checksum, created_at, updated_at
 FROM files
 WHERE owner_id = $1
   AND parent_id IS NULL
@@ -125,7 +125,7 @@ ORDER BY type DESC, name_plain ASC, created_at ASC`,
 		)
 	} else {
 		rows, err = s.db.QueryContext(ctx, `
-SELECT id, owner_id, parent_id, name_plain, mime_type, plaintext_size, ciphertext_size, type, status, created_at, updated_at
+SELECT id, owner_id, parent_id, name_plain, mime_type, plaintext_size, ciphertext_size, type, status, checksum, created_at, updated_at
 FROM files
 WHERE parent_id = $2
   AND deleted_at IS NULL
@@ -178,7 +178,7 @@ ORDER BY type DESC, name_plain ASC, created_at ASC`,
 
 func (s *Store) GetByID(ctx context.Context, ownerID string, id string) (File, error) {
 	file, err := scanFile(s.db.QueryRowContext(ctx, `
-SELECT id, owner_id, parent_id, name_plain, mime_type, plaintext_size, ciphertext_size, type, status, created_at, updated_at
+SELECT id, owner_id, parent_id, name_plain, mime_type, plaintext_size, ciphertext_size, type, status, checksum, created_at, updated_at
 FROM files
 WHERE owner_id = $1
   AND id = $2
@@ -198,7 +198,7 @@ WHERE owner_id = $1
 
 func (s *Store) GetAccessibleByID(ctx context.Context, requesterID string, id string) (File, error) {
 	file, err := scanFile(s.db.QueryRowContext(ctx, `
-SELECT f.id, f.owner_id, f.parent_id, f.name_plain, f.mime_type, f.plaintext_size, f.ciphertext_size, f.type, f.status, f.created_at, f.updated_at
+SELECT f.id, f.owner_id, f.parent_id, f.name_plain, f.mime_type, f.plaintext_size, f.ciphertext_size, f.type, f.status, f.checksum, f.created_at, f.updated_at
 FROM files f
 WHERE f.id = $2
   AND f.deleted_at IS NULL
@@ -419,7 +419,7 @@ SET parent_id = CASE WHEN $3 THEN NULLIF($4, '')::uuid ELSE parent_id END,
 WHERE owner_id = $1
   AND id IN (SELECT id FROM requested)
   AND deleted_at IS NULL
-RETURNING id, owner_id, parent_id, name_plain, mime_type, plaintext_size, ciphertext_size, type, status, created_at, updated_at`,
+RETURNING id, owner_id, parent_id, name_plain, mime_type, plaintext_size, ciphertext_size, type, status, checksum, created_at, updated_at`,
 		ownerID,
 		ids,
 		update.SetParent,
@@ -440,7 +440,7 @@ RETURNING id, owner_id, parent_id, name_plain, mime_type, plaintext_size, cipher
 
 func (s *Store) filesByIDsForUpdate(ctx context.Context, tx *sql.Tx, ownerID string, ids []string) ([]File, error) {
 	rows, err := tx.QueryContext(ctx, `
-SELECT id, owner_id, parent_id, name_plain, mime_type, plaintext_size, ciphertext_size, type, status, created_at, updated_at
+SELECT id, owner_id, parent_id, name_plain, mime_type, plaintext_size, ciphertext_size, type, status, checksum, created_at, updated_at
 FROM files
 WHERE owner_id = $1
   AND id = ANY($2::uuid[])
@@ -949,7 +949,7 @@ WHERE owner_id = $1
 
 func (s *Store) ListSharedWithMe(ctx context.Context, requesterID string) ([]File, error) {
 	rows, err := s.db.QueryContext(ctx, `
-SELECT f.id, f.owner_id, f.parent_id, f.name_plain, f.mime_type, f.plaintext_size, f.ciphertext_size, f.type, f.status, f.created_at, f.updated_at
+SELECT f.id, f.owner_id, f.parent_id, f.name_plain, f.mime_type, f.plaintext_size, f.ciphertext_size, f.type, f.status, f.checksum, f.created_at, f.updated_at
 FROM file_shares s
 JOIN files f ON f.id = s.file_id
 WHERE s.grantee_user_id = $1
@@ -989,7 +989,7 @@ func (s *Store) CreateFolder(ctx context.Context, ownerID string, parentID strin
 	file, err := scanFile(s.db.QueryRowContext(ctx, `
 INSERT INTO files (owner_id, parent_id, name_plain, type, status)
 VALUES ($1, NULLIF($2, '')::uuid, $3, 'folder', 'ready')
-RETURNING id, owner_id, parent_id, name_plain, mime_type, plaintext_size, ciphertext_size, type, status, created_at, updated_at`,
+RETURNING id, owner_id, parent_id, name_plain, mime_type, plaintext_size, ciphertext_size, type, status, checksum, created_at, updated_at`,
 		ownerID,
 		parentID,
 		name,
