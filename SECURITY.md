@@ -1,0 +1,73 @@
+# Security Policy
+
+TeleVault is a self-hosted encrypted file management platform with Telegram integration.
+
+## Reporting a Vulnerability
+
+Report security issues privately to the maintainer. Do not open public issues for exploitable vulnerabilities before a fix is available.
+
+Include:
+
+- affected version or commit;
+- deployment shape (API/worker/cleanup, reverse proxy);
+- reproduction steps;
+- impact and expected behavior;
+- logs with secrets removed.
+
+## Security Scope
+
+In scope:
+
+- authentication, session, CSRF, and CORS bypasses;
+- authorization bypasses for files, folders, shares, and public links;
+- public-link expiry/revoke/password bypass;
+- secret leakage in responses, logs, or telemetry;
+- Telegram session exposure;
+- recovery map leakage paths;
+- upload staging exposure, path traversal, or unsafe file handling.
+
+Out of scope:
+
+- social engineering and phishing;
+- local machine compromise outside TeleVault;
+- denial-of-service without a product vulnerability.
+
+## Current Security Model
+
+- Telegram stores ciphertext, not plaintext files.
+- Server-side encryption is the current baseline.
+- The backend can handle plaintext in memory during upload and download streams.
+- Current mode is not full zero-knowledge.
+
+## Sensitive Secrets and Data
+
+Treat the following as high-sensitivity:
+
+- `.env` and runtime secrets;
+- `APP_AGE_IDENTITY`;
+- `TELEGRAM_SESSION_KEY`;
+- encrypted Telegram sessions;
+- recovery maps and recovery key material;
+- upload staging data;
+- PostgreSQL backups with file metadata/part placement.
+
+Do not commit these assets. Do not paste them into public issues, chats, or logs.
+
+## Recovery Map Handling
+
+Current recovery export may include private AGE identity material and Telegram placement metadata.
+
+- Handle exported recovery JSON as a secret.
+- Do not store raw recovery bundles in shared backups without additional encryption.
+- Do not attach recovery bundles to tickets or bug reports.
+
+## Guarantees and Non-Guarantees
+
+TeleVault focuses on privacy, ownership, self-hosting, encryption, organization, and portability.
+
+TeleVault does not claim unlimited storage, full zero-knowledge guarantees, or bypass of provider limits.
+
+## Hardening References
+
+- [Threat model](/home/sommelier/televault/docs/threat-model.md)
+- [Recovery bundles](/home/sommelier/televault/docs/development/recovery.md)

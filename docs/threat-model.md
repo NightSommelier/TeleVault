@@ -62,6 +62,12 @@ Date: 2026-05-19
 - Shared folders, shared upload spaces, shared-channel mode, and split-storage mode.
 - FUSE mount mode.
 
+## Product Claims Guardrails
+
+- Do not claim unlimited storage.
+- Do not claim bypass of provider limits.
+- Do not claim full zero-knowledge in the current server-side encryption mode.
+
 ## Required Controls
 
 - Never put Telegram session material in JWTs, cookies, public links, logs, or frontend responses.
