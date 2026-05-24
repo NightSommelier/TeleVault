@@ -737,7 +737,14 @@
               <button id="shareManualToggleBtn" type="button">Enter ID manually</button>
             </div>
             <div class="field">
-              <label for="shareExpirySelect">Access</label>
+              <label for="sharePermissionSelect">Access</label>
+              <select id="sharePermissionSelect">
+                <option value="read" selected>Read only</option>
+                <option value="read_delete">Read + delete</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="shareExpirySelect">Expires</label>
               <select id="shareExpirySelect">
                 <option value="">No limit</option>
                 <option value="1h">1 hour</option>
@@ -758,12 +765,13 @@
             <thead>
               <tr>
                 <th>User</th>
+                <th>Access</th>
                 <th>Expires</th>
                 <th></th>
               </tr>
             </thead>
             <tbody id="sharesBody">
-              <tr><td colspan="3" class="muted">No active shares.</td></tr>
+              <tr><td colspan="4" class="muted">No active shares.</td></tr>
             </tbody>
           </table>
           <div class="subhead">
@@ -1003,6 +1011,7 @@
       currentFolderId: '',
       folderStack: [],
       view: 'own',
+      visibleFiles: [],
       droppedFiles: [],
       selectedFileIds: new Set(),
       draggingItems: [],
@@ -1077,6 +1086,7 @@
       shareManualToggleBtn: document.getElementById('shareManualToggleBtn'),
       shareManualField: document.getElementById('shareManualField'),
       shareTelegramInput: document.getElementById('shareTelegramInput'),
+      sharePermissionSelect: document.getElementById('sharePermissionSelect'),
       shareExpirySelect: document.getElementById('shareExpirySelect'),
       createShareBtn: document.getElementById('createShareBtn'),
       shareStatus: document.getElementById('shareStatus'),
@@ -1174,6 +1184,8 @@
         telegram_session_not_found: 'Telegram session not found. Sign in again.',
         share_create_failed: 'Failed to create share.',
         share_revoke_failed: 'Failed to revoke share.',
+        invalid_share_permission: 'Share permission must be read or read_delete.',
+        file_delete_forbidden: 'You do not have delete access for this shared item.',
         public_link_list_failed: 'Failed to load public links.',
         public_link_create_failed: 'Failed to create public link.',
         public_link_revoke_failed: 'Failed to revoke public link.',
@@ -1492,6 +1504,7 @@
     }
 
     function renderFiles(files) {
+      state.visibleFiles = Array.isArray(files) ? files.slice() : [];
       if (state.view !== 'own') {
         state.selectedFileIds = new Set();
       } else {
@@ -1640,10 +1653,11 @@
 
     function renderFileActions(file) {
       if (state.view === 'shared') {
+        const deleteButton = file.can_delete ? `<button data-delete="${file.id}">Delete</button>` : '';
         if (file.type === 'folder') {
-          return `<button data-open-folder="${file.id}">Open</button><button data-details="${file.id}">Details</button>`;
+          return `<button data-open-folder="${file.id}">Open</button><button data-details="${file.id}">Details</button>${deleteButton}`;
         }
-        return `<a class="button-link" href="/files/${encodeURIComponent(file.id)}/download" download>Download</a><button data-details="${file.id}">Details</button>`;
+        return `<a class="button-link" href="/files/${encodeURIComponent(file.id)}/download" download>Download</a><button data-details="${file.id}">Details</button>${deleteButton}`;
       }
       const downloadLink = `<a class="button-link" href="/files/${encodeURIComponent(file.id)}/download" download>Download</a>`;
       const deleteButton = `<button data-delete="${file.id}">Delete</button>`;
@@ -1925,7 +1939,13 @@
     }
 
     async function deleteFile(id) {
-      if (!id || !window.confirm('Delete this item?')) return;
+      if (!id) return;
+      const file = state.visibleFiles.find((item) => item.id === id);
+      const isSharedDelete = state.view === 'shared' && file && file.access === 'shared_read_delete';
+      const message = isSharedDelete
+        ? 'Delete this shared item for everyone?'
+        : 'Delete this item?';
+      if (!window.confirm(message)) return;
       await deleteFiles([id], false);
     }
 
@@ -2091,6 +2111,7 @@
       el.shareRecipientHint.textContent = 'Only registered TeleVault users from your Telegram contacts/chats are listed.';
       toggleShareManualInput(false);
       el.shareTelegramInput.value = '';
+      el.sharePermissionSelect.value = 'read';
       el.shareExpirySelect.value = '';
       el.publicExpirySelect.value = '1d';
       el.publicLinkInput.value = '';
@@ -2154,12 +2175,12 @@
 
     async function refreshShares() {
       if (!state.shareFile) return;
-      el.sharesBody.innerHTML = `<tr><td colspan="3" class="muted">Loading...</td></tr>`;
+      el.sharesBody.innerHTML = `<tr><td colspan="4" class="muted">Loading...</td></tr>`;
       try {
         const data = await api(`/files/${state.shareFile.id}/shares`);
         renderShares(data.shares || []);
       } catch (err) {
-        el.sharesBody.innerHTML = `<tr><td colspan="3" class="muted">${escapeHTML(err.message)}</td></tr>`;
+        el.sharesBody.innerHTML = `<tr><td colspan="4" class="muted">${escapeHTML(err.message)}</td></tr>`;
       }
     }
 
@@ -2219,12 +2240,13 @@
 
     function renderShares(shares) {
       if (!shares.length) {
-        el.sharesBody.innerHTML = `<tr><td colspan="3" class="muted">No active shares.</td></tr>`;
+        el.sharesBody.innerHTML = `<tr><td colspan="4" class="muted">No active shares.</td></tr>`;
         return;
       }
       el.sharesBody.innerHTML = shares.map((share) => `
         <tr>
           <td>${escapeHTML(share.grantee_username || share.grantee_name || `Telegram ${share.grantee_telegram_id}`)}</td>
+          <td>${escapeHTML(sharePermissionLabel(share.permission))}</td>
           <td>${share.expires_at ? escapeHTML(new Date(share.expires_at).toLocaleString()) : 'No limit'}</td>
           <td><button data-revoke-share="${share.id}">Revoke</button></td>
         </tr>
@@ -2251,6 +2273,7 @@
           csrf: true,
           body: JSON.stringify({
             telegram_id: telegramID,
+            permission: String(el.sharePermissionSelect.value || 'read'),
             expires_at: selectedShareExpiry(),
           }),
         });
@@ -2352,12 +2375,12 @@
       el.detailsFileName.textContent = file.name || 'Untitled';
       el.detailsFileID.value = file.id || '';
       el.detailsFileNameInput.value = file.name || '';
-      const editable = Boolean(state.user && file.owner_id === state.user.id);
+      const editable = String(file.access || '') === 'owner' || Boolean(state.user && file.owner_id === state.user.id);
       el.detailsFileNameInput.disabled = !editable;
       el.saveDetailsFileNameBtn.disabled = !editable;
       const rows = [];
-      const ownerLabel = state.user && file.owner_id === state.user.id ? 'You' : 'Shared owner';
-      const accessLabel = editable ? 'Owner (read/write)' : 'Shared (read-only)';
+      const ownerLabel = formatOwnerLabel(file);
+      const accessLabel = formatAccessLabel(file, editable);
       rows.push(['Type', file.type || '-']);
       rows.push(['Status', file.status || '-']);
       rows.push(['Owner', ownerLabel]);
@@ -2417,6 +2440,28 @@
 
     function selectedShareExpiry() {
       return selectedExpiry(el.shareExpirySelect.value);
+    }
+
+    function sharePermissionLabel(permission) {
+      if (permission === 'read_delete') return 'Read + delete';
+      return 'Read only';
+    }
+
+    function formatOwnerLabel(file) {
+      if (state.user && file.owner_id === state.user.id) return 'You';
+      const displayName = String(file.owner_display_name || '').trim();
+      if (displayName) return displayName;
+      const username = String(file.owner_username || '').trim();
+      if (username) return `@${username}`;
+      if (Number.isInteger(file.owner_telegram_id) && file.owner_telegram_id > 0) return `Telegram ${file.owner_telegram_id}`;
+      return 'Unknown owner';
+    }
+
+    function formatAccessLabel(file, editable) {
+      const access = String(file.access || '').trim();
+      if (access === 'shared_read_delete') return 'Shared (read + delete)';
+      if (access === 'shared_read') return 'Shared (read-only)';
+      return editable ? 'Owner (read/write)' : 'Shared (read-only)';
     }
 
     function selectedExpiry(value) {

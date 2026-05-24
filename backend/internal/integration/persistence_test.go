@@ -291,7 +291,7 @@ func TestFilesUploadsPersistenceOwnerIsolationAndCompletion(t *testing.T) {
 	if _, _, _, err := fileStore.DownloadData(ctx, other.ID, file.ID); !errors.Is(err, files.ErrNotFound) {
 		t.Fatalf("cross-owner download error = %v, want files.ErrNotFound", err)
 	}
-	share, err := fileStore.CreateShare(ctx, owner.ID, file.ID, other.TelegramID, sql.NullTime{})
+	share, err := fileStore.CreateShare(ctx, owner.ID, file.ID, other.TelegramID, files.SharePermissionRead, sql.NullTime{})
 	if err != nil {
 		t.Fatalf("CreateShare() error = %v", err)
 	}
@@ -312,13 +312,16 @@ func TestFilesUploadsPersistenceOwnerIsolationAndCompletion(t *testing.T) {
 	if sharedDownload.OwnerID != owner.ID || len(sharedParts) != 2 {
 		t.Fatalf("shared DownloadData() owner=%s parts=%d, want owner %s parts 2", sharedDownload.OwnerID, len(sharedParts), owner.ID)
 	}
+	if err := fileStore.SoftDeleteAccessible(ctx, other.ID, file.ID, time.Now()); !errors.Is(err, files.ErrForbidden) {
+		t.Fatalf("shared read-only delete error = %v, want files.ErrForbidden", err)
+	}
 	if _, err := fileStore.ListShares(ctx, other.ID, file.ID); !errors.Is(err, files.ErrNotFound) {
 		t.Fatalf("grantee ListShares() error = %v, want files.ErrNotFound", err)
 	}
 	if err := fileStore.RevokeShare(ctx, other.ID, file.ID, share.ID, time.Now()); !errors.Is(err, files.ErrNotFound) {
 		t.Fatalf("grantee RevokeShare() error = %v, want files.ErrNotFound", err)
 	}
-	if _, err := fileStore.CreateShare(ctx, other.ID, file.ID, owner.TelegramID, sql.NullTime{}); !errors.Is(err, files.ErrNotFound) {
+	if _, err := fileStore.CreateShare(ctx, other.ID, file.ID, owner.TelegramID, files.SharePermissionRead, sql.NullTime{}); !errors.Is(err, files.ErrNotFound) {
 		t.Fatalf("cross-owner CreateShare() error = %v, want files.ErrNotFound", err)
 	}
 	if err := fileStore.RevokeShare(ctx, owner.ID, file.ID, share.ID, time.Now()); err != nil {
@@ -603,7 +606,7 @@ func TestFolderShareGrantsRecursiveAccessToDescendants(t *testing.T) {
 		t.Fatalf("grantee download before share error = %v, want files.ErrNotFound", err)
 	}
 
-	share, err := fileStore.CreateShare(ctx, owner.ID, root.ID, grantee.TelegramID, sql.NullTime{})
+	share, err := fileStore.CreateShare(ctx, owner.ID, root.ID, grantee.TelegramID, files.SharePermissionRead, sql.NullTime{})
 	if err != nil {
 		t.Fatalf("CreateShare(folder) error = %v", err)
 	}
@@ -648,6 +651,83 @@ func TestFolderShareGrantsRecursiveAccessToDescendants(t *testing.T) {
 	}
 	if _, _, _, err := fileStore.DownloadData(ctx, grantee.ID, file.ID); !errors.Is(err, files.ErrNotFound) {
 		t.Fatalf("grantee download after revoke error = %v, want files.ErrNotFound", err)
+	}
+}
+
+func TestFolderShareReadDeleteAllowsGlobalDelete(t *testing.T) {
+	database := openIntegrationDB(t)
+	sessionStore := auth.NewSessionStore(database)
+	fileStore := files.NewStore(database)
+	uploadStore := uploads.NewStore(database)
+	ctx := context.Background()
+
+	owner, cleanupOwner := createUserThroughLogin(t, database, sessionStore, 980_000_000_000+time.Now().UnixNano()%1_000_000_000)
+	defer cleanupOwner()
+	grantee, cleanupGrantee := createUserThroughLogin(t, database, sessionStore, 990_000_000_000+time.Now().UnixNano()%1_000_000_000)
+	defer cleanupGrantee()
+
+	root, err := fileStore.CreateFolder(ctx, owner.ID, "", "share-delete-root")
+	if err != nil {
+		t.Fatalf("CreateFolder(root) error = %v", err)
+	}
+	child, err := fileStore.CreateFolder(ctx, owner.ID, root.ID, "share-delete-child")
+	if err != nil {
+		t.Fatalf("CreateFolder(child) error = %v", err)
+	}
+	upload, err := uploadStore.Create(ctx, uploads.CreateUploadParams{
+		OwnerID:       owner.ID,
+		ParentID:      child.ID,
+		Name:          "share-delete.txt",
+		MimeType:      "text/plain",
+		PlaintextSize: 4,
+		PartSize:      4,
+		ExpiresAt:     time.Now().Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("Create upload error = %v", err)
+	}
+	if _, err := uploadStore.CompletePart(ctx, uploads.CompletePartParams{
+		OwnerID:        owner.ID,
+		UploadID:       upload.ID,
+		PartNumber:     1,
+		PlaintextSize:  4,
+		CiphertextSize: 9,
+		Checksum:       []byte("del-part"),
+		UploadedSize:   4,
+		TelegramPeer:   "self",
+		MessageID:      301,
+		Now:            time.Now(),
+	}); err != nil {
+		t.Fatalf("CompletePart() error = %v", err)
+	}
+	file, err := uploadStore.CompleteUpload(ctx, uploads.CompleteUploadParams{
+		OwnerID:  owner.ID,
+		UploadID: upload.ID,
+		Now:      time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("CompleteUpload() error = %v", err)
+	}
+
+	share, err := fileStore.CreateShare(ctx, owner.ID, root.ID, grantee.TelegramID, files.SharePermissionReadDelete, sql.NullTime{})
+	if err != nil {
+		t.Fatalf("CreateShare(read_delete) error = %v", err)
+	}
+	if share.Permission != files.SharePermissionReadDelete {
+		t.Fatalf("CreateShare(read_delete) permission = %q, want %q", share.Permission, files.SharePermissionReadDelete)
+	}
+
+	if err := fileStore.SoftDeleteAccessible(ctx, grantee.ID, root.ID, time.Now()); err != nil {
+		t.Fatalf("SoftDeleteAccessible(shared root) error = %v", err)
+	}
+	if _, err := fileStore.GetByID(ctx, owner.ID, root.ID); !errors.Is(err, files.ErrNotFound) {
+		t.Fatalf("owner root after shared delete error = %v, want files.ErrNotFound", err)
+	}
+	if _, err := fileStore.GetByID(ctx, owner.ID, child.ID); !errors.Is(err, files.ErrNotFound) {
+		t.Fatalf("owner child after shared delete error = %v, want files.ErrNotFound", err)
+	}
+	if _, _, _, err := fileStore.DownloadData(ctx, owner.ID, file.ID); !errors.Is(err, files.ErrNotFound) {
+		t.Fatalf("owner file after shared delete error = %v, want files.ErrNotFound", err)
 	}
 }
 

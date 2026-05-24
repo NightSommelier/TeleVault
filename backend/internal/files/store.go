@@ -9,16 +9,25 @@ import (
 )
 
 var (
-	ErrNotFound         = errors.New("file not found")
-	ErrPasswordRequired = errors.New("public link password required")
-	ErrInvalidMove      = errors.New("invalid file move")
-	ErrInvalidName      = errors.New("invalid file name")
+	ErrNotFound          = errors.New("file not found")
+	ErrForbidden         = errors.New("forbidden")
+	ErrPasswordRequired  = errors.New("public link password required")
+	ErrInvalidMove       = errors.New("invalid file move")
+	ErrInvalidName       = errors.New("invalid file name")
+	ErrInvalidPermission = errors.New("invalid permission")
 )
 
 const (
 	TypeFile    = "file"
 	TypeFolder  = "folder"
 	StatusReady = "ready"
+
+	SharePermissionRead       = "read"
+	SharePermissionReadDelete = "read_delete"
+
+	FileAccessOwner            = "owner"
+	FileAccessSharedRead       = "shared_read"
+	FileAccessSharedReadDelete = "shared_read_delete"
 
 	PublicDownloadLimitModeHard = "hard"
 	PublicDownloadLimitModeSoft = "soft"
@@ -76,6 +85,15 @@ type ShareRecipient struct {
 	TelegramID  int64
 	Username    sql.NullString
 	DisplayName sql.NullString
+}
+
+type FileAccessContext struct {
+	FileID           string
+	OwnerTelegramID  int64
+	OwnerUsername    sql.NullString
+	OwnerDisplayName sql.NullString
+	Access           string
+	CanDelete        bool
 }
 
 type PublicLink struct {
@@ -283,8 +301,172 @@ func (s *Store) SoftDelete(ctx context.Context, ownerID string, id string, now t
 	return s.softDeleteMany(ctx, ownerID, []string{id}, now)
 }
 
+func (s *Store) SoftDeleteAccessible(ctx context.Context, requesterID string, id string, now time.Time) error {
+	file, err := s.GetAccessibleByID(ctx, requesterID, id)
+	if err != nil {
+		return err
+	}
+	if file.OwnerID == requesterID {
+		return s.softDeleteMany(ctx, requesterID, []string{id}, now)
+	}
+
+	var count int
+	err = s.db.QueryRowContext(ctx, `
+WITH RECURSIVE ancestors AS (
+    SELECT id, parent_id
+    FROM files
+    WHERE id = $3
+      AND deleted_at IS NULL
+    UNION ALL
+    SELECT parent.id, parent.parent_id
+    FROM files parent
+    JOIN ancestors child ON child.parent_id = parent.id
+    WHERE parent.deleted_at IS NULL
+),
+authorized AS (
+    SELECT EXISTS (
+        SELECT 1
+        FROM file_shares s
+        WHERE s.file_id IN (SELECT id FROM ancestors)
+          AND s.grantee_user_id = $1
+          AND s.permission = $4
+          AND s.revoked_at IS NULL
+          AND (s.expires_at IS NULL OR s.expires_at > now())
+    ) AS can_delete
+),
+target AS (
+    SELECT id
+    FROM files
+    WHERE owner_id = $2
+      AND id = $3
+      AND deleted_at IS NULL
+      AND (SELECT can_delete FROM authorized)
+    UNION ALL
+    SELECT child.id
+    FROM files child
+    INNER JOIN target parent ON child.parent_id = parent.id
+    WHERE child.owner_id = $2
+      AND child.deleted_at IS NULL
+),
+updated AS (
+    UPDATE files
+    SET status = 'deleted',
+        deleted_at = $5,
+        updated_at = $5
+    WHERE id IN (SELECT id FROM target)
+    RETURNING id
+),
+queued_file_parts AS (
+    SELECT p.id, row_number() OVER (ORDER BY p.created_at ASC, p.part_number ASC) AS queue_position
+    FROM file_parts p
+    JOIN updated f ON f.id = p.file_id
+    WHERE p.telegram_deleted_at IS NULL
+),
+queued_cleanup AS (
+    UPDATE file_parts p
+    SET telegram_delete_available_at = $5 + ((q.queue_position - 1) * interval '15 seconds'),
+        telegram_delete_error = NULL
+    FROM queued_file_parts q
+    WHERE p.id = q.id
+    RETURNING p.id
+)
+SELECT COUNT(*) FROM updated`,
+		requesterID,
+		file.OwnerID,
+		id,
+		SharePermissionReadDelete,
+		now,
+	).Scan(&count)
+	if err != nil {
+		return err
+	}
+	if count == 0 {
+		return ErrForbidden
+	}
+	return nil
+}
+
 func (s *Store) SoftDeleteMany(ctx context.Context, ownerID string, ids []string, now time.Time) error {
 	return s.softDeleteMany(ctx, ownerID, ids, now)
+}
+
+func (s *Store) FileAccessContexts(ctx context.Context, requesterID string, fileIDs []string) (map[string]FileAccessContext, error) {
+	normalized := normalizeFileIDs(fileIDs)
+	if len(normalized) == 0 {
+		return map[string]FileAccessContext{}, nil
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+SELECT f.id,
+       u.telegram_id,
+       u.username,
+       u.display_name,
+       CASE
+         WHEN f.owner_id = $1 THEN $3
+         WHEN sa.can_delete_share THEN $4
+         WHEN sa.has_share THEN $5
+         ELSE ''
+       END AS access,
+       CASE
+         WHEN f.owner_id = $1 THEN TRUE
+         ELSE sa.can_delete_share
+       END AS can_delete
+FROM files f
+JOIN users u ON u.id = f.owner_id
+LEFT JOIN LATERAL (
+    WITH RECURSIVE ancestors AS (
+        SELECT id, parent_id
+        FROM files
+        WHERE id = f.id
+          AND deleted_at IS NULL
+        UNION ALL
+        SELECT parent.id, parent.parent_id
+        FROM files parent
+        JOIN ancestors child ON child.parent_id = parent.id
+        WHERE parent.deleted_at IS NULL
+    )
+    SELECT COALESCE(COUNT(*) > 0, FALSE) AS has_share,
+           COALESCE(BOOL_OR(s.permission = $2), FALSE) AS can_delete_share
+    FROM file_shares s
+    WHERE s.file_id IN (SELECT id FROM ancestors)
+      AND s.grantee_user_id = $1
+      AND s.revoked_at IS NULL
+      AND (s.expires_at IS NULL OR s.expires_at > now())
+) sa ON TRUE
+WHERE f.id = ANY($6::uuid[])
+  AND f.deleted_at IS NULL`,
+		requesterID,
+		SharePermissionReadDelete,
+		FileAccessOwner,
+		FileAccessSharedReadDelete,
+		FileAccessSharedRead,
+		normalized,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make(map[string]FileAccessContext, len(normalized))
+	for rows.Next() {
+		var item FileAccessContext
+		if err := rows.Scan(
+			&item.FileID,
+			&item.OwnerTelegramID,
+			&item.OwnerUsername,
+			&item.OwnerDisplayName,
+			&item.Access,
+			&item.CanDelete,
+		); err != nil {
+			return nil, err
+		}
+		result[item.FileID] = item
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return result, nil
 }
 
 func (s *Store) softDeleteMany(ctx context.Context, ownerID string, ids []string, now time.Time) error {
@@ -827,7 +1009,12 @@ WHERE id = $1`,
 	return nil
 }
 
-func (s *Store) CreateShare(ctx context.Context, ownerID string, fileID string, granteeTelegramID int64, expiresAt sql.NullTime) (Share, error) {
+func (s *Store) CreateShare(ctx context.Context, ownerID string, fileID string, granteeTelegramID int64, permission string, expiresAt sql.NullTime) (Share, error) {
+	permission = normalizeSharePermission(permission)
+	if permission == "" {
+		return Share{}, ErrInvalidPermission
+	}
+
 	file, err := s.GetByID(ctx, ownerID, fileID)
 	if err != nil {
 		return Share{}, err
@@ -856,7 +1043,8 @@ WHERE telegram_id = $1
 	err = s.db.QueryRowContext(ctx, `
 WITH updated AS (
     UPDATE file_shares
-    SET expires_at = $4,
+    SET permission = $4,
+        expires_at = $5,
         updated_at = now()
     WHERE file_id = $1
       AND owner_id = $2
@@ -866,7 +1054,7 @@ WITH updated AS (
 ),
 inserted AS (
     INSERT INTO file_shares (file_id, owner_id, grantee_user_id, permission, expires_at)
-    SELECT $1, $2, $3, 'read', $4
+    SELECT $1, $2, $3, $4, $5
     WHERE NOT EXISTS (SELECT 1 FROM updated)
     RETURNING id
 )
@@ -876,6 +1064,7 @@ SELECT id FROM inserted`,
 		fileID,
 		ownerID,
 		granteeID,
+		permission,
 		nullableTime(expiresAt),
 	).Scan(&shareID)
 	if err != nil {
@@ -1158,6 +1347,17 @@ func normalizeTelegramIDs(ids []int64) []int64 {
 		out = append(out, id)
 	}
 	return out
+}
+
+func normalizeSharePermission(permission string) string {
+	switch permission {
+	case "":
+		return SharePermissionRead
+	case SharePermissionRead, SharePermissionReadDelete:
+		return permission
+	default:
+		return ""
+	}
 }
 
 type rowScanner interface {

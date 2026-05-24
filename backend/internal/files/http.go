@@ -174,9 +174,14 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "file_list_failed")
 		return
 	}
+	responses, err := h.filesResponseForUser(r.Context(), user.ID, items)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "file_list_failed")
+		return
+	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"files": filesResponse(items),
+		"files": responses,
 	})
 }
 
@@ -192,9 +197,14 @@ func (h *Handler) ListSharedWithMe(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "shared_file_list_failed")
 		return
 	}
+	responses, err := h.filesResponseForUser(r.Context(), user.ID, items)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "shared_file_list_failed")
+		return
+	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"files": filesResponse(items),
+		"files": responses,
 	})
 }
 
@@ -260,7 +270,11 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	response := fileResponse(file)
+	response, err := h.fileResponseForUser(r.Context(), user.ID, file)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "file_details_failed")
+		return
+	}
 	if file.Type == TypeFile {
 		partCount, err := h.store.CountFileParts(r.Context(), file.ID)
 		if err != nil {
@@ -337,9 +351,13 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err := h.store.SoftDelete(r.Context(), user.ID, id, time.Now().UTC())
+	err := h.store.SoftDeleteAccessible(r.Context(), user.ID, id, time.Now().UTC())
 	if errors.Is(err, ErrNotFound) {
 		writeError(w, http.StatusNotFound, "file_not_found")
+		return
+	}
+	if errors.Is(err, ErrForbidden) {
+		writeError(w, http.StatusForbidden, "file_delete_forbidden")
 		return
 	}
 	if err != nil {
@@ -574,10 +592,19 @@ func (h *Handler) CreateShare(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_expires_at")
 		return
 	}
+	permission := normalizeSharePermission(strings.TrimSpace(request.Permission))
+	if permission == "" {
+		writeError(w, http.StatusBadRequest, "invalid_share_permission")
+		return
+	}
 
-	share, err := h.store.CreateShare(r.Context(), user.ID, fileID, request.TelegramID, expiresAt)
+	share, err := h.store.CreateShare(r.Context(), user.ID, fileID, request.TelegramID, permission, expiresAt)
 	if errors.Is(err, ErrNotFound) {
 		writeError(w, http.StatusNotFound, "file_or_user_not_found")
+		return
+	}
+	if errors.Is(err, ErrInvalidPermission) {
+		writeError(w, http.StatusBadRequest, "invalid_share_permission")
 		return
 	}
 	if err != nil {
@@ -1017,6 +1044,7 @@ type bulkFilesRequest struct {
 
 type createShareRequest struct {
 	TelegramID int64  `json:"telegram_id"`
+	Permission string `json:"permission"`
 	ExpiresAt  string `json:"expires_at"`
 }
 
@@ -1049,6 +1077,35 @@ func normalizeFileIDs(ids []string) []string {
 	return out
 }
 
+func (h *Handler) filesResponseForUser(ctx context.Context, requesterID string, files []File) ([]map[string]any, error) {
+	out := make([]map[string]any, 0, len(files))
+	if len(files) == 0 {
+		return out, nil
+	}
+	fileIDs := make([]string, 0, len(files))
+	for _, file := range files {
+		fileIDs = append(fileIDs, file.ID)
+	}
+	accessByID, err := h.store.FileAccessContexts(ctx, requesterID, fileIDs)
+	if err != nil {
+		return nil, err
+	}
+	for _, file := range files {
+		access, ok := accessByID[file.ID]
+		out = append(out, fileResponseWithContext(file, requesterID, access, ok))
+	}
+	return out, nil
+}
+
+func (h *Handler) fileResponseForUser(ctx context.Context, requesterID string, file File) (map[string]any, error) {
+	accessByID, err := h.store.FileAccessContexts(ctx, requesterID, []string{file.ID})
+	if err != nil {
+		return nil, err
+	}
+	access, ok := accessByID[file.ID]
+	return fileResponseWithContext(file, requesterID, access, ok), nil
+}
+
 func filesResponse(files []File) []map[string]any {
 	out := make([]map[string]any, 0, len(files))
 	for _, file := range files {
@@ -1059,18 +1116,43 @@ func filesResponse(files []File) []map[string]any {
 
 func fileResponse(file File) map[string]any {
 	return map[string]any{
-		"id":              file.ID,
-		"owner_id":        file.OwnerID,
-		"parent_id":       nullableStringValue(file.ParentID),
-		"name":            nullableStringValue(file.NamePlain),
-		"mime_type":       nullableStringValue(file.MimeType),
-		"plaintext_size":  nullableInt64Value(file.PlaintextSize),
-		"ciphertext_size": nullableInt64Value(file.CiphertextSize),
-		"type":            file.Type,
-		"status":          file.Status,
-		"created_at":      file.CreatedAt,
-		"updated_at":      file.UpdatedAt,
+		"id":                 file.ID,
+		"owner_id":           file.OwnerID,
+		"owner_telegram_id":  nil,
+		"owner_username":     nil,
+		"owner_display_name": nil,
+		"parent_id":          nullableStringValue(file.ParentID),
+		"name":               nullableStringValue(file.NamePlain),
+		"mime_type":          nullableStringValue(file.MimeType),
+		"plaintext_size":     nullableInt64Value(file.PlaintextSize),
+		"ciphertext_size":    nullableInt64Value(file.CiphertextSize),
+		"type":               file.Type,
+		"status":             file.Status,
+		"access":             nil,
+		"can_delete":         nil,
+		"created_at":         file.CreatedAt,
+		"updated_at":         file.UpdatedAt,
 	}
+}
+
+func fileResponseWithContext(file File, requesterID string, access FileAccessContext, hasAccess bool) map[string]any {
+	response := fileResponse(file)
+	if hasAccess {
+		response["owner_telegram_id"] = access.OwnerTelegramID
+		response["owner_username"] = nullableStringValue(access.OwnerUsername)
+		response["owner_display_name"] = nullableStringValue(access.OwnerDisplayName)
+		response["access"] = access.Access
+		response["can_delete"] = access.CanDelete
+		return response
+	}
+	if file.OwnerID == requesterID {
+		response["access"] = FileAccessOwner
+		response["can_delete"] = true
+	} else {
+		response["access"] = FileAccessSharedRead
+		response["can_delete"] = false
+	}
+	return response
 }
 
 func publicFileResponse(file File, showChecksum bool) map[string]any {
