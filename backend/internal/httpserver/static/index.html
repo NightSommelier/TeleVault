@@ -447,6 +447,13 @@
     .queue-status {
       font-size: 12px;
     }
+    .queue-detail {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      font-size: 11px;
+      line-height: 1.35;
+      color: var(--muted);
+      overflow-wrap: anywhere;
+    }
     .queue-actions {
       display: flex;
       justify-content: flex-end;
@@ -998,7 +1005,7 @@
       uploadMonitorRunning: false,
       nextUploadQueueID: 1,
       appInfo: null,
-      uploadDebugAllowed: false,
+      uploadDebugAllowed: true,
       uploadDebugEnabled: false,
       uploadDebugLines: [],
       adminAccountLimits: [],
@@ -1156,12 +1163,23 @@
         invalid_download_limit_mode: 'Download limit mode must be hard or soft.',
         invalid_public_link_password: 'Public link password does not match current policy.',
         network_upload_failed: 'Network error while uploading part. Check proxy/body limits and retry.',
+        upload_part_network_failed: 'Network error while uploading part. Check proxy/body limits and retry.',
+        upload_part_canceled: 'Upload part request was canceled.',
+        upload_part_timeout: 'Upload part request timed out.',
+        upload_part_http_failed: 'Upload part request was rejected by the server or proxy.',
         telegram_mfa_required: 'Telegram two-step password required.',
         telegram_mfa_invalid: 'Incorrect Telegram two-step password.',
         telegram_code_invalid: 'Incorrect Telegram login code.',
         telegram_code_expired: 'Telegram login code expired. Send a new code.',
       };
       return mapped[key] || key;
+    }
+
+    function uploadHTTPErrorMessage(status, statusText, code) {
+      const normalizedStatus = Number(status) || 0;
+      const suffix = normalizedStatus > 0 ? ` (${normalizedStatus}${statusText ? ` ${statusText}` : ''})` : '';
+      if (code && code !== 'upload_part_http_failed') return `${humanizeError(code)}${suffix}`;
+      return `${humanizeError('upload_part_http_failed')}${suffix}`;
     }
 
     function getPublicLinkPasswordMinLength() {
@@ -1251,13 +1269,15 @@
         applyPublicLinkPasswordPolicy();
         const version = info && info.build && info.build.version ? info.build.version : '';
         el.appVersion.textContent = version ? `v${version}` : '';
-        state.uploadDebugAllowed = Boolean(info && info.debug);
-        setUploadDebugEnabled(state.uploadDebugAllowed);
+        state.uploadDebugAllowed = true;
+        const storedDebug = localStorage.getItem('tdv.uploadDebug') === '1';
+        const urlDebug = new URLSearchParams(window.location.search).get('upload_debug') === '1';
+        setUploadDebugEnabled(Boolean(info && info.debug) || storedDebug || urlDebug);
       } catch (_) {
         state.appInfo = null;
         applyPublicLinkPasswordPolicy();
-        state.uploadDebugAllowed = false;
-        setUploadDebugEnabled(false);
+        state.uploadDebugAllowed = true;
+        setUploadDebugEnabled(localStorage.getItem('tdv.uploadDebug') === '1');
       }
     }
 
@@ -2405,6 +2425,7 @@
               status: 'failed',
               message: uploadError.message,
               error: uploadError.message,
+              errorDetail: uploadError.detail || '',
             });
             setUploadStatus(`Failed: ${next.file.name} (${uploadError.message})`, true);
           }
@@ -2628,13 +2649,36 @@
           size: end - start,
         });
         let response;
+        let lastProgress = { loaded: 0, total: end - start };
+        let lastProgressBucket = -10;
+        const startedAt = Date.now();
+        const requestContext = {
+          upload_id: upload.id,
+          file_name: item.file.name,
+          part_number: part,
+          part_count: count,
+          part_size: end - start,
+          mode: payload.mode,
+          transport: 'xhr',
+        };
         try {
           response = await uploadPartXHR(`/uploads/${upload.id}/parts/${part}`, payload.body, {
             csrf: csrfToken(),
             abortHandle,
             onProgress: ({ loaded, total }) => {
+              lastProgress = { loaded, total };
               if (!total || total <= 0) return;
               const partPercent = Math.max(0, Math.min(100, Math.round((loaded / total) * 100)));
+              if (partPercent >= lastProgressBucket + 10 || partPercent === 100) {
+                lastProgressBucket = partPercent;
+                debugUpload('part:progress', {
+                  upload_id: upload.id,
+                  part,
+                  percent: partPercent,
+                  loaded,
+                  total,
+                });
+              }
               const partBase = (part - 1) / Math.max(count, 1);
               const overall = 5 + Math.round(((partBase + (partPercent / 100) / Math.max(count, 1)) * 45));
               updateQueueItem(item.id, {
@@ -2647,14 +2691,39 @@
         } catch (err) {
           updateQueueItem(item.id, { abortController: null });
           const networkError = normalizeUploadError(err);
+          networkError.detail = uploadErrorDetail({
+            ...requestContext,
+            status: err && Number.isFinite(Number(err.status)) ? Number(err.status) : 0,
+            status_text: err && err.statusText ? err.statusText : '',
+            error_code: err && err.code ? err.code : networkError.message,
+            message: err && err.message ? err.message : networkError.message,
+            loaded: lastProgress.loaded || 0,
+            total: lastProgress.total || end - start,
+            elapsed_ms: Date.now() - startedAt,
+          });
           debugUpload('part:xhr-error', {
             upload_id: upload.id,
             part,
             count,
             size: end - start,
+            status: err && err.status ? err.status : 0,
+            status_text: err && err.statusText ? err.statusText : '',
+            event: err && err.event ? err.event : '',
             name: networkError.name,
             message: networkError.message,
+            detail: networkError.detail,
             stack: networkError.stack || '',
+          });
+          await reportUploadClientEvent({
+            event: 'upload_part_transport_failed',
+            ...requestContext,
+            status: err && Number.isFinite(Number(err.status)) ? Number(err.status) : 0,
+            status_text: err && err.statusText ? err.statusText : '',
+            error_code: err && err.code ? err.code : networkError.message,
+            message: networkError.message,
+            loaded: lastProgress.loaded || 0,
+            total: lastProgress.total || end - start,
+            elapsed_ms: Date.now() - startedAt,
           });
           throw networkError;
         }
@@ -2667,9 +2736,35 @@
         });
         if (!response.ok && response.status !== 202) {
           const body = response.body || {};
-          const message = body.error || response.statusText || 'upload_part_failed';
-          debugUpload('part:error', { upload_id: upload.id, part, status: response.status, message });
-          throw new Error(message);
+          const code = body.error || 'upload_part_http_failed';
+          const message = uploadHTTPErrorMessage(response.status, response.statusText, code);
+          const err = new Error(message);
+          err.code = code;
+          err.status = response.status;
+          err.statusText = response.statusText || '';
+          err.detail = uploadErrorDetail({
+            ...requestContext,
+            status: response.status,
+            status_text: response.statusText || '',
+            error_code: code,
+            message,
+            loaded: lastProgress.loaded || 0,
+            total: lastProgress.total || end - start,
+            elapsed_ms: Date.now() - startedAt,
+          });
+          debugUpload('part:error', { upload_id: upload.id, part, status: response.status, message, detail: err.detail });
+          await reportUploadClientEvent({
+            event: 'upload_part_http_failed',
+            ...requestContext,
+            status: response.status,
+            status_text: response.statusText || '',
+            error_code: code,
+            message,
+            loaded: lastProgress.loaded || 0,
+            total: lastProgress.total || end - start,
+            elapsed_ms: Date.now() - startedAt,
+          });
+          throw err;
         }
       }
     }
@@ -2808,6 +2903,9 @@
       el.uploadQueue.innerHTML = state.uploadQueue.map((item) => {
         const statusClass = item.status === 'failed' ? 'error' : (item.status === 'complete' ? 'ok' : 'warn');
         const label = item.status === 'failed' ? (item.error || item.message || 'Failed') : item.message;
+        const detail = item.status === 'failed' && item.errorDetail
+          ? `<div class="queue-detail">${escapeHTML(item.errorDetail)}</div>`
+          : '';
         return `
           <div class="queue-item">
             <div class="queue-head">
@@ -2815,6 +2913,7 @@
               <div class="queue-meta">${formatBytes(item.file.size || 0)}</div>
             </div>
             <div class="queue-status"><span class="badge ${statusClass}">${escapeHTML(item.status)}</span> ${escapeHTML(label || '')}</div>
+            ${detail}
             <progress value="${Math.max(0, Math.min(100, Number(item.progress || 0)))}" max="100"></progress>
             ${queueItemActions(item)}
           </div>
@@ -2852,6 +2951,7 @@
         progress: 0,
         message: 'Waiting',
         error: '',
+        errorDetail: '',
         safeToClose: false,
         cancelRequested: false,
       });
@@ -2902,6 +3002,7 @@
 
     function setUploadDebugEnabled(enabled) {
       state.uploadDebugEnabled = state.uploadDebugAllowed && enabled;
+      localStorage.setItem('tdv.uploadDebug', state.uploadDebugEnabled ? '1' : '0');
       el.uploadDebugToggle.checked = state.uploadDebugEnabled;
       el.uploadDebugToggle.closest('label').classList.toggle('hidden', !state.uploadDebugAllowed);
       el.uploadDebugLog.classList.toggle('hidden', !state.uploadDebugEnabled);
@@ -2920,6 +3021,34 @@
       state.uploadDebugLines = state.uploadDebugLines.slice(0, 80);
       console.debug('[TeleVault upload]', line);
       renderUploadDebugLog();
+    }
+
+    async function reportUploadClientEvent(details) {
+      try {
+        debugUpload('client-event:send', details);
+        await api('/uploads/client-events', {
+          method: 'POST',
+          csrf: true,
+          body: JSON.stringify(details),
+        });
+      } catch (err) {
+        debugUpload('client-event:failed', {
+          upload_id: details && details.upload_id ? details.upload_id : '',
+          message: err && err.message ? err.message : 'client event failed',
+        });
+      }
+    }
+
+    function uploadErrorDetail(details) {
+      const parts = [];
+      if (details.upload_id) parts.push(`upload=${details.upload_id}`);
+      if (details.part_number) parts.push(`part=${details.part_number}/${details.part_count || '?'}`);
+      if (details.part_size) parts.push(`size=${formatBytes(details.part_size)}`);
+      if (details.status) parts.push(`status=${details.status}${details.status_text ? ` ${details.status_text}` : ''}`);
+      if (details.error_code) parts.push(`code=${details.error_code}`);
+      if (details.loaded || details.total) parts.push(`sent=${formatBytes(details.loaded || 0)}/${formatBytes(details.total || 0)}`);
+      if (details.elapsed_ms) parts.push(`elapsed=${Math.round(details.elapsed_ms / 1000)}s`);
+      return parts.join(' | ');
     }
 
     function renderUploadDebugLog() {
@@ -3041,7 +3170,7 @@
 
     function normalizeUploadError(err) {
       if (!err) return new Error('upload_failed');
-      if (err.message === 'upload_canceled' || err.name === 'AbortError') {
+      if (err.message === 'upload_canceled' || err.name === 'AbortError' || err.code === 'upload_part_canceled') {
         return new Error('upload_canceled');
       }
       if (err.message === 'network_upload_failed' || err.message === 'file_read_failed') {
@@ -3078,9 +3207,9 @@
           if (!onProgress) return;
           if (event && event.lengthComputable) onProgress({ loaded: event.loaded, total: event.total });
         };
-        xhr.onerror = () => reject(new Error('network_upload_failed'));
-        xhr.onabort = () => reject(new Error('upload_canceled'));
-        xhr.ontimeout = () => reject(new Error('network_upload_failed'));
+        xhr.onerror = () => reject(uploadXHRFailure('upload_part_network_failed', xhr, 'error'));
+        xhr.onabort = () => reject(uploadXHRFailure('upload_part_canceled', xhr, 'abort'));
+        xhr.ontimeout = () => reject(uploadXHRFailure('upload_part_timeout', xhr, 'timeout'));
         xhr.onload = () => {
           let parsed = null;
           const text = typeof xhr.responseText === 'string' ? xhr.responseText : '';
@@ -3098,6 +3227,15 @@
         };
         xhr.send(body);
       });
+    }
+
+    function uploadXHRFailure(code, xhr, eventName) {
+      const err = new Error(humanizeError(code));
+      err.code = code;
+      err.status = xhr && Number.isFinite(Number(xhr.status)) ? Number(xhr.status) : 0;
+      err.statusText = xhr && xhr.statusText ? xhr.statusText : '';
+      err.event = eventName;
+      return err;
     }
 
     function yieldToBrowser() {

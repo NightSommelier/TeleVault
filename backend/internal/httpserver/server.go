@@ -144,6 +144,7 @@ func (s *Server) routes() {
 	s.mux.Handle("POST /uploads/{id}/parts/{part_number}", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(uploadsHandler.UploadPart))))
 	s.mux.Handle("POST /uploads/{id}/complete", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(uploadsHandler.Complete))))
 	s.mux.Handle("DELETE /uploads/{id}", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(uploadsHandler.Cancel))))
+	s.mux.Handle("POST /uploads/client-events", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(uploadsHandler.ClientEvent))))
 
 	recoveryHandler := recovery.NewHandler(s.db, s.secrets)
 	s.mux.Handle("POST /recovery/export", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(recoveryHandler.Export))))
@@ -186,6 +187,7 @@ func (s *Server) mountStatic() {
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
 		http.ServeFileFS(w, r, staticRoot, "index.html")
 	})
 }

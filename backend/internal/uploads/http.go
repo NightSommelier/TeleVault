@@ -509,6 +509,54 @@ func (h *Handler) Cancel(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (h *Handler) ClientEvent(w http.ResponseWriter, r *http.Request) {
+	user, ok := auth.UserFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "missing_authenticated_user")
+		return
+	}
+
+	var event uploadClientEventRequest
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16*1024))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&event); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_json")
+		return
+	}
+
+	eventName := boundedString(event.Event, 80)
+	if eventName == "" {
+		writeError(w, http.StatusBadRequest, "upload_client_event_required")
+		return
+	}
+
+	if h.logger != nil {
+		h.logger.Warn("upload client event",
+			"user_id", user.ID,
+			"event", eventName,
+			"upload_id", boundedString(event.UploadID, 80),
+			"file_name", boundedString(event.FileName, 255),
+			"part_number", event.PartNumber,
+			"part_count", event.PartCount,
+			"part_size", event.PartSize,
+			"mode", boundedString(event.Mode, 40),
+			"transport", boundedString(event.Transport, 40),
+			"status", event.Status,
+			"status_text", boundedString(event.StatusText, 120),
+			"error_code", boundedString(event.ErrorCode, 120),
+			"message", boundedString(event.Message, 240),
+			"loaded", event.Loaded,
+			"total", event.Total,
+			"elapsed_ms", event.ElapsedMillis,
+			"user_agent", boundedString(r.UserAgent(), 255),
+		)
+	}
+
+	writeJSON(w, http.StatusAccepted, map[string]string{
+		"status": "logged",
+	})
+}
+
 type createUploadRequest struct {
 	Name           string `json:"name"`
 	ParentID       string `json:"parent_id"`
@@ -518,8 +566,34 @@ type createUploadRequest struct {
 	IdempotencyKey string `json:"idempotency_key"`
 }
 
+type uploadClientEventRequest struct {
+	Event         string `json:"event"`
+	UploadID      string `json:"upload_id"`
+	FileName      string `json:"file_name"`
+	PartNumber    int    `json:"part_number"`
+	PartCount     int    `json:"part_count"`
+	PartSize      int64  `json:"part_size"`
+	Mode          string `json:"mode"`
+	Transport     string `json:"transport"`
+	Status        int    `json:"status"`
+	StatusText    string `json:"status_text"`
+	ErrorCode     string `json:"error_code"`
+	Message       string `json:"message"`
+	Loaded        int64  `json:"loaded"`
+	Total         int64  `json:"total"`
+	ElapsedMillis int64  `json:"elapsed_ms"`
+}
+
 func normalizeName(name string) string {
 	return strings.TrimSpace(strings.ReplaceAll(name, "/", ""))
+}
+
+func boundedString(value string, limit int) string {
+	value = strings.TrimSpace(value)
+	if limit <= 0 || len(value) <= limit {
+		return value
+	}
+	return value[:limit]
 }
 
 func parseChecksum(value string) (string, []byte, error) {
