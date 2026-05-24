@@ -129,6 +129,30 @@ var publicLinkUnavailableTemplate = template.Must(template.New("public-link-unav
 </body>
 </html>`))
 
+var fileUnavailableTemplate = template.Must(template.New("file-unavailable").Parse(`<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>File unavailable - TeleVault</title>
+  <style>
+    body { margin: 0; font: 14px/1.45 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #1b1f24; background: #f7f8fa; }
+    main { min-height: 100vh; display: grid; place-items: center; padding: 24px; }
+    .panel { width: min(460px, 100%); background: #fff; border: 1px solid #d9dee7; border-radius: 8px; padding: 22px; box-shadow: 0 1px 2px rgba(16, 24, 40, .06); text-align: center; }
+    h1 { font-size: 18px; margin: 0 0 8px; }
+    p { color: #68707c; margin: 0; }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="panel">
+      <h1>File unavailable</h1>
+      <p>This file is unavailable or access is no longer active.</p>
+    </div>
+  </main>
+</body>
+</html>`))
+
 type Handler struct {
 	store         *Store
 	logger        *slog.Logger
@@ -788,6 +812,10 @@ func (h *Handler) Download(w http.ResponseWriter, r *http.Request) {
 
 	file, parts, telegramSession, err := h.store.DownloadData(r.Context(), user.ID, id)
 	if errors.Is(err, ErrNotFound) {
+		if acceptsHTML(r) {
+			h.writeFileUnavailablePage(w)
+			return
+		}
 		writeError(w, http.StatusNotFound, "file_not_found")
 		return
 	}
@@ -1370,6 +1398,12 @@ func (h *Handler) writePublicLinkUnavailablePage(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusNotFound)
 	_ = publicLinkUnavailableTemplate.Execute(w, nil)
+}
+
+func (h *Handler) writeFileUnavailablePage(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusNotFound)
+	_ = fileUnavailableTemplate.Execute(w, nil)
 }
 
 func formatPublicFileSize(size sql.NullInt64) string {

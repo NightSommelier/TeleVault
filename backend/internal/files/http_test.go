@@ -170,6 +170,29 @@ func TestWritePublicLinkPageWithChecksum(t *testing.T) {
 	}
 }
 
+func TestWriteFileUnavailablePage(t *testing.T) {
+	h := &Handler{}
+	w := httptest.NewRecorder()
+
+	h.writeFileUnavailablePage(w)
+
+	resp := w.Result()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusNotFound)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("ReadAll() error = %v", err)
+	}
+	text := string(body)
+	if !strings.Contains(text, "File unavailable") {
+		t.Fatalf("body does not contain unavailable title: %s", text)
+	}
+	if !strings.Contains(text, "access is no longer active") {
+		t.Fatalf("body does not contain unavailable details: %s", text)
+	}
+}
+
 func TestPublicFileResponseChecksumVisibility(t *testing.T) {
 	file := File{Checksum: []byte{0xca, 0xfe, 0xba, 0xbe}}
 	withChecksum := publicFileResponse(file, true)
