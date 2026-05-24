@@ -18,7 +18,7 @@ import (
 )
 
 func main() {
-	logger := applog.New(os.Getenv("LOG_LEVEL"))
+	logger := applog.NewFromEnv("migrate")
 
 	if len(os.Args) != 2 {
 		logger.Error("usage: migrate up|down|status")

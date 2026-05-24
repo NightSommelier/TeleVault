@@ -1155,6 +1155,7 @@
         invalid_max_downloads: 'Download limit must be a positive integer.',
         invalid_download_limit_mode: 'Download limit mode must be hard or soft.',
         invalid_public_link_password: 'Public link password does not match current policy.',
+        network_upload_failed: 'Network error while uploading part. Check proxy/body limits and retry.',
         telegram_mfa_required: 'Telegram two-step password required.',
         telegram_mfa_invalid: 'Incorrect Telegram two-step password.',
         telegram_code_invalid: 'Incorrect Telegram login code.',
@@ -2619,9 +2620,16 @@
         });
         const abortController = new AbortController();
         updateQueueItem(item.id, { abortController });
+        const payload = buildUploadBody(item.file, start, end);
+        debugUpload('part:send-mode', {
+          upload_id: upload.id,
+          part,
+          mode: payload.mode,
+          size: end - start,
+        });
         let response;
         try {
-          response = await fetch(`/uploads/${upload.id}/parts/${part}`, {
+          const requestOptions = {
             method: 'POST',
             credentials: 'same-origin',
             signal: abortController.signal,
@@ -2629,8 +2637,10 @@
               'Content-Type': 'application/octet-stream',
               'X-CSRF-Token': csrfToken(),
             },
-            body: item.file.slice(start, end),
-          });
+            body: payload.body,
+          };
+          if (payload.duplex) requestOptions.duplex = payload.duplex;
+          response = await fetch(`/uploads/${upload.id}/parts/${part}`, requestOptions);
         } catch (err) {
           updateQueueItem(item.id, { abortController: null });
           const networkError = normalizeUploadError(err);
@@ -3044,6 +3054,36 @@
         return err;
       }
       return new Error('upload_failed');
+    }
+
+    let uploadStreamingSupported;
+
+    function supportsStreamingUpload() {
+      if (typeof uploadStreamingSupported === 'boolean') return uploadStreamingSupported;
+      try {
+        const stream = new ReadableStream({
+          start(controller) {
+            controller.close();
+          },
+        });
+        const request = new Request('/uploads/probe', {
+          method: 'POST',
+          body: stream,
+          duplex: 'half',
+        });
+        uploadStreamingSupported = request.body === stream;
+      } catch (_) {
+        uploadStreamingSupported = false;
+      }
+      return uploadStreamingSupported;
+    }
+
+    function buildUploadBody(file, start, end) {
+      const blob = file.slice(start, end);
+      if (supportsStreamingUpload() && blob && typeof blob.stream === 'function') {
+        return { body: blob.stream(), mode: 'stream', duplex: 'half' };
+      }
+      return { body: blob, mode: 'blob' };
     }
 
     function yieldToBrowser() {

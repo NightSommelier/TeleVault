@@ -125,6 +125,7 @@ func (s *Server) routes() {
 	uploadsHandler := uploads.NewHandler(s.db, s.ageRecipient, telegramSessionCrypto, s.telegram, uploads.Settings{
 		PartSize:   s.cfg.UploadPartSizeBytes,
 		StagingDir: s.cfg.UploadStagingDir,
+		Logger:     s.logger,
 		EffectiveSettingsProvider: func(ctx context.Context, userID string) (uploads.EffectiveSettings, error) {
 			settings, err := adminSettingsStore.EffectiveUploadSettings(ctx, userID)
 			if err != nil {

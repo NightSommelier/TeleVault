@@ -1,7 +1,7 @@
 package buildinfo
 
 const (
-	generatedVersion = "0.3.0-dev.9+gffd54a8c5f74"
-	generatedCommit  = "ffd54a8c5f74"
-	generatedDate    = "2026-05-22T17:57:53+03:00"
+	generatedVersion = "0.3.0-dev.11+gf0d9835101ed"
+	generatedCommit  = "f0d9835101ed"
+	generatedDate    = "2026-05-24T12:38:11+03:00"
 )

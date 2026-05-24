@@ -8,6 +8,7 @@ import (
 	"errors"
 	"hash/fnv"
 	"io"
+	"log/slog"
 	"net/http"
 	"sort"
 	"strconv"
@@ -29,6 +30,7 @@ type Settings struct {
 	PartSize                  int64
 	StagingDir                string
 	EffectiveSettingsProvider func(context.Context, string) (EffectiveSettings, error)
+	Logger                    *slog.Logger
 }
 
 type EffectiveSettings struct {
@@ -46,6 +48,7 @@ type Handler struct {
 	settings      Settings
 	staging       *LocalSpool
 	now           func() time.Time
+	logger        *slog.Logger
 }
 
 func NewHandler(db *sql.DB, ageRecipient age.Recipient, sessionCrypto auth.TelegramSessionCrypto, telegram auth.TelegramStorageClient, settings Settings) *Handler {
@@ -65,6 +68,7 @@ func NewHandler(db *sql.DB, ageRecipient age.Recipient, sessionCrypto auth.Teleg
 		settings:      settings,
 		staging:       staging,
 		now:           time.Now,
+		logger:        settings.Logger,
 	}
 }
 
@@ -239,6 +243,15 @@ func (h *Handler) UploadPart(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "upload_part_size_invalid")
 		return
 	}
+	if h.logger != nil {
+		h.logger.Info("upload part receive start",
+			"upload_id", uploadID,
+			"part_number", partNumber,
+			"expected_plaintext_size", artifactSize,
+			"content_length", r.ContentLength,
+			"transfer_encoding", strings.Join(r.TransferEncoding, ","),
+		)
+	}
 
 	if h.staging != nil {
 		h.stageUploadPart(w, r, user.ID, uploadID, partNumber, upload, plannedPart, artifactSize, now)
@@ -356,6 +369,14 @@ func (h *Handler) stageUploadPart(w http.ResponseWriter, r *http.Request, ownerI
 		result = encrypted
 		return nil
 	}); err != nil {
+		if h.logger != nil {
+			h.logger.Warn("upload part stage failed",
+				"upload_id", uploadID,
+				"part_number", partNumber,
+				"storage_key", storageKey,
+				"error", err,
+			)
+		}
 		writeError(w, http.StatusInternalServerError, "part_stage_failed")
 		return
 	}

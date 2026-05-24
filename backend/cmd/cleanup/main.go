@@ -27,7 +27,12 @@ func main() {
 		logger.Error("configuration validation failed", "error", err)
 		os.Exit(1)
 	}
-	logger = applog.New(cfg.LogLevel)
+	logger = applog.New(cfg.LogLevel, applog.Options{
+		Component:  "cleanup",
+		FileDir:    cfg.LogFileDir,
+		MaxBytes:   cfg.LogFileMaxBytes,
+		MaxBackups: cfg.LogFileMaxBackups,
+	})
 	logger.Info("cleanup starting", "debug", cfg.AppDebug, "version", buildinfo.Version, "commit", buildinfo.Commit)
 
 	telegramSessionKey, err := secrets.ParseBase64Key(cfg.TelegramSessionKey)

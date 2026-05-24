@@ -36,6 +36,8 @@ services:
     command: ["migrate", "up"]
     env_file: .env
     restart: "no"
+    volumes:
+      - app-data:/data
     depends_on:
       postgres:
         condition: service_healthy

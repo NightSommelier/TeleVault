@@ -20,6 +20,8 @@ const (
 	DefaultTelegramDocumentLimitBytes int64 = 2 * 1024 * 1024 * 1024
 	DefaultUploadSafetyMarginBytes    int64 = 64 * 1024 * 1024
 	DefaultUploadStagingDir                 = "var/upload-staging"
+	DefaultLogFileMaxBytes            int64 = 100 * 1024 * 1024
+	DefaultLogFileMaxBackups                = 5
 
 	DefaultTelegramAuthIPLimitPerMinute      = 30
 	DefaultTelegramSendCodePhoneLimitPerHour = 5
@@ -32,6 +34,9 @@ type Config struct {
 	Env                 string
 	AppDebug            bool
 	LogLevel            string
+	LogFileDir          string
+	LogFileMaxBytes     int64
+	LogFileMaxBackups   int
 	HTTPAddr            string
 	DatabaseURL         string
 	ValkeyAddr          string
@@ -82,6 +87,7 @@ func Load() (Config, error) {
 		CookieSameSite:     getEnv("COOKIE_SAME_SITE", "Lax"),
 		ContainerRuntime:   parseBoolDefault(os.Getenv("TELEVAULT_CONTAINER"), false),
 		UploadStagingDir:   getEnv("UPLOAD_STAGING_DIR", DefaultUploadStagingDir),
+		LogFileDir:         strings.TrimSpace(os.Getenv("LOG_FILE_DIR")),
 	}
 	cfg.LogLevel = strings.ToLower(strings.TrimSpace(getEnv("LOG_LEVEL", defaultLogLevel(cfg.AppDebug))))
 
@@ -109,6 +115,12 @@ func Load() (Config, error) {
 	}
 	if cfg.PublicDownloadTokenLimitPerMinute, err = parseIntDefault(os.Getenv("PUBLIC_DOWNLOAD_TOKEN_LIMIT_PER_MINUTE"), DefaultPublicDownloadTokenLimitPerMinute); err != nil {
 		return Config{}, fmt.Errorf("PUBLIC_DOWNLOAD_TOKEN_LIMIT_PER_MINUTE must be an integer: %w", err)
+	}
+	if cfg.LogFileMaxBytes, err = parseInt64Default(os.Getenv("LOG_FILE_MAX_BYTES"), DefaultLogFileMaxBytes); err != nil {
+		return Config{}, fmt.Errorf("LOG_FILE_MAX_BYTES must be an integer: %w", err)
+	}
+	if cfg.LogFileMaxBackups, err = parseIntDefault(os.Getenv("LOG_FILE_MAX_BACKUPS"), DefaultLogFileMaxBackups); err != nil {
+		return Config{}, fmt.Errorf("LOG_FILE_MAX_BACKUPS must be an integer: %w", err)
 	}
 
 	cfg.CORSAllowedOrigins = splitCSV(os.Getenv("CORS_ALLOWED_ORIGINS"))
@@ -163,6 +175,14 @@ func (cfg Config) Validate() error {
 	case "debug", "info", "warn", "warning", "error":
 	default:
 		problems = append(problems, "LOG_LEVEL must be debug, info, warn, or error")
+	}
+	if cfg.LogFileDir != "" {
+		if cfg.LogFileMaxBytes <= 0 {
+			problems = append(problems, "LOG_FILE_MAX_BYTES must be greater than 0 when LOG_FILE_DIR is set")
+		}
+		if cfg.LogFileMaxBackups <= 0 {
+			problems = append(problems, "LOG_FILE_MAX_BACKUPS must be greater than 0 when LOG_FILE_DIR is set")
+		}
 	}
 
 	if cfg.DatabaseURL == "" {

@@ -28,7 +28,12 @@ func main() {
 		logger.Error("configuration validation failed", "error", err)
 		os.Exit(1)
 	}
-	logger = applog.New(cfg.LogLevel)
+	logger = applog.New(cfg.LogLevel, applog.Options{
+		Component:  "api",
+		FileDir:    cfg.LogFileDir,
+		MaxBytes:   cfg.LogFileMaxBytes,
+		MaxBackups: cfg.LogFileMaxBackups,
+	})
 
 	telegramSessionKey, err := secrets.ParseBase64Key(cfg.TelegramSessionKey)
 	if err != nil {
