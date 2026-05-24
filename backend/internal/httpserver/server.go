@@ -155,10 +155,20 @@ func (s *Server) routes() {
 }
 
 func (s *Server) appInfo(w http.ResponseWriter, r *http.Request) {
+	publicLinkPasswordMinLength := 8
+	if s.db != nil {
+		settings, err := adminsettings.NewStore(s.db, s.cfg).UploadSettings(r.Context())
+		if err != nil {
+			s.logger.Warn("app info upload settings lookup failed", "error", err)
+		} else if settings.PublicLinkPasswordMinLength >= 1 && settings.PublicLinkPasswordMinLength <= 1024 {
+			publicLinkPasswordMinLength = settings.PublicLinkPasswordMinLength
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"name":  "TeleVault",
-		"debug": s.cfg.AppDebug,
-		"build": buildinfo.Info(),
+		"name":                            "TeleVault",
+		"debug":                           s.cfg.AppDebug,
+		"build":                           buildinfo.Info(),
+		"public_link_password_min_length": publicLinkPasswordMinLength,
 	})
 }
 

@@ -1154,12 +1154,28 @@
         telegram_id_required: 'Telegram ID is required.',
         invalid_max_downloads: 'Download limit must be a positive integer.',
         invalid_download_limit_mode: 'Download limit mode must be hard or soft.',
+        invalid_public_link_password: 'Public link password does not match current policy.',
         telegram_mfa_required: 'Telegram two-step password required.',
         telegram_mfa_invalid: 'Incorrect Telegram two-step password.',
         telegram_code_invalid: 'Incorrect Telegram login code.',
         telegram_code_expired: 'Telegram login code expired. Send a new code.',
       };
       return mapped[key] || key;
+    }
+
+    function getPublicLinkPasswordMinLength() {
+      const raw = Number(state.appInfo && state.appInfo.public_link_password_min_length);
+      if (!Number.isFinite(raw)) return 8;
+      const normalized = Math.floor(raw);
+      if (normalized < 1) return 1;
+      if (normalized > 1024) return 1024;
+      return normalized;
+    }
+
+    function applyPublicLinkPasswordPolicy() {
+      const minLength = getPublicLinkPasswordMinLength();
+      el.publicPasswordInput.minLength = String(minLength);
+      el.publicPasswordInput.placeholder = `Optional, at least ${minLength} characters`;
     }
 
     function showApp(user) {
@@ -1231,11 +1247,14 @@
       try {
         const info = await api('/app-info');
         state.appInfo = info;
+        applyPublicLinkPasswordPolicy();
         const version = info && info.build && info.build.version ? info.build.version : '';
         el.appVersion.textContent = version ? `v${version}` : '';
         state.uploadDebugAllowed = Boolean(info && info.debug);
         setUploadDebugEnabled(state.uploadDebugAllowed);
       } catch (_) {
+        state.appInfo = null;
+        applyPublicLinkPasswordPolicy();
         state.uploadDebugAllowed = false;
         setUploadDebugEnabled(false);
       }
@@ -2162,6 +2181,12 @@
 
     async function createPublicLink() {
       if (!state.shareFile) return;
+      const password = String(el.publicPasswordInput.value || '').trim();
+      const minLength = getPublicLinkPasswordMinLength();
+      if (password && password.length < minLength) {
+        setShareStatus(`Password must be at least ${minLength} characters.`, true);
+        return;
+      }
       const rawDownloadLimit = String(el.publicDownloadLimitInput.value || '').trim();
       if (rawDownloadLimit !== '' && (!/^\d+$/.test(rawDownloadLimit) || Number(rawDownloadLimit) <= 0)) {
         setShareStatus('Download limit must be a positive integer.', true);
@@ -2174,7 +2199,7 @@
           csrf: true,
           body: JSON.stringify({
             expires_at: selectedExpiry(el.publicExpirySelect.value),
-            password: el.publicPasswordInput.value.trim() || undefined,
+            password: password || undefined,
             max_downloads: rawDownloadLimit === '' ? null : Number(rawDownloadLimit),
             download_limit_mode: el.publicDownloadLimitModeSelect.value || 'hard',
           }),
@@ -3346,6 +3371,9 @@
       el.adminRateInput.value = settings.target_upload_bytes_per_second || 0;
       el.adminCooldownInput.value = settings.cooldown_between_parts_ms || 0;
       el.adminPublicPasswordMinInput.value = settings.public_link_password_min_length || 8;
+      if (!state.appInfo) state.appInfo = {};
+      state.appInfo.public_link_password_min_length = Number(el.adminPublicPasswordMinInput.value) || 8;
+      applyPublicLinkPasswordPolicy();
     }
 
     function adminNumber(input, name) {
@@ -3378,7 +3406,11 @@
           csrf: true,
           body: JSON.stringify(payload),
         });
-        fillAdminUploadSettings(data.upload_settings || payload);
+        const saved = data.upload_settings || payload;
+        fillAdminUploadSettings(saved);
+        if (!state.appInfo) state.appInfo = {};
+        state.appInfo.public_link_password_min_length = saved.public_link_password_min_length;
+        applyPublicLinkPasswordPolicy();
         setAdminStatus('Upload policy saved.');
       } catch (err) {
         setAdminStatus(err.message, true);
