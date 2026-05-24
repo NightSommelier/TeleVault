@@ -1201,6 +1201,7 @@
         upload_part_canceled: 'Upload part request was canceled.',
         upload_part_timeout: 'Upload part request timed out.',
         upload_part_http_failed: 'Upload part request was rejected by the server or proxy.',
+        upload_resume_file_required: 'Select the same local file to resume this upload.',
         telegram_mfa_required: 'Telegram two-step password required.',
         telegram_mfa_invalid: 'Incorrect Telegram two-step password.',
         telegram_code_invalid: 'Incorrect Telegram login code.',
@@ -2522,11 +2523,21 @@
         setUploadStatus('Switch to Own files to upload.', true);
         return;
       }
-      enqueueFiles(files, state.currentFolderId || '');
+      const entries = normalizeUploadEntries(files, state.currentFolderId || '');
+      const attached = attachFilesToPendingResumes(entries);
+      if (attached.unmatched.length) enqueueFiles(attached.unmatched, state.currentFolderId || '');
       el.fileInput.value = '';
       state.droppedFiles = [];
       updateDropZone();
-      setUploadStatus(`Queued ${files.length} file${files.length === 1 ? '' : 's'}.`);
+      const queued = attached.unmatched.length;
+      const resumed = attached.resumed;
+      if (queued && resumed) {
+        setUploadStatus(`Queued ${queued} file${queued === 1 ? '' : 's'}, resumed ${resumed}.`);
+      } else if (queued) {
+        setUploadStatus(`Queued ${queued} file${queued === 1 ? '' : 's'}.`);
+      } else {
+        setUploadStatus(`Resumed ${resumed} file${resumed === 1 ? '' : 's'}.`);
+      }
       runUploadQueue();
     }
 
@@ -2534,17 +2545,92 @@
       return state.droppedFiles.length ? state.droppedFiles : Array.from(el.fileInput.files || []);
     }
 
-    function enqueueFiles(files, parentID) {
-      for (const entry of files) {
+    function queueFileMeta(file) {
+      if (!file) return { name: 'Upload', size: 0, type: '', lastModified: 0 };
+      return {
+        name: typeof file.name === 'string' ? file.name : 'Upload',
+        size: Number.isFinite(Number(file.size)) ? Number(file.size) : 0,
+        type: typeof file.type === 'string' ? file.type : '',
+        lastModified: Number.isFinite(Number(file.lastModified)) ? Number(file.lastModified) : 0,
+      };
+    }
+
+    function uploadFingerprint(file, parentID, displayPath) {
+      const meta = queueFileMeta(file);
+      return {
+        name: meta.name,
+        size: meta.size,
+        lastModified: meta.lastModified,
+        parentID: parentID || '',
+        displayPath: displayPath || '',
+      };
+    }
+
+    function sameUploadFingerprint(left, right) {
+      if (!left || !right) return false;
+      return (
+        String(left.name || '') === String(right.name || '') &&
+        Number(left.size || 0) === Number(right.size || 0) &&
+        Number(left.lastModified || 0) === Number(right.lastModified || 0) &&
+        String(left.parentID || '') === String(right.parentID || '') &&
+        String(left.displayPath || '') === String(right.displayPath || '')
+      );
+    }
+
+    function normalizeUploadEntries(files, parentID) {
+      return files.map((entry) => {
         const file = entry && entry.file ? entry.file : entry;
-        const resolvedParentID = entry && typeof entry.parentID === 'string' ? entry.parentID : parentID;
-        const displayPath = entry && typeof entry.displayPath === 'string' ? entry.displayPath : '';
-        if (!file) continue;
+        return {
+          file,
+          parentID: entry && typeof entry.parentID === 'string' ? entry.parentID : (parentID || ''),
+          displayPath: entry && typeof entry.displayPath === 'string' ? entry.displayPath : '',
+        };
+      }).filter((entry) => entry.file);
+    }
+
+    function attachFilesToPendingResumes(entries) {
+      let resumed = 0;
+      const unmatched = [];
+      for (const entry of entries) {
+        const fingerprint = uploadFingerprint(entry.file, entry.parentID, entry.displayPath);
+        const item = state.uploadQueue.find((candidate) => (
+          candidate &&
+          candidate.fileMissing &&
+          candidate.status === 'needs_file' &&
+          sameUploadFingerprint(candidate.resumeFingerprint, fingerprint)
+        ));
+        if (!item) {
+          unmatched.push(entry);
+          continue;
+        }
+        resumed += 1;
+        updateQueueItem(item.id, {
+          file: entry.file,
+          parentID: entry.parentID || '',
+          displayPath: entry.displayPath || '',
+          fileMissing: false,
+          safeToClose: false,
+          progress: 0,
+          status: 'queued',
+          message: item.uploadID ? 'Resuming upload...' : 'Waiting',
+          error: '',
+          errorDetail: '',
+          resumeFingerprint: fingerprint,
+        });
+      }
+      return { resumed, unmatched };
+    }
+
+    function enqueueFiles(files, parentID) {
+      const normalized = normalizeUploadEntries(files, parentID);
+      for (const entry of normalized) {
+        const meta = queueFileMeta(entry.file);
+        const fingerprint = uploadFingerprint(entry.file, entry.parentID, entry.displayPath);
         state.uploadQueue.push({
           id: state.nextUploadQueueID,
-          file,
-          parentID: resolvedParentID || '',
-          displayPath,
+          file: entry.file,
+          parentID: entry.parentID || '',
+          displayPath: entry.displayPath || '',
           status: 'queued',
           progress: 0,
           message: 'Waiting',
@@ -2552,10 +2638,15 @@
           safeToClose: false,
           cancelRequested: false,
           abortController: null,
+          fileMissing: false,
+          mimeType: meta.type || 'application/octet-stream',
+          lastModified: meta.lastModified || 0,
+          resumeFingerprint: fingerprint,
           createIdempotencyKey: newUploadIdempotencyKey(),
         });
         state.nextUploadQueueID += 1;
       }
+      persistUploadQueueState();
       renderUploadQueue();
     }
 
@@ -2572,7 +2663,7 @@
       state.uploadQueueRunning = true;
       try {
         while (true) {
-          const next = state.uploadQueue.find((item) => item.status === 'queued');
+          const next = state.uploadQueue.find((item) => item.status === 'queued' && !item.fileMissing);
           if (!next) break;
           try {
             await uploadQueueItem(next);
@@ -2585,6 +2676,18 @@
               message: uploadError.message,
               stack: uploadError.stack || '',
             });
+            if (uploadError.message === 'upload_resume_file_required') {
+              updateQueueItem(next.id, {
+                status: 'needs_file',
+                message: 'Resume available. Select the same file and click Upload.',
+                error: '',
+                errorDetail: '',
+                safeToClose: true,
+                fileMissing: true,
+              });
+              setUploadStatus(`Resume paused: ${next.file.name}`, true);
+              continue;
+            }
             updateQueueItem(next.id, {
               status: 'failed',
               message: uploadError.message,
@@ -2600,6 +2703,9 @@
     }
 
     async function uploadQueueItem(item) {
+      if (item.fileMissing) {
+        throw new Error('upload_resume_file_required');
+      }
       debugUpload('upload:start', {
         file: item.file.name,
         size: item.file.size,
@@ -2607,34 +2713,41 @@
         mime_type: item.file.type || 'application/octet-stream',
       });
       if (item.cancelRequested) throw new Error('upload_canceled');
-      updateQueueItem(item.id, { status: 'hashing', progress: 1, message: 'Hashing...' });
-      const checksum = await sha256Hex(item.file, ({ loaded, total }) => {
-        if (item.cancelRequested) throw new Error('upload_canceled');
-        const percent = total > 0 ? Math.max(1, Math.round((loaded / total) * 4)) : 1;
-        updateQueueItem(item.id, {
-          status: 'hashing',
-          progress: percent,
-          message: `Hashing ${formatBytes(loaded)} / ${formatBytes(total)}`,
+      let created;
+      if (item.uploadID) {
+        updateQueueItem(item.id, { status: 'staging', progress: 5, message: 'Resuming upload...' });
+        const resumed = await api(`/uploads/${item.uploadID}`);
+        created = { upload: resumed.upload };
+      } else {
+        updateQueueItem(item.id, { status: 'hashing', progress: 1, message: 'Hashing...' });
+        const checksum = await sha256Hex(item.file, ({ loaded, total }) => {
+          if (item.cancelRequested) throw new Error('upload_canceled');
+          const percent = total > 0 ? Math.max(1, Math.round((loaded / total) * 4)) : 1;
+          updateQueueItem(item.id, {
+            status: 'hashing',
+            progress: percent,
+            message: `Hashing ${formatBytes(loaded)} / ${formatBytes(total)}`,
+          });
         });
-      });
-      if (item.cancelRequested) throw new Error('upload_canceled');
-      debugUpload('upload:hash-complete', {
-        file: item.file.name,
-        checksum_prefix: checksum.slice(0, 12),
-      });
-      updateQueueItem(item.id, { status: 'staging', progress: 5, message: 'Creating upload...' });
-      const created = await api('/uploads', {
-        method: 'POST',
-        csrf: true,
-        body: JSON.stringify({
-          name: item.file.name,
-          parent_id: item.parentID || undefined,
-          mime_type: item.file.type || 'application/octet-stream',
-          plaintext_size: item.file.size,
-          checksum,
-          idempotency_key: item.createIdempotencyKey || newUploadIdempotencyKey(),
-        }),
-      });
+        if (item.cancelRequested) throw new Error('upload_canceled');
+        debugUpload('upload:hash-complete', {
+          file: item.file.name,
+          checksum_prefix: checksum.slice(0, 12),
+        });
+        updateQueueItem(item.id, { status: 'staging', progress: 5, message: 'Creating upload...' });
+        created = await api('/uploads', {
+          method: 'POST',
+          csrf: true,
+          body: JSON.stringify({
+            name: item.file.name,
+            parent_id: item.parentID || undefined,
+            mime_type: item.file.type || 'application/octet-stream',
+            plaintext_size: item.file.size,
+            checksum,
+            idempotency_key: item.createIdempotencyKey || newUploadIdempotencyKey(),
+          }),
+        });
+      }
       debugUpload('upload:created', {
         upload_id: created.upload.id,
         part_size: created.upload.part_size,
@@ -2645,6 +2758,7 @@
       updateQueueItem(item.id, {
         uploadID: created.upload.id,
         uploadCreatedAt: created.upload.created_at || new Date().toISOString(),
+        fileMissing: false,
       });
       await uploadParts(created.upload, item);
       if (item.cancelRequested) throw new Error('upload_canceled');
@@ -2704,16 +2818,23 @@
     }
 
     function persistUploadQueueState() {
-      const durable = state.uploadQueue.filter((item) => item.uploadID && item.safeToClose && !['complete', 'failed'].includes(item.status)).map((item) => ({
+      const durable = state.uploadQueue.filter((item) => !['complete', 'failed'].includes(item.status)).map((item) => ({
         id: item.id,
-        uploadID: item.uploadID,
+        uploadID: item.uploadID || '',
+        createIdempotencyKey: item.createIdempotencyKey || '',
         name: item.file && item.file.name ? item.file.name : 'Upload',
         size: item.file && Number.isFinite(Number(item.file.size)) ? Number(item.file.size) : 0,
+        mimeType: item.mimeType || (item.file && item.file.type) || 'application/octet-stream',
+        lastModified: Number.isFinite(Number(item.lastModified)) ? Number(item.lastModified) : Number(item.file && item.file.lastModified) || 0,
         parentID: item.parentID || '',
+        displayPath: item.displayPath || '',
         status: item.status,
-        progress: item.progress || 50,
-        message: item.message || 'Server/worker can continue.',
+        progress: Number(item.progress) || 0,
+        message: item.message || '',
         uploadCreatedAt: item.uploadCreatedAt || null,
+        safeToClose: Boolean(item.safeToClose),
+        fileMissing: Boolean(item.fileMissing),
+        resumeFingerprint: item.resumeFingerprint || null,
       }));
       localStorage.setItem('tdv.uploadQueue', JSON.stringify(durable));
     }
@@ -2722,21 +2843,47 @@
       try {
         const saved = JSON.parse(localStorage.getItem('tdv.uploadQueue') || '[]');
         if (!Array.isArray(saved)) return;
-        const restored = saved.filter((item) => item && typeof item.uploadID === 'string' && item.uploadID).map((item) => ({
+        const restored = saved.filter((item) => item).map((item) => {
+          const safeToClose = Boolean(item.safeToClose);
+          const hasUploadID = typeof item.uploadID === 'string' && item.uploadID;
+          const fileMissing = !safeToClose;
+          const displayPath = typeof item.displayPath === 'string' ? item.displayPath : '';
+          const parentID = typeof item.parentID === 'string' ? item.parentID : '';
+          const fingerprint = item.resumeFingerprint || {
+            name: typeof item.name === 'string' ? item.name : 'Upload',
+            size: Number(item.size) || 0,
+            lastModified: Number(item.lastModified) || 0,
+            parentID,
+            displayPath,
+          };
+          return {
           id: Number(item.id) || state.nextUploadQueueID++,
-          uploadID: item.uploadID,
+          uploadID: hasUploadID ? item.uploadID : '',
+          createIdempotencyKey: typeof item.createIdempotencyKey === 'string' ? item.createIdempotencyKey : newUploadIdempotencyKey(),
           uploadCreatedAt: item.uploadCreatedAt || null,
           file: {
             name: typeof item.name === 'string' && item.name ? item.name : 'Upload',
             size: Number(item.size) || 0,
+            type: typeof item.mimeType === 'string' ? item.mimeType : 'application/octet-stream',
+            lastModified: Number(item.lastModified) || 0,
           },
-          parentID: typeof item.parentID === 'string' ? item.parentID : '',
-          status: item.status === 'completing' ? 'completing' : 'telegram',
-          progress: Number(item.progress) || 50,
-          message: typeof item.message === 'string' && item.message ? item.message : 'Restored. Server/worker can continue.',
+          mimeType: typeof item.mimeType === 'string' ? item.mimeType : 'application/octet-stream',
+          lastModified: Number(item.lastModified) || 0,
+          parentID,
+          displayPath,
+          status: safeToClose ? (item.status === 'completing' ? 'completing' : 'telegram') : 'needs_file',
+          progress: safeToClose ? (Number(item.progress) || 50) : 0,
+          message: safeToClose
+            ? (typeof item.message === 'string' && item.message ? item.message : 'Restored. Server/worker can continue.')
+            : 'Resume available. Select the same file and click Upload.',
           error: '',
-          safeToClose: true,
-        }));
+          safeToClose: safeToClose || fileMissing,
+          fileMissing,
+          cancelRequested: false,
+          abortController: null,
+          resumeFingerprint: fingerprint,
+        };
+        });
         state.uploadQueue = restored;
         const maxID = restored.reduce((max, item) => Math.max(max, item.id), 0);
         state.nextUploadQueueID = Math.max(state.nextUploadQueueID, maxID + 1);
@@ -2751,7 +2898,11 @@
       state.uploadMonitorRunning = true;
       try {
         while (true) {
-          const item = state.uploadQueue.find((entry) => entry.uploadID && entry.safeToClose && !['complete', 'failed'].includes(entry.status));
+          const item = state.uploadQueue.find((entry) => (
+            entry.uploadID &&
+            entry.safeToClose &&
+            (entry.status === 'telegram' || entry.status === 'completing')
+          ));
           if (!item) break;
           try {
             await monitorServerUpload(item);
@@ -2834,145 +2985,187 @@
           mode: payload.mode,
           transport: 'xhr',
         };
-        try {
-          const onProgress = ({ loaded, total, chunkIndex, chunkCount }) => {
-            lastProgress = { loaded, total };
-            if (!total || total <= 0) return;
-            const partPercent = Math.max(0, Math.min(100, Math.round((loaded / total) * 100)));
-            if (partPercent >= lastProgressBucket + 10 || partPercent === 100) {
-              lastProgressBucket = partPercent;
-              debugUpload('part:progress', {
-                upload_id: upload.id,
-                part,
-                percent: partPercent,
-                loaded,
-                total,
-                chunk: chunkIndex || null,
-                chunks: chunkCount || null,
-              });
-            }
-            const partBase = (part - 1) / Math.max(count, 1);
-            const overall = 5 + Math.round(((partBase + (partPercent / 100) / Math.max(count, 1)) * 45));
-            const chunkSuffix = chunkIndex && chunkCount ? ` chunk ${chunkIndex}/${chunkCount}` : '';
-            updateQueueItem(item.id, {
-              status: 'staging',
-              progress: overall,
-              message: `Staging part ${part}/${count}${chunkSuffix} (${partPercent}%)`,
-            });
-          };
-          if (useChunkedTransport) {
-            response = await uploadPartChunked(upload.id, part, item.file, start, end, {
-              csrf: csrfToken(),
-              abortHandle,
-              chunkSize: transportChunkSize,
-              onProgress,
-            });
-          } else {
-            response = await uploadPartXHR(`/uploads/${upload.id}/parts/${part}`, payload.body, {
-              csrf: csrfToken(),
-              abortHandle,
-              onProgress,
-            });
-          }
-        } catch (err) {
-          updateQueueItem(item.id, { abortController: null });
-          const networkError = normalizeUploadError(err);
-          networkError.detail = uploadErrorDetail({
-            ...requestContext,
-            status: err && Number.isFinite(Number(err.status)) ? Number(err.status) : 0,
-            status_text: err && err.statusText ? err.statusText : '',
-            error_code: err && err.code ? err.code : networkError.message,
-            message: err && err.message ? err.message : networkError.message,
-            loaded: lastProgress.loaded || 0,
-            total: lastProgress.total || end - start,
-            elapsed_ms: Date.now() - startedAt,
-          });
-          debugUpload('part:xhr-error', {
-            upload_id: upload.id,
-            part,
-            count,
-            size: end - start,
-            status: err && err.status ? err.status : 0,
-            status_text: err && err.statusText ? err.statusText : '',
-            event: err && err.event ? err.event : '',
-            name: networkError.name,
-            message: networkError.message,
-            detail: networkError.detail,
-            stack: networkError.stack || '',
-          });
-          await reportUploadClientEvent({
-            event: 'upload_part_transport_failed',
-            ...requestContext,
-            status: err && Number.isFinite(Number(err.status)) ? Number(err.status) : 0,
-            status_text: err && err.statusText ? err.statusText : '',
-            error_code: err && err.code ? err.code : networkError.message,
-            message: networkError.message,
-            loaded: lastProgress.loaded || 0,
-            total: lastProgress.total || end - start,
-            elapsed_ms: Date.now() - startedAt,
-          });
-          const recovered = await recoverUploadPartProgress(upload.id, part);
-          if (recovered.accepted) {
-            debugUpload('part:recovered-after-transport-failure', {
+        const onProgress = ({ loaded, total, chunkIndex, chunkCount }) => {
+          lastProgress = { loaded, total };
+          if (!total || total <= 0) return;
+          const partPercent = Math.max(0, Math.min(100, Math.round((loaded / total) * 100)));
+          if (partPercent >= lastProgressBucket + 10 || partPercent === 100) {
+            lastProgressBucket = partPercent;
+            debugUpload('part:progress', {
               upload_id: upload.id,
               part,
-              next_part_number: recovered.nextPartNumber || null,
-              upload_status: recovered.status || null,
+              percent: partPercent,
+              loaded,
+              total,
+              chunk: chunkIndex || null,
+              chunks: chunkCount || null,
             });
-            continue;
           }
-          throw networkError;
-        }
-        updateQueueItem(item.id, { abortController: null });
-        debugUpload('part:response', {
-          upload_id: upload.id,
-          part,
-          status: response.status,
-          ok: response.ok,
-        });
-        if (!response.ok && response.status !== 202) {
-          const body = response.body || {};
-          const code = body.error || 'upload_part_http_failed';
-          const message = uploadHTTPErrorMessage(response.status, response.statusText, code);
-          if (response.status === 409 && code === 'upload_part_out_of_order') {
+          const partBase = (part - 1) / Math.max(count, 1);
+          const overall = 5 + Math.round(((partBase + (partPercent / 100) / Math.max(count, 1)) * 45));
+          const chunkSuffix = chunkIndex && chunkCount ? ` chunk ${chunkIndex}/${chunkCount}` : '';
+          updateQueueItem(item.id, {
+            status: 'staging',
+            progress: overall,
+            message: `Staging part ${part}/${count}${chunkSuffix} (${partPercent}%)`,
+          });
+        };
+        let attempt = 1;
+        while (true) {
+          try {
+            if (useChunkedTransport) {
+              response = await uploadPartChunked(upload.id, part, item.file, start, end, {
+                csrf: csrfToken(),
+                abortHandle,
+                chunkSize: transportChunkSize,
+                onProgress,
+              });
+            } else {
+              response = await uploadPartXHR(`/uploads/${upload.id}/parts/${part}`, payload.body, {
+                csrf: csrfToken(),
+                abortHandle,
+                onProgress,
+              });
+            }
+          } catch (err) {
+            const networkError = normalizeUploadError(err);
+            if (isRetryableUploadTransportError(err) && attempt < uploadPartMaxAttempts()) {
+              const delayMs = uploadPartRetryDelayMS(attempt);
+              debugUpload('part:retry-transport', {
+                upload_id: upload.id,
+                part,
+                attempt,
+                next_attempt: attempt + 1,
+                retry_ms: delayMs,
+                message: networkError.message,
+              });
+              updateQueueItem(item.id, {
+                status: 'staging',
+                message: `Retrying part ${part}/${count} after transport error (attempt ${attempt + 1}/${uploadPartMaxAttempts()})`,
+              });
+              await delay(delayMs);
+              attempt += 1;
+              continue;
+            }
+            updateQueueItem(item.id, { abortController: null });
+            networkError.detail = uploadErrorDetail({
+              ...requestContext,
+              status: err && Number.isFinite(Number(err.status)) ? Number(err.status) : 0,
+              status_text: err && err.statusText ? err.statusText : '',
+              error_code: err && err.code ? err.code : networkError.message,
+              message: err && err.message ? err.message : networkError.message,
+              loaded: lastProgress.loaded || 0,
+              total: lastProgress.total || end - start,
+              elapsed_ms: Date.now() - startedAt,
+            });
+            debugUpload('part:xhr-error', {
+              upload_id: upload.id,
+              part,
+              count,
+              size: end - start,
+              status: err && err.status ? err.status : 0,
+              status_text: err && err.statusText ? err.statusText : '',
+              event: err && err.event ? err.event : '',
+              name: networkError.name,
+              message: networkError.message,
+              detail: networkError.detail,
+              stack: networkError.stack || '',
+            });
+            await reportUploadClientEvent({
+              event: 'upload_part_transport_failed',
+              ...requestContext,
+              status: err && Number.isFinite(Number(err.status)) ? Number(err.status) : 0,
+              status_text: err && err.statusText ? err.statusText : '',
+              error_code: err && err.code ? err.code : networkError.message,
+              message: networkError.message,
+              loaded: lastProgress.loaded || 0,
+              total: lastProgress.total || end - start,
+              elapsed_ms: Date.now() - startedAt,
+            });
             const recovered = await recoverUploadPartProgress(upload.id, part);
             if (recovered.accepted) {
-              debugUpload('part:recovered-after-out-of-order', {
+              debugUpload('part:recovered-after-transport-failure', {
                 upload_id: upload.id,
                 part,
                 next_part_number: recovered.nextPartNumber || null,
                 upload_status: recovered.status || null,
               });
+              break;
+            }
+            throw networkError;
+          }
+          updateQueueItem(item.id, { abortController: null });
+          debugUpload('part:response', {
+            upload_id: upload.id,
+            part,
+            status: response.status,
+            ok: response.ok,
+            attempt,
+          });
+          if (!response.ok && response.status !== 202) {
+            const body = response.body || {};
+            const code = body.error || 'upload_part_http_failed';
+            const message = uploadHTTPErrorMessage(response.status, response.statusText, code);
+            if (response.status === 409 && code === 'upload_part_out_of_order') {
+              const recovered = await recoverUploadPartProgress(upload.id, part);
+              if (recovered.accepted) {
+                debugUpload('part:recovered-after-out-of-order', {
+                  upload_id: upload.id,
+                  part,
+                  next_part_number: recovered.nextPartNumber || null,
+                  upload_status: recovered.status || null,
+                });
+                break;
+              }
+            }
+            if (isRetryableUploadHTTPStatus(response.status) && attempt < uploadPartMaxAttempts()) {
+              const delayMs = uploadPartRetryDelayMS(attempt);
+              debugUpload('part:retry-http', {
+                upload_id: upload.id,
+                part,
+                attempt,
+                next_attempt: attempt + 1,
+                retry_ms: delayMs,
+                status: response.status,
+                error_code: code,
+              });
+              updateQueueItem(item.id, {
+                status: 'staging',
+                message: `Retrying part ${part}/${count} after server error ${response.status} (attempt ${attempt + 1}/${uploadPartMaxAttempts()})`,
+              });
+              await delay(delayMs);
+              attempt += 1;
               continue;
             }
+            const err = new Error(message);
+            err.code = code;
+            err.status = response.status;
+            err.statusText = response.statusText || '';
+            err.detail = uploadErrorDetail({
+              ...requestContext,
+              status: response.status,
+              status_text: response.statusText || '',
+              error_code: code,
+              message,
+              loaded: lastProgress.loaded || 0,
+              total: lastProgress.total || end - start,
+              elapsed_ms: Date.now() - startedAt,
+            });
+            debugUpload('part:error', { upload_id: upload.id, part, status: response.status, message, detail: err.detail });
+            await reportUploadClientEvent({
+              event: 'upload_part_http_failed',
+              ...requestContext,
+              status: response.status,
+              status_text: response.statusText || '',
+              error_code: code,
+              message,
+              loaded: lastProgress.loaded || 0,
+              total: lastProgress.total || end - start,
+              elapsed_ms: Date.now() - startedAt,
+            });
+            throw err;
           }
-          const err = new Error(message);
-          err.code = code;
-          err.status = response.status;
-          err.statusText = response.statusText || '';
-          err.detail = uploadErrorDetail({
-            ...requestContext,
-            status: response.status,
-            status_text: response.statusText || '',
-            error_code: code,
-            message,
-            loaded: lastProgress.loaded || 0,
-            total: lastProgress.total || end - start,
-            elapsed_ms: Date.now() - startedAt,
-          });
-          debugUpload('part:error', { upload_id: upload.id, part, status: response.status, message, detail: err.detail });
-          await reportUploadClientEvent({
-            event: 'upload_part_http_failed',
-            ...requestContext,
-            status: response.status,
-            status_text: response.statusText || '',
-            error_code: code,
-            message,
-            loaded: lastProgress.loaded || 0,
-            total: lastProgress.total || end - start,
-            elapsed_ms: Date.now() - startedAt,
-          });
-          throw err;
+          break;
         }
       }
     }
@@ -2982,6 +3175,29 @@
       if (!Number.isInteger(nextPartNumber) || nextPartNumber < 1) return 1;
       if (nextPartNumber > count + 1) return count + 1;
       return nextPartNumber;
+    }
+
+    function uploadPartMaxAttempts() {
+      return 3;
+    }
+
+    function uploadPartRetryDelayMS(attempt) {
+      const current = Math.max(1, Number(attempt) || 1);
+      return Math.min(5000, 600 * current);
+    }
+
+    function isRetryableUploadHTTPStatus(status) {
+      return [500, 502, 503, 504].includes(Number(status));
+    }
+
+    function isRetryableUploadTransportError(err) {
+      if (!err) return false;
+      const code = String(err.code || '').trim();
+      return (
+        code === 'upload_part_network_failed' ||
+        code === 'upload_part_timeout' ||
+        code === 'network_upload_failed'
+      );
     }
 
     async function recoverUploadPartProgress(uploadID, partNumber) {
@@ -3116,6 +3332,13 @@
     }
 
     function queueItemActions(item) {
+      if (item.status === 'needs_file') {
+        return `
+          <div class="queue-actions">
+            <button data-queue-remove="${item.id}">Remove</button>
+          </div>
+        `;
+      }
       if (item.status === 'failed') {
         return `
           <div class="queue-actions">
@@ -3192,22 +3415,27 @@
     function retryQueueItem(id) {
       const item = state.uploadQueue.find((entry) => String(entry.id) === String(id));
       if (!item || item.status !== 'failed') return;
+      const resumeNeedsFile = Boolean(item.fileMissing);
       updateQueueItem(item.id, {
-        status: 'queued',
+        status: resumeNeedsFile ? 'needs_file' : 'queued',
         progress: 0,
-        message: 'Waiting',
+        message: resumeNeedsFile ? 'Resume available. Select the same file and click Upload.' : 'Waiting',
         error: '',
         errorDetail: '',
-        safeToClose: false,
+        safeToClose: resumeNeedsFile,
         cancelRequested: false,
       });
-      setUploadStatus(`Retry queued: ${item.file.name}`);
+      if (resumeNeedsFile) {
+        setUploadStatus(`Select the same file to resume: ${item.file.name}`, true);
+      } else {
+        setUploadStatus(`Retry queued: ${item.file.name}`);
+      }
       runUploadQueue();
     }
 
     function removeQueueItem(id) {
       const item = state.uploadQueue.find((entry) => String(entry.id) === String(id));
-      if (!item || (item.status !== 'complete' && item.status !== 'failed')) return;
+      if (!item || !['complete', 'failed', 'needs_file'].includes(item.status)) return;
       state.uploadQueue = state.uploadQueue.filter((entry) => String(entry.id) !== String(id));
       persistUploadQueueState();
       renderUploadQueue();
@@ -3488,7 +3716,8 @@
       const chunkCount = Math.max(1, Math.ceil(total / chunkSize));
       let offset = 0;
       let response = null;
-      for (let index = 0; index < chunkCount; index += 1) {
+      while (offset < total) {
+        const index = Math.floor(offset / chunkSize);
         const chunkStart = start + offset;
         const chunkEnd = Math.min(end, chunkStart + chunkSize);
         const final = chunkEnd >= end;
@@ -3519,10 +3748,31 @@
             }
           },
         });
-        if (!response.ok && response.status !== 202) return response;
+        if (!response.ok && response.status !== 202) {
+          const body = response.body || {};
+          if (response.status === 409 && body.error === 'upload_chunk_offset_mismatch') {
+            const expectedOffset = Number(body.expected_offset);
+            if (Number.isFinite(expectedOffset) && expectedOffset >= 0 && expectedOffset <= total && expectedOffset !== offset) {
+              debugUpload('part:chunk-resume-offset', {
+                upload_id: uploadID,
+                part: partNumber,
+                expected_offset: expectedOffset,
+                previous_offset: offset,
+              });
+              offset = expectedOffset;
+              continue;
+            }
+          }
+          return response;
+        }
         const body = response.body || {};
         const nextOffset = Number(body.next_offset);
-        offset = Number.isFinite(nextOffset) && nextOffset >= offset ? nextOffset : chunkEnd - start;
+        const fallbackOffset = chunkEnd - start;
+        if (Number.isFinite(nextOffset) && nextOffset > offset && nextOffset <= total) {
+          offset = nextOffset;
+        } else {
+          offset = fallbackOffset;
+        }
       }
       return response || {
         ok: false,
@@ -3818,7 +4068,7 @@
 
     async function enqueueDroppedStructure(dataTransfer, parentID) {
       const uploads = await collectDroppedUploads(dataTransfer);
-      if (!uploads.length) return 0;
+      if (!uploads.length) return { queued: 0, resumed: 0 };
       const folderCache = new Map();
       const queueEntries = [];
       for (const upload of uploads) {
@@ -3830,8 +4080,9 @@
           displayPath: upload.pathParts.join('/'),
         });
       }
-      enqueueFiles(queueEntries, parentID || '');
-      return queueEntries.length;
+      const attached = attachFilesToPendingResumes(queueEntries);
+      if (attached.unmatched.length) enqueueFiles(attached.unmatched, parentID || '');
+      return { queued: attached.unmatched.length, resumed: attached.resumed };
     }
 
     function setAdminStatus(message, error = false) {
@@ -4085,15 +4336,21 @@
       event.preventDefault();
       el.dropZone.classList.remove('dragging');
       try {
-        const queued = await enqueueDroppedStructure(event.dataTransfer, state.currentFolderId || '');
-        if (!queued) {
+        const result = await enqueueDroppedStructure(event.dataTransfer, state.currentFolderId || '');
+        if (!result.queued && !result.resumed) {
           acceptDroppedFiles(event.dataTransfer.files);
           return;
         }
         state.droppedFiles = [];
         el.fileInput.value = '';
         updateDropZone();
-        setUploadStatus(`Queued ${queued} file${queued === 1 ? '' : 's'}.`);
+        if (result.queued && result.resumed) {
+          setUploadStatus(`Queued ${result.queued} file${result.queued === 1 ? '' : 's'}, resumed ${result.resumed}.`);
+        } else if (result.queued) {
+          setUploadStatus(`Queued ${result.queued} file${result.queued === 1 ? '' : 's'}.`);
+        } else {
+          setUploadStatus(`Resumed ${result.resumed} file${result.resumed === 1 ? '' : 's'}.`);
+        }
         runUploadQueue();
       } catch (err) {
         setUploadStatus(normalizeUploadError(err).message, true);
@@ -4114,9 +4371,15 @@
       event.preventDefault();
       el.filePanel.classList.remove('dragging');
       try {
-        const queued = await enqueueDroppedStructure(event.dataTransfer, state.currentFolderId || '');
-        if (!queued) return;
-        setUploadStatus(`Queued ${queued} file${queued === 1 ? '' : 's'} for this folder.`);
+        const result = await enqueueDroppedStructure(event.dataTransfer, state.currentFolderId || '');
+        if (!result.queued && !result.resumed) return;
+        if (result.queued && result.resumed) {
+          setUploadStatus(`Queued ${result.queued} file${result.queued === 1 ? '' : 's'} for this folder, resumed ${result.resumed}.`);
+        } else if (result.queued) {
+          setUploadStatus(`Queued ${result.queued} file${result.queued === 1 ? '' : 's'} for this folder.`);
+        } else {
+          setUploadStatus(`Resumed ${result.resumed} file${result.resumed === 1 ? '' : 's'} for this folder.`);
+        }
         runUploadQueue();
       } catch (err) {
         setUploadStatus(normalizeUploadError(err).message, true);
