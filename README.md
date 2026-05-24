@@ -105,3 +105,7 @@ TeleVault does not provide hosting/storage infrastructure; users connect their o
 ## Contributing
 
 See [CONTRIBUTING.md](./CONTRIBUTING.md) for coding style, issue guidance, pull request expectations, and security disclosure handling.
+
+## Roadmap
+
+See [ROADMAP.md](./ROADMAP.md) for the public product direction and next milestones.
