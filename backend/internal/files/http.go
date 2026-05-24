@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"database/sql"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"html/template"
@@ -48,6 +49,9 @@ var publicLinkPageTemplate = template.Must(template.New("public-link").Parse(`<!
     .panel { width: min(460px, 100%); background: #fff; border: 1px solid #d9dee7; border-radius: 8px; padding: 22px; box-shadow: 0 1px 2px rgba(16, 24, 40, .06); text-align: center; }
     h1 { font-size: 18px; margin: 0 0 6px; overflow-wrap: anywhere; }
     .muted { color: #68707c; margin: 0 0 14px; }
+    .hash { color: #475467; font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; margin: -6px 0 14px; overflow-wrap: anywhere; }
+    .hash-row { display: flex; gap: 8px; justify-content: center; align-items: center; flex-wrap: wrap; }
+    .copy-hash { min-height: 28px; width: auto; padding: 0 10px; border-color: #98a2b3; background: #fff; color: #344054; font-size: 12px; }
     .error { color: #b42318; background: #fef3f2; border: 1px solid #fecdca; border-radius: 6px; padding: 8px 10px; margin: 0 0 12px; text-align: left; }
     form { display: grid; gap: 10px; width: 100%; }
     input { min-height: 40px; width: 100%; box-sizing: border-box; padding: 0 12px; border: 1px solid #d9dee7; border-radius: 6px; font: inherit; }
@@ -59,6 +63,14 @@ var publicLinkPageTemplate = template.Must(template.New("public-link").Parse(`<!
     <div class="panel">
       <h1>{{.Name}}</h1>
       <div class="muted">{{.Size}}</div>
+      {{if .ChecksumShort}}
+      <div class="hash">
+        <div class="hash-row">
+          <span title="{{.ChecksumFull}}">SHA-256: {{.ChecksumShort}}</span>
+          <button id="copyHashBtn" class="copy-hash" type="button" data-full-hash="{{.ChecksumFull}}">Copy</button>
+        </div>
+      </div>
+      {{end}}
       {{if .PasswordError}}
       <div class="error">{{.PasswordError}}</div>
       {{end}}
@@ -72,6 +84,23 @@ var publicLinkPageTemplate = template.Must(template.New("public-link").Parse(`<!
       {{end}}
     </div>
   </main>
+  <script>
+    (function () {
+      const button = document.getElementById('copyHashBtn');
+      if (!button) return;
+      button.addEventListener('click', async function () {
+        const full = button.getAttribute('data-full-hash') || '';
+        if (!full) return;
+        try {
+          await navigator.clipboard.writeText(full);
+          button.textContent = 'Copied';
+        } catch (_) {
+          button.textContent = full;
+        }
+        setTimeout(function () { button.textContent = 'Copy'; }, 1200);
+      });
+    }());
+  </script>
 </body>
 </html>`))
 
@@ -620,7 +649,7 @@ func (h *Handler) CreatePublicLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	link, err := h.store.CreatePublicLink(r.Context(), user.ID, fileID, tokenHash, expiresAt, maxDownloads, downloadLimitMode, password)
+	link, err := h.store.CreatePublicLink(r.Context(), user.ID, fileID, tokenHash, expiresAt, maxDownloads, downloadLimitMode, request.ShowChecksum, password)
 	if errors.Is(err, ErrNotFound) {
 		writeError(w, http.StatusNotFound, "file_not_found")
 		return
@@ -732,7 +761,7 @@ func (h *Handler) PublicMetadata(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"file":              fileResponse(file),
+		"file":              publicFileResponse(file, link.ShowChecksum),
 		"password_required": link.PasswordRequired,
 	})
 }
@@ -945,6 +974,7 @@ type createPublicLinkRequest struct {
 	Password          string `json:"password"`
 	MaxDownloads      *int64 `json:"max_downloads"`
 	DownloadLimitMode string `json:"download_limit_mode"`
+	ShowChecksum      bool   `json:"show_checksum"`
 }
 
 func normalizeName(name string) string {
@@ -992,6 +1022,16 @@ func fileResponse(file File) map[string]any {
 	}
 }
 
+func publicFileResponse(file File, showChecksum bool) map[string]any {
+	response := fileResponse(file)
+	if showChecksum && len(file.Checksum) > 0 {
+		response["checksum"] = hex.EncodeToString(file.Checksum)
+	} else {
+		response["checksum"] = nil
+	}
+	return response
+}
+
 func sharesResponse(shares []Share) []map[string]any {
 	out := make([]map[string]any, 0, len(shares))
 	for _, share := range shares {
@@ -1037,6 +1077,7 @@ func publicLinkResponse(link PublicLink) map[string]any {
 		"download_count":        link.DownloadCount,
 		"active_download_count": link.ActiveDownloadCount,
 		"download_limit_mode":   link.DownloadLimitMode,
+		"show_checksum":         link.ShowChecksum,
 		"password_required":     link.PasswordRequired,
 		"created_at":            link.CreatedAt,
 		"updated_at":            link.UpdatedAt,
@@ -1172,6 +1213,8 @@ func (h *Handler) writePublicLinkPageWithError(w http.ResponseWriter, r *http.Re
 		"Token":            token,
 		"Name":             name,
 		"Size":             formatPublicFileSize(file.PlaintextSize),
+		"ChecksumShort":    publicChecksumShort(file, link),
+		"ChecksumFull":     publicChecksumFull(file, link),
 		"PasswordRequired": link.PasswordRequired,
 		"PasswordError":    passwordError,
 	})
@@ -1198,6 +1241,24 @@ func formatPublicFileSize(size sql.NullInt64) string {
 		return strconv.FormatInt(size.Int64, 10) + " B"
 	}
 	return strconv.FormatFloat(value, 'f', 1, 64) + " " + unit
+}
+
+func publicChecksumShort(file File, link PublicLink) string {
+	full := publicChecksumFull(file, link)
+	if full == "" {
+		return ""
+	}
+	if len(full) <= 12 {
+		return full
+	}
+	return full[:12] + "..."
+}
+
+func publicChecksumFull(file File, link PublicLink) string {
+	if !link.ShowChecksum || len(file.Checksum) == 0 {
+		return ""
+	}
+	return hex.EncodeToString(file.Checksum)
 }
 
 func nullableStringValue(value sql.NullString) any {

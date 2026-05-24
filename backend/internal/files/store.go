@@ -31,6 +31,7 @@ type File struct {
 	MimeType       sql.NullString
 	PlaintextSize  sql.NullInt64
 	CiphertextSize sql.NullInt64
+	Checksum       []byte
 	Type           string
 	Status         string
 	CreatedAt      time.Time
@@ -80,6 +81,7 @@ type PublicLink struct {
 	DownloadCount          int64
 	ActiveDownloadCount    int64
 	DownloadLimitMode      string
+	ShowChecksum           bool
 	PasswordRequired       bool
 	PasswordKDF            sql.NullString
 	PasswordSalt           []byte
@@ -492,8 +494,8 @@ func (s *Store) DownloadDataForPublicFile(ctx context.Context, file File) (File,
 
 func (s *Store) PublicFileByTokenHash(ctx context.Context, tokenHash []byte) (File, PublicLink, error) {
 	row := s.db.QueryRowContext(ctx, `
-SELECT f.id, f.owner_id, f.parent_id, f.name_plain, f.mime_type, f.plaintext_size, f.ciphertext_size, f.type, f.status, f.created_at, f.updated_at,
-       l.id, l.file_id, l.owner_id, l.permission, l.expires_at, l.revoked_at, l.max_downloads, l.download_count, l.active_download_count, l.download_limit_mode, (l.password_hash IS NOT NULL),
+SELECT f.id, f.owner_id, f.parent_id, f.name_plain, f.mime_type, f.plaintext_size, f.ciphertext_size, f.type, f.status, f.checksum, f.created_at, f.updated_at,
+       l.id, l.file_id, l.owner_id, l.permission, l.expires_at, l.revoked_at, l.max_downloads, l.download_count, l.active_download_count, l.download_limit_mode, l.show_checksum, (l.password_hash IS NOT NULL),
        l.password_kdf, l.password_salt, l.password_hash, l.password_argon_time, l.password_argon_memory_kib, l.password_argon_threads,
        l.created_at, l.updated_at
 FROM public_links l
@@ -592,7 +594,7 @@ WHERE id = TRUE`,
 	return value, nil
 }
 
-func (s *Store) CreatePublicLink(ctx context.Context, ownerID string, fileID string, tokenHash []byte, expiresAt sql.NullTime, maxDownloads sql.NullInt64, downloadLimitMode string, password PublicLinkPassword) (PublicLink, error) {
+func (s *Store) CreatePublicLink(ctx context.Context, ownerID string, fileID string, tokenHash []byte, expiresAt sql.NullTime, maxDownloads sql.NullInt64, downloadLimitMode string, showChecksum bool, password PublicLinkPassword) (PublicLink, error) {
 	file, err := s.GetByID(ctx, ownerID, fileID)
 	if err != nil {
 		return PublicLink{}, err
@@ -611,6 +613,7 @@ INSERT INTO public_links (
     expires_at,
     max_downloads,
     download_limit_mode,
+    show_checksum,
     password_kdf,
     password_salt,
     password_hash,
@@ -618,7 +621,7 @@ INSERT INTO public_links (
     password_argon_memory_kib,
     password_argon_threads
 )
-VALUES ($1, $2, $3, 'read', $4, $5, $6, $7, $8, $9, $10, $11, $12)
+VALUES ($1, $2, $3, 'read', $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 RETURNING id`,
 		fileID,
 		ownerID,
@@ -626,6 +629,7 @@ RETURNING id`,
 		nullableTime(expiresAt),
 		nullableInt64(maxDownloads),
 		nullableDownloadLimitMode(downloadLimitMode),
+		showChecksum,
 		nullablePasswordString(password.KDF),
 		nullablePasswordBytes(password.Salt),
 		nullablePasswordBytes(password.Hash),
@@ -642,7 +646,7 @@ RETURNING id`,
 
 func (s *Store) GetPublicLink(ctx context.Context, ownerID string, fileID string, linkID string) (PublicLink, error) {
 	link, err := scanPublicLink(s.db.QueryRowContext(ctx, `
-SELECT id, file_id, owner_id, permission, expires_at, revoked_at, max_downloads, download_count, active_download_count, download_limit_mode, (password_hash IS NOT NULL),
+SELECT id, file_id, owner_id, permission, expires_at, revoked_at, max_downloads, download_count, active_download_count, download_limit_mode, show_checksum, (password_hash IS NOT NULL),
        password_kdf, password_salt, password_hash, password_argon_time, password_argon_memory_kib, password_argon_threads,
        created_at, updated_at
 FROM public_links
@@ -668,7 +672,7 @@ func (s *Store) ListPublicLinks(ctx context.Context, ownerID string, fileID stri
 	}
 
 	rows, err := s.db.QueryContext(ctx, `
-SELECT id, file_id, owner_id, permission, expires_at, revoked_at, max_downloads, download_count, active_download_count, download_limit_mode, (password_hash IS NOT NULL),
+SELECT id, file_id, owner_id, permission, expires_at, revoked_at, max_downloads, download_count, active_download_count, download_limit_mode, show_checksum, (password_hash IS NOT NULL),
        password_kdf, password_salt, password_hash, password_argon_time, password_argon_memory_kib, password_argon_threads,
        created_at, updated_at
 FROM public_links
@@ -745,12 +749,13 @@ WITH claimed AS (
 	RETURNING id, file_id, owner_id, permission, expires_at, revoked_at, max_downloads, download_count,
 	          active_download_count,
 	          download_limit_mode,
+	          show_checksum,
 	          (password_hash IS NOT NULL) AS password_required, password_kdf, password_salt, password_hash, password_argon_time, password_argon_memory_kib,
 	          password_argon_threads, created_at, updated_at
 )
-SELECT f.id, f.owner_id, f.parent_id, f.name_plain, f.mime_type, f.plaintext_size, f.ciphertext_size, f.type, f.status, f.created_at, f.updated_at,
+SELECT f.id, f.owner_id, f.parent_id, f.name_plain, f.mime_type, f.plaintext_size, f.ciphertext_size, f.type, f.status, f.checksum, f.created_at, f.updated_at,
        c.id, c.file_id, c.owner_id, c.permission, c.expires_at, c.revoked_at, c.max_downloads, c.download_count, c.active_download_count, c.download_limit_mode,
-       c.password_required, c.password_kdf, c.password_salt, c.password_hash, c.password_argon_time, c.password_argon_memory_kib, c.password_argon_threads, c.created_at, c.updated_at
+       c.show_checksum, c.password_required, c.password_kdf, c.password_salt, c.password_hash, c.password_argon_time, c.password_argon_memory_kib, c.password_argon_threads, c.created_at, c.updated_at
 FROM claimed c
 JOIN files f ON f.id = c.file_id
 WHERE f.deleted_at IS NULL`,
@@ -1068,6 +1073,7 @@ func scanFile(row rowScanner) (File, error) {
 		&file.CiphertextSize,
 		&file.Type,
 		&file.Status,
+		&file.Checksum,
 		&file.CreatedAt,
 		&file.UpdatedAt,
 	)
@@ -1112,6 +1118,7 @@ func scanPublicLink(row rowScanner) (PublicLink, error) {
 		&link.DownloadCount,
 		&link.ActiveDownloadCount,
 		&link.DownloadLimitMode,
+		&link.ShowChecksum,
 		&link.PasswordRequired,
 		&link.PasswordKDF,
 		&link.PasswordSalt,
@@ -1141,6 +1148,7 @@ func scanFileAndPublicLink(row rowScanner) (File, PublicLink, error) {
 		&file.CiphertextSize,
 		&file.Type,
 		&file.Status,
+		&file.Checksum,
 		&file.CreatedAt,
 		&file.UpdatedAt,
 		&link.ID,
@@ -1153,6 +1161,7 @@ func scanFileAndPublicLink(row rowScanner) (File, PublicLink, error) {
 		&link.DownloadCount,
 		&link.ActiveDownloadCount,
 		&link.DownloadLimitMode,
+		&link.ShowChecksum,
 		&link.PasswordRequired,
 		&link.PasswordKDF,
 		&link.PasswordSalt,

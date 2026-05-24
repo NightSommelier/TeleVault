@@ -1,6 +1,7 @@
 package files
 
 import (
+	"encoding/hex"
 	"database/sql"
 	"io"
 	"net/http"
@@ -126,5 +127,44 @@ func TestWritePublicLinkPageWithError(t *testing.T) {
 	}
 	if !strings.Contains(text, `action="/public/token/download"`) {
 		t.Fatalf("body does not contain download form action: %s", text)
+	}
+}
+
+func TestWritePublicLinkPageWithChecksum(t *testing.T) {
+	h := &Handler{}
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/public/token", nil)
+	file := File{
+		NamePlain:      sql.NullString{String: "report.zip", Valid: true},
+		PlaintextSize:  sql.NullInt64{Int64: 1024, Valid: true},
+		CiphertextSize: sql.NullInt64{Int64: 1200, Valid: true},
+		Checksum:       []byte{0xde, 0xad, 0xbe, 0xef},
+	}
+	link := PublicLink{ShowChecksum: true}
+	h.writePublicLinkPageWithError(w, r, "token", file, link, http.StatusOK, "")
+
+	body, err := io.ReadAll(w.Result().Body)
+	if err != nil {
+		t.Fatalf("ReadAll() error = %v", err)
+	}
+	text := string(body)
+	if !strings.Contains(text, "SHA-256: deadbeef") {
+		t.Fatalf("body does not contain checksum text: %s", text)
+	}
+	if !strings.Contains(text, `data-full-hash="deadbeef"`) {
+		t.Fatalf("body does not contain full checksum data attribute: %s", text)
+	}
+}
+
+func TestPublicFileResponseChecksumVisibility(t *testing.T) {
+	file := File{Checksum: []byte{0xca, 0xfe, 0xba, 0xbe}}
+	withChecksum := publicFileResponse(file, true)
+	withoutChecksum := publicFileResponse(file, false)
+	expected := hex.EncodeToString(file.Checksum)
+	if got, _ := withChecksum["checksum"].(string); got != expected {
+		t.Fatalf("publicFileResponse(show=true) checksum = %q, want %q", got, expected)
+	}
+	if withoutChecksum["checksum"] != nil {
+		t.Fatalf("publicFileResponse(show=false) checksum = %v, want nil", withoutChecksum["checksum"])
 	}
 }

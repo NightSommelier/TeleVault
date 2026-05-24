@@ -793,6 +793,9 @@
               <option value="soft">Soft</option>
             </select>
           </div>
+          <div class="field">
+            <label><input id="publicShowChecksumInput" type="checkbox"> Show SHA-256 on public page</label>
+          </div>
           <div id="publicLinkResult" class="copy-field hidden">
             <input id="publicLinkInput" type="text" readonly>
             <button id="copyPublicLinkBtn">Copy</button>
@@ -800,7 +803,7 @@
           <table class="table compact-table">
             <thead>
               <tr>
-                <th>Created</th>
+                <th>Link created</th>
                 <th>Expires</th>
                 <th>Downloads</th>
                 <th></th>
@@ -1072,6 +1075,7 @@
       publicPasswordInput: document.getElementById('publicPasswordInput'),
       publicDownloadLimitInput: document.getElementById('publicDownloadLimitInput'),
       publicDownloadLimitModeSelect: document.getElementById('publicDownloadLimitModeSelect'),
+      publicShowChecksumInput: document.getElementById('publicShowChecksumInput'),
       copyPublicLinkBtn: document.getElementById('copyPublicLinkBtn'),
       publicLinksBody: document.getElementById('publicLinksBody'),
       moveModal: document.getElementById('moveModal'),
@@ -2223,12 +2227,14 @@
             password: password || undefined,
             max_downloads: rawDownloadLimit === '' ? null : Number(rawDownloadLimit),
             download_limit_mode: el.publicDownloadLimitModeSelect.value || 'hard',
+            show_checksum: Boolean(el.publicShowChecksumInput.checked),
           }),
         });
         el.publicLinkInput.value = data.url || '';
         el.publicPasswordInput.value = '';
         el.publicDownloadLimitInput.value = '';
         el.publicDownloadLimitModeSelect.value = 'hard';
+        el.publicShowChecksumInput.checked = false;
         el.publicLinkResult.classList.remove('hidden');
         setShareStatus('Public link created.');
         await refreshPublicLinks();
@@ -2247,7 +2253,7 @@
       el.publicLinksBody.innerHTML = links.map((link) => `
         <tr>
           <td>${escapeHTML(new Date(link.created_at).toLocaleString())}</td>
-          <td>${link.expires_at ? escapeHTML(new Date(link.expires_at).toLocaleString()) : 'No limit'}${link.password_required ? ' + password' : ''}</td>
+          <td>${link.expires_at ? escapeHTML(new Date(link.expires_at).toLocaleString()) : 'No limit'}${link.password_required ? ' + password' : ''}${link.show_checksum ? ' + SHA-256' : ''}</td>
           <td>${Number.isInteger(link.max_downloads) ? `${link.download_count || 0} / ${link.max_downloads}${link.download_limit_mode === 'hard' && Number.isInteger(link.active_download_count) && link.active_download_count > 0 ? ` (${link.active_download_count} active)` : ''}` : 'Unlimited'}${link.download_limit_mode ? ` (${escapeHTML(String(link.download_limit_mode))})` : ''}</td>
           <td><button data-revoke-public-link="${link.id}">Revoke</button></td>
         </tr>
@@ -2282,8 +2288,7 @@
       rows.push(['Access', accessLabel]);
       rows.push(['Size', file.type === 'file' ? formatBytes(file.plaintext_size || 0) : '-']);
       rows.push(['MIME', file.type === 'file' ? (file.mime_type || '-') : '-']);
-      rows.push(['Created', file.created_at ? new Date(file.created_at).toLocaleString() : '-']);
-      rows.push(['Updated', file.updated_at ? new Date(file.updated_at).toLocaleString() : '-']);
+      rows.push([file.type === 'file' ? 'Uploaded' : 'Created', file.created_at ? new Date(file.created_at).toLocaleString() : '-']);
       rows.push(['Part count', file.type === 'file' ? formatPartCount(file.part_count) : '-']);
       if (file.type === 'file') {
         const activity = state.detailsDownloadActivity;

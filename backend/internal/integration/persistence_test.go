@@ -237,11 +237,11 @@ func TestFilesUploadsPersistenceOwnerIsolationAndCompletion(t *testing.T) {
 	if partCount != 2 {
 		t.Fatalf("CountFileParts() = %d, want 2", partCount)
 	}
-	plainLink, err := fileStore.CreatePublicLink(ctx, owner.ID, file.ID, []byte("plain-token"), sql.NullTime{}, sql.NullInt64{}, files.PublicDownloadLimitModeHard, files.PublicLinkPassword{})
+	plainLink, err := fileStore.CreatePublicLink(ctx, owner.ID, file.ID, []byte("plain-token"), sql.NullTime{}, sql.NullInt64{}, files.PublicDownloadLimitModeHard, false, files.PublicLinkPassword{})
 	if err != nil {
 		t.Fatalf("CreatePublicLink(plain) error = %v", err)
 	}
-	passwordLink, err := fileStore.CreatePublicLink(ctx, owner.ID, file.ID, []byte("password-token"), sql.NullTime{}, sql.NullInt64{}, files.PublicDownloadLimitModeHard, files.PublicLinkPassword{
+	passwordLink, err := fileStore.CreatePublicLink(ctx, owner.ID, file.ID, []byte("password-token"), sql.NullTime{}, sql.NullInt64{}, files.PublicDownloadLimitModeHard, false, files.PublicLinkPassword{
 		KDF:            "argon2id",
 		Salt:           []byte("password-salt-1234"),
 		Hash:           []byte("password-hash-abc"),
@@ -328,7 +328,7 @@ func TestFilesUploadsPersistenceOwnerIsolationAndCompletion(t *testing.T) {
 		t.Fatalf("revoked shared download error = %v, want files.ErrNotFound", err)
 	}
 	publicTokenHash := sha256.Sum256([]byte("integration-public-token-" + uniqueSuffix()))
-	publicLink, err := fileStore.CreatePublicLink(ctx, owner.ID, file.ID, publicTokenHash[:], sql.NullTime{}, sql.NullInt64{}, files.PublicDownloadLimitModeHard, files.PublicLinkPassword{})
+	publicLink, err := fileStore.CreatePublicLink(ctx, owner.ID, file.ID, publicTokenHash[:], sql.NullTime{}, sql.NullInt64{}, files.PublicDownloadLimitModeHard, false, files.PublicLinkPassword{})
 	if err != nil {
 		t.Fatalf("CreatePublicLink() error = %v", err)
 	}
@@ -359,14 +359,14 @@ func TestFilesUploadsPersistenceOwnerIsolationAndCompletion(t *testing.T) {
 		t.Fatalf("revoked public download error = %v, want files.ErrNotFound", err)
 	}
 	expiredTokenHash := sha256.Sum256([]byte("integration-expired-token-" + uniqueSuffix()))
-	if _, err := fileStore.CreatePublicLink(ctx, owner.ID, file.ID, expiredTokenHash[:], sql.NullTime{Time: time.Now().Add(-time.Hour), Valid: true}, sql.NullInt64{}, files.PublicDownloadLimitModeHard, files.PublicLinkPassword{}); err != nil {
+	if _, err := fileStore.CreatePublicLink(ctx, owner.ID, file.ID, expiredTokenHash[:], sql.NullTime{Time: time.Now().Add(-time.Hour), Valid: true}, sql.NullInt64{}, files.PublicDownloadLimitModeHard, false, files.PublicLinkPassword{}); err != nil {
 		t.Fatalf("CreatePublicLink(expired) error = %v", err)
 	}
 	if _, _, _, err := fileStore.DownloadDataByPublicTokenHash(ctx, expiredTokenHash[:]); !errors.Is(err, files.ErrNotFound) {
 		t.Fatalf("expired public download error = %v, want files.ErrNotFound", err)
 	}
 	limitedTokenHash := sha256.Sum256([]byte("integration-limited-token-" + uniqueSuffix()))
-	limitedLink, err := fileStore.CreatePublicLink(ctx, owner.ID, file.ID, limitedTokenHash[:], sql.NullTime{}, sql.NullInt64{Int64: 1, Valid: true}, files.PublicDownloadLimitModeHard, files.PublicLinkPassword{})
+	limitedLink, err := fileStore.CreatePublicLink(ctx, owner.ID, file.ID, limitedTokenHash[:], sql.NullTime{}, sql.NullInt64{Int64: 1, Valid: true}, files.PublicDownloadLimitModeHard, false, files.PublicLinkPassword{})
 	if err != nil {
 		t.Fatalf("CreatePublicLink(limited) error = %v", err)
 	}
@@ -387,7 +387,7 @@ func TestFilesUploadsPersistenceOwnerIsolationAndCompletion(t *testing.T) {
 		t.Fatalf("limited public download error = %v, want files.ErrNotFound", err)
 	}
 	softLimitedTokenHash := sha256.Sum256([]byte("integration-soft-limited-token-" + uniqueSuffix()))
-	if _, err := fileStore.CreatePublicLink(ctx, owner.ID, file.ID, softLimitedTokenHash[:], sql.NullTime{}, sql.NullInt64{Int64: 1, Valid: true}, files.PublicDownloadLimitModeSoft, files.PublicLinkPassword{}); err != nil {
+	if _, err := fileStore.CreatePublicLink(ctx, owner.ID, file.ID, softLimitedTokenHash[:], sql.NullTime{}, sql.NullInt64{Int64: 1, Valid: true}, files.PublicDownloadLimitModeSoft, false, files.PublicLinkPassword{}); err != nil {
 		t.Fatalf("CreatePublicLink(soft-limited) error = %v", err)
 	}
 	if _, _, claimed, err := fileStore.ReservePublicLinkDownloadSlot(ctx, softLimitedTokenHash[:]); err != nil || !claimed {
@@ -397,7 +397,7 @@ func TestFilesUploadsPersistenceOwnerIsolationAndCompletion(t *testing.T) {
 		t.Fatalf("ReservePublicLinkDownloadSlot(soft second) claimed=%v error=%v", claimed, err)
 	}
 	protectedTokenHash := sha256.Sum256([]byte("integration-protected-token-" + uniqueSuffix()))
-	protectedLink, err := fileStore.CreatePublicLink(ctx, owner.ID, file.ID, protectedTokenHash[:], sql.NullTime{}, sql.NullInt64{}, files.PublicDownloadLimitModeHard, files.PublicLinkPassword{
+	protectedLink, err := fileStore.CreatePublicLink(ctx, owner.ID, file.ID, protectedTokenHash[:], sql.NullTime{}, sql.NullInt64{}, files.PublicDownloadLimitModeHard, false, files.PublicLinkPassword{
 		KDF:            "argon2id",
 		Salt:           []byte("integration-salt"),
 		Hash:           []byte("integration-hash"),
