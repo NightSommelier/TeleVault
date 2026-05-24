@@ -2618,8 +2618,8 @@
           end,
           size: end - start,
         });
-        const abortController = new AbortController();
-        updateQueueItem(item.id, { abortController });
+        const abortHandle = { abort: null };
+        updateQueueItem(item.id, { abortController: abortHandle });
         const payload = buildUploadBody(item.file, start, end);
         debugUpload('part:send-mode', {
           upload_id: upload.id,
@@ -2629,22 +2629,25 @@
         });
         let response;
         try {
-          const requestOptions = {
-            method: 'POST',
-            credentials: 'same-origin',
-            signal: abortController.signal,
-            headers: {
-              'Content-Type': 'application/octet-stream',
-              'X-CSRF-Token': csrfToken(),
+          response = await uploadPartXHR(`/uploads/${upload.id}/parts/${part}`, payload.body, {
+            csrf: csrfToken(),
+            abortHandle,
+            onProgress: ({ loaded, total }) => {
+              if (!total || total <= 0) return;
+              const partPercent = Math.max(0, Math.min(100, Math.round((loaded / total) * 100)));
+              const partBase = (part - 1) / Math.max(count, 1);
+              const overall = 5 + Math.round(((partBase + (partPercent / 100) / Math.max(count, 1)) * 45));
+              updateQueueItem(item.id, {
+                status: 'staging',
+                progress: overall,
+                message: `Staging part ${part}/${count} (${partPercent}%)`,
+              });
             },
-            body: payload.body,
-          };
-          if (payload.duplex) requestOptions.duplex = payload.duplex;
-          response = await fetch(`/uploads/${upload.id}/parts/${part}`, requestOptions);
+          });
         } catch (err) {
           updateQueueItem(item.id, { abortController: null });
           const networkError = normalizeUploadError(err);
-          debugUpload('part:network-error', {
+          debugUpload('part:xhr-error', {
             upload_id: upload.id,
             part,
             count,
@@ -2663,11 +2666,8 @@
           ok: response.ok,
         });
         if (!response.ok && response.status !== 202) {
-          let message = response.statusText;
-          try {
-            const body = await response.json();
-            message = body.error || message;
-          } catch (_) {}
+          const body = response.body || {};
+          const message = body.error || response.statusText || 'upload_part_failed';
           debugUpload('part:error', { upload_id: upload.id, part, status: response.status, message });
           throw new Error(message);
         }
@@ -3059,6 +3059,45 @@
     function buildUploadBody(file, start, end) {
       const blob = file.slice(start, end);
       return { body: blob, mode: 'blob' };
+    }
+
+    function uploadPartXHR(url, body, options = {}) {
+      const csrf = options.csrf || '';
+      const onProgress = typeof options.onProgress === 'function' ? options.onProgress : null;
+      return new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', url, true);
+        xhr.withCredentials = true;
+        xhr.responseType = 'text';
+        xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+        xhr.setRequestHeader('X-CSRF-Token', csrf);
+        if (options.abortHandle && typeof options.abortHandle === 'object') {
+          options.abortHandle.abort = () => xhr.abort();
+        }
+        xhr.upload.onprogress = (event) => {
+          if (!onProgress) return;
+          if (event && event.lengthComputable) onProgress({ loaded: event.loaded, total: event.total });
+        };
+        xhr.onerror = () => reject(new Error('network_upload_failed'));
+        xhr.onabort = () => reject(new Error('upload_canceled'));
+        xhr.ontimeout = () => reject(new Error('network_upload_failed'));
+        xhr.onload = () => {
+          let parsed = null;
+          const text = typeof xhr.responseText === 'string' ? xhr.responseText : '';
+          if (text) {
+            try {
+              parsed = JSON.parse(text);
+            } catch (_) {}
+          }
+          resolve({
+            ok: xhr.status >= 200 && xhr.status < 300,
+            status: xhr.status,
+            statusText: xhr.statusText || '',
+            body: parsed,
+          });
+        };
+        xhr.send(body);
+      });
     }
 
     function yieldToBrowser() {
