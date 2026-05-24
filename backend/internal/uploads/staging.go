@@ -73,6 +73,72 @@ func (s *LocalSpool) Write(ctx context.Context, key string, write func(io.Writer
 	return nil
 }
 
+func (s *LocalSpool) Append(ctx context.Context, key string, offset int64, reader io.Reader) (int64, error) {
+	if s == nil {
+		return 0, errors.New("local spool is nil")
+	}
+	if offset < 0 {
+		return 0, errors.New("offset must be non-negative")
+	}
+	key, err := cleanStorageKey(key)
+	if err != nil {
+		return 0, err
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+
+	path := filepath.Join(s.root, key)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return 0, err
+	}
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return 0, err
+	}
+	defer file.Close()
+
+	stat, err := file.Stat()
+	if err != nil {
+		return 0, err
+	}
+	if stat.Size() != offset {
+		return stat.Size(), ErrSpoolOffsetMismatch
+	}
+	if _, err := file.Seek(offset, io.SeekStart); err != nil {
+		return stat.Size(), err
+	}
+	written, err := io.Copy(file, reader)
+	if err != nil {
+		return offset + written, err
+	}
+	if err := file.Sync(); err != nil {
+		return offset + written, err
+	}
+	if err := ctx.Err(); err != nil {
+		return offset + written, err
+	}
+	return offset + written, nil
+}
+
+func (s *LocalSpool) Size(key string) (int64, error) {
+	if s == nil {
+		return 0, errors.New("local spool is nil")
+	}
+	key, err := cleanStorageKey(key)
+	if err != nil {
+		return 0, err
+	}
+	stat, err := os.Stat(filepath.Join(s.root, key))
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	return stat.Size(), nil
+}
+
 func (s *LocalSpool) Delete(key string) error {
 	if s == nil {
 		return errors.New("local spool is nil")
@@ -104,6 +170,8 @@ func (s *LocalSpool) Open(key string) (io.ReadCloser, error) {
 	return os.Open(filepath.Join(s.root, key))
 }
 
+var ErrSpoolOffsetMismatch = errors.New("spool offset mismatch")
+
 func cleanStorageKey(key string) (string, error) {
 	key = strings.TrimSpace(key)
 	if key == "" {
@@ -118,4 +186,8 @@ func cleanStorageKey(key string) (string, error) {
 
 func stagedPartKey(uploadID string, partNumber int) string {
 	return filepath.Join(uploadID, "part-"+strconv.Itoa(partNumber)+".age")
+}
+
+func stagedPartPlaintextKey(uploadID string, partNumber int) string {
+	return filepath.Join(uploadID, "part-"+strconv.Itoa(partNumber)+".plain.partial")
 }

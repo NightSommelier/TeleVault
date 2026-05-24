@@ -352,7 +352,137 @@ func (h *Handler) UploadPart(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (h *Handler) UploadPartChunk(w http.ResponseWriter, r *http.Request) {
+	user, ok := auth.UserFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "missing_authenticated_user")
+		return
+	}
+	if h.staging == nil {
+		writeError(w, http.StatusConflict, "upload_staging_disabled")
+		return
+	}
+
+	uploadID := strings.TrimSpace(r.PathValue("id"))
+	if uploadID == "" {
+		writeError(w, http.StatusBadRequest, "upload_id_required")
+		return
+	}
+	partNumber, err := strconv.Atoi(strings.TrimSpace(r.PathValue("part_number")))
+	if err != nil || partNumber < 1 {
+		writeError(w, http.StatusBadRequest, "part_number_invalid")
+		return
+	}
+	offset, err := parseInt64Header(r, "X-TeleVault-Chunk-Offset")
+	if err != nil || offset < 0 {
+		writeError(w, http.StatusBadRequest, "upload_chunk_offset_invalid")
+		return
+	}
+	finalChunk := strings.EqualFold(strings.TrimSpace(r.Header.Get("X-TeleVault-Chunk-Final")), "true")
+
+	now := h.now()
+	upload, err := h.store.UploadIntegrityState(r.Context(), user.ID, uploadID, partNumber, now)
+	if errors.Is(err, ErrUploadNotFound) {
+		writeError(w, http.StatusNotFound, "upload_not_found")
+		return
+	} else if errors.Is(err, ErrUploadExpired) {
+		writeError(w, http.StatusConflict, "upload_expired")
+		return
+	} else if errors.Is(err, ErrUploadPartOutOfOrder) {
+		writeError(w, http.StatusConflict, "upload_part_out_of_order")
+		return
+	} else if err != nil {
+		writeError(w, http.StatusInternalServerError, "upload_check_failed")
+		return
+	}
+
+	plannedPart, err := h.store.UploadPlannedPart(r.Context(), user.ID, uploadID, partNumber)
+	if errors.Is(err, ErrUploadPartNotFound) {
+		writeError(w, http.StatusNotFound, "upload_part_not_found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "upload_part_plan_failed")
+		return
+	}
+	artifactSize, err := uploadPartPlaintextSize(plannedPart)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "upload_part_size_invalid")
+		return
+	}
+	if offset > artifactSize {
+		writeError(w, http.StatusConflict, "upload_chunk_offset_invalid")
+		return
+	}
+	if r.ContentLength > 0 && offset+r.ContentLength > artifactSize {
+		writeError(w, http.StatusConflict, "upload_chunk_too_large")
+		return
+	}
+
+	plainKey := stagedPartPlaintextKey(uploadID, partNumber)
+	nextOffset, err := h.staging.Append(r.Context(), plainKey, offset, io.LimitReader(r.Body, artifactSize-offset+1))
+	if errors.Is(err, ErrSpoolOffsetMismatch) {
+		actual, sizeErr := h.staging.Size(plainKey)
+		if sizeErr != nil {
+			writeError(w, http.StatusInternalServerError, "upload_chunk_state_failed")
+			return
+		}
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error":           "upload_chunk_offset_mismatch",
+			"expected_offset": actual,
+		})
+		return
+	}
+	if err != nil {
+		if h.logger != nil {
+			h.logger.Warn("upload chunk stage failed",
+				"upload_id", uploadID,
+				"part_number", partNumber,
+				"offset", offset,
+				"content_length", r.ContentLength,
+				"error", err,
+			)
+		}
+		writeError(w, http.StatusInternalServerError, "upload_chunk_stage_failed")
+		return
+	}
+	if nextOffset > artifactSize {
+		_ = h.staging.Delete(plainKey)
+		writeError(w, http.StatusConflict, "upload_chunk_too_large")
+		return
+	}
+	if !finalChunk {
+		writeJSON(w, http.StatusAccepted, map[string]any{
+			"status":      "chunk_received",
+			"next_offset": nextOffset,
+		})
+		return
+	}
+	if nextOffset != artifactSize {
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error":           "upload_chunk_incomplete",
+			"expected_offset": nextOffset,
+			"part_size":       artifactSize,
+		})
+		return
+	}
+
+	plainFile, err := h.staging.Open(plainKey)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "upload_chunk_open_failed")
+		return
+	}
+	defer plainFile.Close()
+	h.stageUploadPartFromReader(w, r, user.ID, uploadID, partNumber, upload, plannedPart, artifactSize, now, plainFile, func() {
+		_ = h.staging.Delete(plainKey)
+	})
+}
+
 func (h *Handler) stageUploadPart(w http.ResponseWriter, r *http.Request, ownerID string, uploadID string, partNumber int, upload Upload, plannedPart UploadPart, artifactSize int64, now time.Time) {
+	h.stageUploadPartFromReader(w, r, ownerID, uploadID, partNumber, upload, plannedPart, artifactSize, now, r.Body, nil)
+}
+
+func (h *Handler) stageUploadPartFromReader(w http.ResponseWriter, r *http.Request, ownerID string, uploadID string, partNumber int, upload Upload, plannedPart UploadPart, artifactSize int64, now time.Time, reader io.Reader, onSuccess func()) {
 	plaintextHash, err := agefile.NewSHA256FromState(upload.ChecksumState)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "upload_checksum_state_invalid")
@@ -362,7 +492,7 @@ func (h *Handler) stageUploadPart(w http.ResponseWriter, r *http.Request, ownerI
 	storageKey := stagedPartKey(uploadID, partNumber)
 	var result agefile.EncryptResult
 	if err := h.staging.Write(r.Context(), storageKey, func(writer io.Writer) error {
-		encrypted, err := agefile.EncryptStreamWithHash(writer, r.Body, h.ageRecipient, plaintextHash)
+		encrypted, err := agefile.EncryptStreamWithHash(writer, reader, h.ageRecipient, plaintextHash)
 		if err != nil {
 			return err
 		}
@@ -419,6 +549,9 @@ func (h *Handler) stageUploadPart(w http.ResponseWriter, r *http.Request, ownerI
 		_ = h.staging.Delete(storageKey)
 		writeError(w, http.StatusInternalServerError, "part_stage_store_failed")
 		return
+	}
+	if onSuccess != nil {
+		onSuccess()
 	}
 
 	writeJSON(w, http.StatusAccepted, map[string]any{
@@ -608,6 +741,14 @@ func parseChecksum(value string) (string, []byte, error) {
 	}
 
 	return "sha256", checksum, nil
+}
+
+func parseInt64Header(r *http.Request, name string) (int64, error) {
+	value := strings.TrimSpace(r.Header.Get(name))
+	if value == "" {
+		return 0, errors.New("missing integer header")
+	}
+	return strconv.ParseInt(value, 10, 64)
 }
 
 func uploadResponse(upload Upload, parts []UploadPart) map[string]any {

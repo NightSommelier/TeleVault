@@ -142,6 +142,7 @@ func (s *Server) routes() {
 	s.mux.Handle("POST /uploads", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(uploadsHandler.Create))))
 	s.mux.Handle("GET /uploads/{id}", authHandler.RequireAuth(http.HandlerFunc(uploadsHandler.Get)))
 	s.mux.Handle("POST /uploads/{id}/parts/{part_number}", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(uploadsHandler.UploadPart))))
+	s.mux.Handle("POST /uploads/{id}/parts/{part_number}/chunks", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(uploadsHandler.UploadPartChunk))))
 	s.mux.Handle("POST /uploads/{id}/complete", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(uploadsHandler.Complete))))
 	s.mux.Handle("DELETE /uploads/{id}", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(uploadsHandler.Cancel))))
 	s.mux.Handle("POST /uploads/client-events", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(uploadsHandler.ClientEvent))))

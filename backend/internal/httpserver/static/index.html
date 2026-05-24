@@ -2642,6 +2642,9 @@
         const abortHandle = { abort: null };
         updateQueueItem(item.id, { abortController: abortHandle });
         const payload = buildUploadBody(item.file, start, end);
+        const transportChunkSize = browserTransportChunkSize();
+        const useChunkedTransport = (end - start) > transportChunkSize;
+        if (useChunkedTransport) payload.mode = `chunked-${formatBytes(transportChunkSize)}`;
         debugUpload('part:send-mode', {
           upload_id: upload.id,
           part,
@@ -2662,32 +2665,45 @@
           transport: 'xhr',
         };
         try {
-          response = await uploadPartXHR(`/uploads/${upload.id}/parts/${part}`, payload.body, {
-            csrf: csrfToken(),
-            abortHandle,
-            onProgress: ({ loaded, total }) => {
-              lastProgress = { loaded, total };
-              if (!total || total <= 0) return;
-              const partPercent = Math.max(0, Math.min(100, Math.round((loaded / total) * 100)));
-              if (partPercent >= lastProgressBucket + 10 || partPercent === 100) {
-                lastProgressBucket = partPercent;
-                debugUpload('part:progress', {
-                  upload_id: upload.id,
-                  part,
-                  percent: partPercent,
-                  loaded,
-                  total,
-                });
-              }
-              const partBase = (part - 1) / Math.max(count, 1);
-              const overall = 5 + Math.round(((partBase + (partPercent / 100) / Math.max(count, 1)) * 45));
-              updateQueueItem(item.id, {
-                status: 'staging',
-                progress: overall,
-                message: `Staging part ${part}/${count} (${partPercent}%)`,
+          const onProgress = ({ loaded, total, chunkIndex, chunkCount }) => {
+            lastProgress = { loaded, total };
+            if (!total || total <= 0) return;
+            const partPercent = Math.max(0, Math.min(100, Math.round((loaded / total) * 100)));
+            if (partPercent >= lastProgressBucket + 10 || partPercent === 100) {
+              lastProgressBucket = partPercent;
+              debugUpload('part:progress', {
+                upload_id: upload.id,
+                part,
+                percent: partPercent,
+                loaded,
+                total,
+                chunk: chunkIndex || null,
+                chunks: chunkCount || null,
               });
-            },
-          });
+            }
+            const partBase = (part - 1) / Math.max(count, 1);
+            const overall = 5 + Math.round(((partBase + (partPercent / 100) / Math.max(count, 1)) * 45));
+            const chunkSuffix = chunkIndex && chunkCount ? ` chunk ${chunkIndex}/${chunkCount}` : '';
+            updateQueueItem(item.id, {
+              status: 'staging',
+              progress: overall,
+              message: `Staging part ${part}/${count}${chunkSuffix} (${partPercent}%)`,
+            });
+          };
+          if (useChunkedTransport) {
+            response = await uploadPartChunked(upload.id, part, item.file, start, end, {
+              csrf: csrfToken(),
+              abortHandle,
+              chunkSize: transportChunkSize,
+              onProgress,
+            });
+          } else {
+            response = await uploadPartXHR(`/uploads/${upload.id}/parts/${part}`, payload.body, {
+              csrf: csrfToken(),
+              abortHandle,
+              onProgress,
+            });
+          }
         } catch (err) {
           updateQueueItem(item.id, { abortController: null });
           const networkError = normalizeUploadError(err);
@@ -3190,6 +3206,10 @@
       return { body: blob, mode: 'blob' };
     }
 
+    function browserTransportChunkSize() {
+      return 24 * 1024 * 1024;
+    }
+
     function uploadPartXHR(url, body, options = {}) {
       const csrf = options.csrf || '';
       const onProgress = typeof options.onProgress === 'function' ? options.onProgress : null;
@@ -3200,6 +3220,9 @@
         xhr.responseType = 'text';
         xhr.setRequestHeader('Content-Type', 'application/octet-stream');
         xhr.setRequestHeader('X-CSRF-Token', csrf);
+        Object.entries(options.headers || {}).forEach(([name, value]) => {
+          xhr.setRequestHeader(name, String(value));
+        });
         if (options.abortHandle && typeof options.abortHandle === 'object') {
           options.abortHandle.abort = () => xhr.abort();
         }
@@ -3227,6 +3250,56 @@
         };
         xhr.send(body);
       });
+    }
+
+    async function uploadPartChunked(uploadID, partNumber, file, start, end, options = {}) {
+      const total = end - start;
+      const chunkSize = Math.max(1024 * 1024, Number(options.chunkSize) || browserTransportChunkSize());
+      const chunkCount = Math.max(1, Math.ceil(total / chunkSize));
+      let offset = 0;
+      let response = null;
+      for (let index = 0; index < chunkCount; index += 1) {
+        const chunkStart = start + offset;
+        const chunkEnd = Math.min(end, chunkStart + chunkSize);
+        const final = chunkEnd >= end;
+        debugUpload('part:chunk-send', {
+          upload_id: uploadID,
+          part: partNumber,
+          chunk: index + 1,
+          chunks: chunkCount,
+          offset,
+          size: chunkEnd - chunkStart,
+          final,
+        });
+        response = await uploadPartXHR(`/uploads/${uploadID}/parts/${partNumber}/chunks`, file.slice(chunkStart, chunkEnd), {
+          csrf: options.csrf,
+          abortHandle: options.abortHandle,
+          headers: {
+            'X-TeleVault-Chunk-Offset': offset,
+            'X-TeleVault-Chunk-Final': final ? 'true' : 'false',
+          },
+          onProgress: ({ loaded }) => {
+            if (options.onProgress) {
+              options.onProgress({
+                loaded: Math.min(total, offset + loaded),
+                total,
+                chunkIndex: index + 1,
+                chunkCount,
+              });
+            }
+          },
+        });
+        if (!response.ok && response.status !== 202) return response;
+        const body = response.body || {};
+        const nextOffset = Number(body.next_offset);
+        offset = Number.isFinite(nextOffset) && nextOffset >= offset ? nextOffset : chunkEnd - start;
+      }
+      return response || {
+        ok: false,
+        status: 0,
+        statusText: '',
+        body: { error: 'upload_part_http_failed' },
+      };
     }
 
     function uploadXHRFailure(code, xhr, eventName) {

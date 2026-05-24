@@ -37,7 +37,7 @@ services:
     env_file: .env
     restart: "no"
     volumes:
-      - app-data:/data
+      - ${APP_DATA_DIR:-app-data}:/data
     depends_on:
       postgres:
         condition: service_healthy
@@ -54,7 +54,7 @@ services:
       valkey:
         condition: service_healthy
     volumes:
-      - app-data:/data
+      - ${APP_DATA_DIR:-app-data}:/data
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/readyz >/dev/null 2>&1 || exit 1"]
       interval: 10s
@@ -73,7 +73,7 @@ services:
       valkey:
         condition: service_healthy
     volumes:
-      - app-data:/data
+      - ${APP_DATA_DIR:-app-data}:/data
 
   cleanup:
     <<: *app
@@ -90,7 +90,7 @@ services:
       valkey:
         condition: service_healthy
     volumes:
-      - app-data:/data
+      - ${APP_DATA_DIR:-app-data}:/data
 
 volumes:
   app-data:

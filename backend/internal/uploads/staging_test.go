@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -63,6 +64,23 @@ func TestLocalSpoolDeleteIgnoresMissingFile(t *testing.T) {
 
 	if err := spool.Delete("missing/part.age"); err != nil {
 		t.Fatalf("Delete() error = %v", err)
+	}
+}
+
+func TestLocalSpoolAppendRequiresExpectedOffset(t *testing.T) {
+	spool, err := NewLocalSpool(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewLocalSpool() error = %v", err)
+	}
+	next, err := spool.Append(context.Background(), "upload-1/part-1.plain.partial", 0, strings.NewReader("hello"))
+	if err != nil {
+		t.Fatalf("Append() error = %v", err)
+	}
+	if next != 5 {
+		t.Fatalf("next offset = %d, want 5", next)
+	}
+	if _, err := spool.Append(context.Background(), "upload-1/part-1.plain.partial", 3, strings.NewReader("bad")); !errors.Is(err, ErrSpoolOffsetMismatch) {
+		t.Fatalf("Append() error = %v, want ErrSpoolOffsetMismatch", err)
 	}
 }
 
