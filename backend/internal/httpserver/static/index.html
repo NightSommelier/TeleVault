@@ -3056,33 +3056,8 @@
       return new Error('upload_failed');
     }
 
-    let uploadStreamingSupported;
-
-    function supportsStreamingUpload() {
-      if (typeof uploadStreamingSupported === 'boolean') return uploadStreamingSupported;
-      try {
-        const stream = new ReadableStream({
-          start(controller) {
-            controller.close();
-          },
-        });
-        const request = new Request('/uploads/probe', {
-          method: 'POST',
-          body: stream,
-          duplex: 'half',
-        });
-        uploadStreamingSupported = request.body === stream;
-      } catch (_) {
-        uploadStreamingSupported = false;
-      }
-      return uploadStreamingSupported;
-    }
-
     function buildUploadBody(file, start, end) {
       const blob = file.slice(start, end);
-      if (supportsStreamingUpload() && blob && typeof blob.stream === 'function') {
-        return { body: blob.stream(), mode: 'stream', duplex: 'half' };
-      }
       return { body: blob, mode: 'blob' };
     }
 
