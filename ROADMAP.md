@@ -25,6 +25,7 @@ The next work should focus on stability and first-release quality:
 - harden large upload reliability and progress reporting;
 - improve resume and retry behavior for staged uploads;
 - add local TeleVault MFA for Community and higher editions: TOTP and/or WebAuthn with 10 recovery codes;
+- add offline-first commercial licensing foundation: local signed license verification and backend feature gates;
 - complete recovery bundle UX and documentation;
 - expand smoke coverage for auth, upload, download, public links, and recovery;
 - document backup and restore for database state, AGE identity, Telegram sessions, logs, and recovery bundles;
@@ -54,6 +55,17 @@ Pro should add convenience for power users and homelabs:
 - advanced integrations;
 - richer recovery and administration tooling;
 - advanced Desktop workflows.
+
+## Licensing Infrastructure (Planned)
+
+Commercial licensing should be built around a separate licensing server and local instance verification:
+
+- separate licensing server repository and deployment;
+- signed license artifact bound to `instance_id` and verified locally in TeleVault;
+- no mandatory runtime dependency on licensing-server reachability;
+- optional online renewals later, but no mandatory heartbeat checks;
+- graceful expiration fallback to Community behavior without data lockout;
+- backup and restore guidance must include `instance_id` and installed license artifacts to avoid accidental loss after server reinstall/migration.
 
 ## Team
 
