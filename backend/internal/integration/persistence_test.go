@@ -86,6 +86,7 @@ func TestAuthPersistenceSingleUserModeBlocksSecondTelegramIdentity(t *testing.T)
 	database := openIntegrationDB(t)
 	store := auth.NewSessionStore(database)
 	ctx := context.Background()
+	resetCommunityOwnerBinding(t, database)
 
 	firstTelegramID := int64(915_000_000_000 + time.Now().UnixNano()%1_000_000_000)
 	secondTelegramID := firstTelegramID + 1
@@ -145,6 +146,69 @@ func TestAuthPersistenceSingleUserModeBlocksSecondTelegramIdentity(t *testing.T)
 	)
 	if err != nil {
 		t.Fatalf("CompleteTelegramLoginWithPolicy(relogin same identity) error = %v", err)
+	}
+}
+
+func TestAuthPersistenceSingleUserModeBindsToExistingTelegramIdentity(t *testing.T) {
+	database := openIntegrationDB(t)
+	store := auth.NewSessionStore(database)
+	ctx := context.Background()
+	resetCommunityOwnerBinding(t, database)
+
+	firstTelegramID := int64(916_000_000_000 + time.Now().UnixNano()%1_000_000_000)
+	secondTelegramID := firstTelegramID + 1
+	t.Cleanup(func() {
+		_, _ = database.ExecContext(context.Background(), `DELETE FROM users WHERE telegram_id IN ($1, $2)`, firstTelegramID, secondTelegramID)
+	})
+
+	if _, err := store.CompleteTelegramLogin(
+		ctx,
+		auth.TelegramProfile{TelegramID: firstTelegramID, Username: fmt.Sprintf("integration_%d", firstTelegramID), DisplayName: "Integration Test"},
+		[]byte("encrypted-telegram-session"),
+		[]byte(fmt.Sprintf("bootstrap-refresh-%d", firstTelegramID)),
+		"integration-test",
+		nil,
+		time.Now().Add(time.Hour),
+	); err != nil {
+		t.Fatalf("CompleteTelegramLogin(bootstrap first) error = %v", err)
+	}
+
+	if _, err := store.CompleteTelegramLogin(
+		ctx,
+		auth.TelegramProfile{TelegramID: secondTelegramID, Username: fmt.Sprintf("integration_%d", secondTelegramID), DisplayName: "Integration Test"},
+		[]byte("encrypted-telegram-session"),
+		[]byte(fmt.Sprintf("bootstrap-refresh-%d", secondTelegramID)),
+		"integration-test",
+		nil,
+		time.Now().Add(time.Hour),
+	); err != nil {
+		t.Fatalf("CompleteTelegramLogin(bootstrap second) error = %v", err)
+	}
+
+	if _, err := store.CompleteTelegramLoginWithPolicy(
+		ctx,
+		auth.TelegramProfile{TelegramID: secondTelegramID, Username: fmt.Sprintf("integration_%d", secondTelegramID), DisplayName: "Integration Test Updated"},
+		[]byte("encrypted-telegram-session"),
+		[]byte(fmt.Sprintf("policy-refresh-%d", secondTelegramID)),
+		"integration-test",
+		nil,
+		time.Now().Add(time.Hour),
+		true,
+	); err != nil {
+		t.Fatalf("CompleteTelegramLoginWithPolicy(existing second) error = %v", err)
+	}
+
+	if _, err := store.CompleteTelegramLoginWithPolicy(
+		ctx,
+		auth.TelegramProfile{TelegramID: firstTelegramID, Username: fmt.Sprintf("integration_%d", firstTelegramID), DisplayName: "Integration Test"},
+		[]byte("encrypted-telegram-session"),
+		[]byte(fmt.Sprintf("policy-refresh-%d", firstTelegramID)),
+		"integration-test",
+		nil,
+		time.Now().Add(time.Hour),
+		true,
+	); !errors.Is(err, auth.ErrCommunityUserLimitReached) {
+		t.Fatalf("CompleteTelegramLoginWithPolicy(other existing) error = %v, want ErrCommunityUserLimitReached", err)
 	}
 }
 
@@ -1476,6 +1540,16 @@ SELECT EXISTS (
 	if !exists {
 		t.Fatalf("TEST_DATABASE_URL database is not migrated through 000021; run go run ./cmd/migrate up first")
 	}
+}
+
+func resetCommunityOwnerBinding(t *testing.T, database *sql.DB) {
+	t.Helper()
+	if _, err := database.ExecContext(context.Background(), `UPDATE admin_settings SET community_owner_telegram_id = NULL WHERE id = TRUE`); err != nil {
+		t.Fatalf("reset community owner binding: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = database.ExecContext(context.Background(), `UPDATE admin_settings SET community_owner_telegram_id = NULL WHERE id = TRUE`)
+	})
 }
 
 func createUserThroughLogin(t *testing.T, database *sql.DB, store *auth.SessionStore, telegramID int64) (auth.User, func()) {

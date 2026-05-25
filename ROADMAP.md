@@ -24,6 +24,7 @@ The next work should focus on stability and first-release quality:
 
 - harden large upload reliability and progress reporting;
 - improve resume and retry behavior for staged uploads;
+- add local TeleVault MFA for Community and higher editions: TOTP and/or WebAuthn with 10 recovery codes;
 - complete recovery bundle UX and documentation;
 - expand smoke coverage for auth, upload, download, public links, and recovery;
 - document backup and restore for database state, AGE identity, Telegram sessions, logs, and recovery bundles;
@@ -35,6 +36,7 @@ Community should remain the complete personal edition:
 
 - one workspace;
 - one connected Telegram account;
+- one bound Community owner identity that can sign in from multiple browsers/devices;
 - CLI included;
 - basic Desktop included;
 - stable and practical for real deployments;
@@ -88,4 +90,3 @@ TeleVault should not drift toward these directions:
 - hardware-locked DRM or online-only activation.
 
 If a future feature or doc makes TeleVault look more like a hosted storage provider, it should be rewritten toward self-hosting, privacy, encryption, and user-controlled workflows.
-

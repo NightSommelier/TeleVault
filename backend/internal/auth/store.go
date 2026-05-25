@@ -110,13 +110,46 @@ func enforceSingleUserMode(ctx context.Context, tx *sql.Tx, telegramID int64) er
 	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, int64(6471320)); err != nil {
 		return err
 	}
+	if telegramID <= 0 {
+		return ErrCommunityUserLimitReached
+	}
 
-	var count int
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM users WHERE telegram_id <> $1`, telegramID).Scan(&count); err != nil {
+	var ownerTelegramID sql.NullInt64
+	if err := tx.QueryRowContext(ctx, `
+SELECT community_owner_telegram_id
+FROM admin_settings
+WHERE id = TRUE
+FOR UPDATE`).Scan(&ownerTelegramID); err != nil {
 		return err
 	}
-	if count > 0 {
-		return ErrCommunityUserLimitReached
+
+	if ownerTelegramID.Valid {
+		if ownerTelegramID.Int64 != telegramID {
+			return ErrCommunityUserLimitReached
+		}
+		return nil
+	}
+
+	var currentUserExists bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM users WHERE telegram_id = $1)`, telegramID).Scan(&currentUserExists); err != nil {
+		return err
+	}
+	if !currentUserExists {
+		var anyUserExists bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM users)`).Scan(&anyUserExists); err != nil {
+			return err
+		}
+		if anyUserExists {
+			return ErrCommunityUserLimitReached
+		}
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+UPDATE admin_settings
+SET community_owner_telegram_id = $1
+WHERE id = TRUE
+  AND community_owner_telegram_id IS NULL`, telegramID); err != nil {
+		return err
 	}
 	return nil
 }
