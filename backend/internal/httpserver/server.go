@@ -183,6 +183,10 @@ func (s *Server) mountStatic() {
 	}
 	fileServer := http.FileServer(http.FS(staticRoot))
 	s.mux.Handle("GET /assets/", http.StripPrefix("/assets/", fileServer))
+	s.mux.HandleFunc("GET /logo.png", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "public, max-age=300")
+		http.ServeFileFS(w, r, staticRoot, "logo.png")
+	})
 	s.mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)
