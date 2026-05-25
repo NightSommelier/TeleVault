@@ -88,6 +88,7 @@ func TestValidateManifestAcceptsRecoveryShape(t *testing.T) {
 func testManifest() Manifest {
 	return Manifest{
 		Schema:          ManifestSchema,
+		InstanceID:      "instance-1",
 		SnapshotID:      "snapshot-1",
 		SnapshotVersion: 1,
 		User: UserEntry{
@@ -152,7 +153,7 @@ func TestResolveImportIdentity(t *testing.T) {
 		resolved, shouldImport, err := resolveImportIdentity(UserEntry{
 			AgePublicRecipient: publicRecipient,
 			AgePrivateIdentity: identity.String(),
-		}, nil)
+		}, nil, ImportModeMerge)
 		if err != nil {
 			t.Fatalf("resolveImportIdentity() error = %v", err)
 		}
@@ -167,7 +168,7 @@ func TestResolveImportIdentity(t *testing.T) {
 	t.Run("missing private key but matching existing key", func(t *testing.T) {
 		resolved, shouldImport, err := resolveImportIdentity(UserEntry{
 			AgePublicRecipient: publicRecipient,
-		}, &userKey{PublicRecipient: publicRecipient})
+		}, &userKey{PublicRecipient: publicRecipient}, ImportModeMerge)
 		if err != nil {
 			t.Fatalf("resolveImportIdentity() error = %v", err)
 		}
@@ -182,7 +183,7 @@ func TestResolveImportIdentity(t *testing.T) {
 	t.Run("missing private key without existing key", func(t *testing.T) {
 		_, _, err := resolveImportIdentity(UserEntry{
 			AgePublicRecipient: publicRecipient,
-		}, nil)
+		}, nil, ImportModeMerge)
 		if !errors.Is(err, ErrInvalidManifest) {
 			t.Fatalf("resolveImportIdentity() error = %v, want ErrInvalidManifest", err)
 		}
@@ -195,9 +196,73 @@ func TestResolveImportIdentity(t *testing.T) {
 		}
 		_, _, err = resolveImportIdentity(UserEntry{
 			AgePublicRecipient: publicRecipient,
-		}, &userKey{PublicRecipient: other.Recipient().String()})
+		}, &userKey{PublicRecipient: other.Recipient().String()}, ImportModeMerge)
 		if !errors.Is(err, ErrConflict) {
 			t.Fatalf("resolveImportIdentity() error = %v, want ErrConflict", err)
 		}
 	})
+
+	t.Run("missing private key with different existing key in replace mode", func(t *testing.T) {
+		other, err := age.GenerateX25519Identity()
+		if err != nil {
+			t.Fatalf("age.GenerateX25519Identity() error = %v", err)
+		}
+		resolved, shouldImport, err := resolveImportIdentity(UserEntry{
+			AgePublicRecipient: publicRecipient,
+		}, &userKey{PublicRecipient: other.Recipient().String()}, ImportModeReplace)
+		if err != nil {
+			t.Fatalf("resolveImportIdentity() error = %v", err)
+		}
+		if shouldImport {
+			t.Fatalf("resolveImportIdentity() shouldImport = true, want false")
+		}
+		if resolved != nil {
+			t.Fatalf("resolveImportIdentity() resolved = %#v, want nil", resolved)
+		}
+	})
+
+	t.Run("private key with different existing key in replace mode", func(t *testing.T) {
+		other, err := age.GenerateX25519Identity()
+		if err != nil {
+			t.Fatalf("age.GenerateX25519Identity() error = %v", err)
+		}
+		resolved, shouldImport, err := resolveImportIdentity(UserEntry{
+			AgePublicRecipient: publicRecipient,
+			AgePrivateIdentity: identity.String(),
+		}, &userKey{PublicRecipient: other.Recipient().String()}, ImportModeReplace)
+		if err != nil {
+			t.Fatalf("resolveImportIdentity() error = %v", err)
+		}
+		if shouldImport {
+			t.Fatalf("resolveImportIdentity() shouldImport = true, want false")
+		}
+		if resolved != nil {
+			t.Fatalf("resolveImportIdentity() resolved = %#v, want nil", resolved)
+		}
+	})
+}
+
+func TestNormalizeImportOptions(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   ImportOptions
+		want    string
+		confirm bool
+	}{
+		{name: "default merge", input: ImportOptions{}, want: ImportModeMerge},
+		{name: "replace", input: ImportOptions{Mode: ImportModeReplace, ConfirmReplace: true}, want: ImportModeReplace, confirm: true},
+		{name: "invalid mode fallback", input: ImportOptions{Mode: "unexpected"}, want: ImportModeMerge},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := normalizeImportOptions(tc.input)
+			if got.Mode != tc.want {
+				t.Fatalf("normalizeImportOptions().Mode = %q, want %q", got.Mode, tc.want)
+			}
+			if got.ConfirmReplace != tc.confirm {
+				t.Fatalf("normalizeImportOptions().ConfirmReplace = %v, want %v", got.ConfirmReplace, tc.confirm)
+			}
+		})
+	}
 }

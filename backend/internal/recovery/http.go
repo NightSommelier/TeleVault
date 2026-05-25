@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/auth"
@@ -56,10 +57,19 @@ func (h *Handler) Import(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_json")
 		return
 	}
+	options := parseImportOptions(r)
 
-	summary, err := h.store.ImportManifest(r.Context(), user.ID, manifest)
+	summary, err := h.store.ImportManifest(r.Context(), user.ID, manifest, options)
 	if errors.Is(err, ErrInvalidManifest) {
 		writeError(w, http.StatusBadRequest, "invalid_recovery_manifest")
+		return
+	}
+	if errors.Is(err, ErrReplaceConfirmationRequired) {
+		writeError(w, http.StatusBadRequest, "recovery_replace_confirmation_required")
+		return
+	}
+	if errors.Is(err, ErrSnapshotOlder) {
+		writeError(w, http.StatusConflict, "recovery_snapshot_is_older")
 		return
 	}
 	if errors.Is(err, ErrConflict) {
@@ -86,4 +96,12 @@ func writeError(w http.ResponseWriter, status int, code string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": code})
+}
+
+func parseImportOptions(r *http.Request) ImportOptions {
+	mode := strings.TrimSpace(strings.ToLower(r.URL.Query().Get("mode")))
+	options := ImportOptions{Mode: mode}
+	confirmRaw := strings.TrimSpace(strings.ToLower(r.URL.Query().Get("confirm_replace")))
+	options.ConfirmReplace = confirmRaw == "1" || confirmRaw == "true" || confirmRaw == "yes"
+	return options
 }

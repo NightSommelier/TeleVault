@@ -18,10 +18,22 @@ import (
 var ErrNotFound = errors.New("recovery resource not found")
 var ErrInvalidManifest = errors.New("invalid recovery manifest")
 var ErrConflict = errors.New("recovery import conflict")
+var ErrSnapshotOlder = errors.New("recovery snapshot is older than latest local snapshot")
+var ErrReplaceConfirmationRequired = errors.New("recovery replace confirmation required")
+
+const (
+	ImportModeMerge   = "merge"
+	ImportModeReplace = "replace"
+)
 
 type Store struct {
 	db  *sql.DB
 	box *secrets.Box
+}
+
+type ImportOptions struct {
+	Mode           string
+	ConfirmReplace bool
 }
 
 func NewStore(db *sql.DB, box *secrets.Box) *Store {
@@ -40,6 +52,10 @@ func (s *Store) ExportManifest(ctx context.Context, userID string, exportedAt ti
 	defer tx.Rollback()
 
 	user, err := loadUser(ctx, tx, userID)
+	if err != nil {
+		return Manifest{}, err
+	}
+	instanceID, err := loadInstanceID(ctx, tx)
 	if err != nil {
 		return Manifest{}, err
 	}
@@ -69,6 +85,7 @@ func (s *Store) ExportManifest(ctx context.Context, userID string, exportedAt ti
 
 	manifest := Manifest{
 		Schema:          ManifestSchema,
+		InstanceID:      instanceID,
 		SnapshotID:      snapshotID,
 		SnapshotVersion: snapshotVersion,
 		ExportedAt:      exportedAt.UTC(),
@@ -108,10 +125,11 @@ type ImportSummary struct {
 	ImportedPrivateKeyFromMap bool   `json:"imported_private_key_from_map"`
 }
 
-func (s *Store) ImportManifest(ctx context.Context, userID string, manifest Manifest) (ImportSummary, error) {
+func (s *Store) ImportManifest(ctx context.Context, userID string, manifest Manifest, options ImportOptions) (ImportSummary, error) {
 	if manifest.Schema != ManifestSchema {
 		return ImportSummary{}, fmt.Errorf("%w: unsupported schema", ErrInvalidManifest)
 	}
+	options = normalizeImportOptions(options)
 	if err := validateManifest(manifest); err != nil {
 		return ImportSummary{}, err
 	}
@@ -125,8 +143,15 @@ func (s *Store) ImportManifest(ctx context.Context, userID string, manifest Mani
 	if err != nil {
 		return ImportSummary{}, err
 	}
+	instanceID, err := loadInstanceID(ctx, tx)
+	if err != nil {
+		return ImportSummary{}, err
+	}
 	if user.TelegramID != manifest.User.TelegramID {
 		return ImportSummary{}, fmt.Errorf("%w: telegram id mismatch", ErrInvalidManifest)
+	}
+	if err := ensureSnapshotFreshness(ctx, tx, userID, instanceID, manifest); err != nil {
+		return ImportSummary{}, err
 	}
 
 	var existingKey *userKey
@@ -135,7 +160,7 @@ func (s *Store) ImportManifest(ctx context.Context, userID string, manifest Mani
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		return ImportSummary{}, err
 	}
-	identity, shouldImportKey, err := resolveImportIdentity(manifest.User, existingKey)
+	identity, shouldImportKey, err := resolveImportIdentity(manifest.User, existingKey, options.Mode)
 	if err != nil {
 		return ImportSummary{}, err
 	}
@@ -145,14 +170,23 @@ func (s *Store) ImportManifest(ctx context.Context, userID string, manifest Mani
 			return ImportSummary{}, err
 		}
 	}
-	if err := ensureNoFileConflicts(ctx, tx, manifest.Files); err != nil {
-		return ImportSummary{}, err
+	if options.Mode == ImportModeReplace {
+		if !options.ConfirmReplace {
+			return ImportSummary{}, ErrReplaceConfirmationRequired
+		}
+		if err := prepareReplaceImport(ctx, tx, userID, manifest.Files, time.Now().UTC()); err != nil {
+			return ImportSummary{}, err
+		}
+	} else {
+		if err := ensureNoFileConflicts(ctx, tx, manifest.Files); err != nil {
+			return ImportSummary{}, err
+		}
 	}
 	if err := ensureParentsExist(manifest.Files); err != nil {
 		return ImportSummary{}, err
 	}
 
-	filesImported, partsImported, err := importFiles(ctx, tx, userID, manifest.Files)
+	filesImported, partsImported, err := importFiles(ctx, tx, userID, manifest.Files, options.Mode)
 	if err != nil {
 		return ImportSummary{}, err
 	}
@@ -188,7 +222,21 @@ func (s *Store) ImportManifest(ctx context.Context, userID string, manifest Mani
 	}, nil
 }
 
-func resolveImportIdentity(user UserEntry, existing *userKey) (*age.X25519Identity, bool, error) {
+func normalizeImportOptions(options ImportOptions) ImportOptions {
+	mode := options.Mode
+	if mode == "" {
+		mode = ImportModeMerge
+	}
+	switch mode {
+	case ImportModeMerge, ImportModeReplace:
+	default:
+		mode = ImportModeMerge
+	}
+	options.Mode = mode
+	return options
+}
+
+func resolveImportIdentity(user UserEntry, existing *userKey, mode string) (*age.X25519Identity, bool, error) {
 	if user.AgePublicRecipient == "" {
 		return nil, false, fmt.Errorf("%w: missing recovery public recipient", ErrInvalidManifest)
 	}
@@ -196,7 +244,7 @@ func resolveImportIdentity(user UserEntry, existing *userKey) (*age.X25519Identi
 		if existing == nil {
 			return nil, false, fmt.Errorf("%w: missing recovery private key material", ErrInvalidManifest)
 		}
-		if existing.PublicRecipient != user.AgePublicRecipient {
+		if existing.PublicRecipient != user.AgePublicRecipient && mode != ImportModeReplace {
 			return nil, false, fmt.Errorf("%w: existing recovery key differs", ErrConflict)
 		}
 		return nil, false, nil
@@ -207,6 +255,9 @@ func resolveImportIdentity(user UserEntry, existing *userKey) (*age.X25519Identi
 	}
 	if identity.Recipient().String() != user.AgePublicRecipient {
 		return nil, false, fmt.Errorf("%w: age recipient mismatch", ErrInvalidManifest)
+	}
+	if existing != nil && existing.PublicRecipient != user.AgePublicRecipient {
+		return nil, false, nil
 	}
 	return identity, true, nil
 }
@@ -322,6 +373,12 @@ func recoveryKeyAAD(userID string) []byte {
 	return []byte("recovery-key:" + userID)
 }
 
+func loadInstanceID(ctx context.Context, tx *sql.Tx) (string, error) {
+	var instanceID string
+	err := tx.QueryRowContext(ctx, `SELECT instance_id::text FROM admin_settings WHERE id = TRUE`).Scan(&instanceID)
+	return instanceID, err
+}
+
 func nextSnapshotVersion(ctx context.Context, tx *sql.Tx, userID string) (int, error) {
 	var version int
 	err := tx.QueryRowContext(ctx, `
@@ -334,6 +391,34 @@ WHERE user_id = $1`,
 		return 0, err
 	}
 	return version, nil
+}
+
+func latestSnapshotVersion(ctx context.Context, tx *sql.Tx, userID string) (int, error) {
+	var version int
+	err := tx.QueryRowContext(ctx, `
+SELECT COALESCE(MAX(snapshot_version), 0)
+FROM recovery_snapshots
+WHERE user_id = $1`,
+		userID,
+	).Scan(&version)
+	if err != nil {
+		return 0, err
+	}
+	return version, nil
+}
+
+func ensureSnapshotFreshness(ctx context.Context, tx *sql.Tx, userID string, localInstanceID string, manifest Manifest) error {
+	if manifest.InstanceID == "" || manifest.InstanceID != localInstanceID {
+		return nil
+	}
+	latest, err := latestSnapshotVersion(ctx, tx, userID)
+	if err != nil {
+		return err
+	}
+	if latest > 0 && manifest.SnapshotVersion < latest {
+		return fmt.Errorf("%w: manifest=%d latest=%d", ErrSnapshotOlder, manifest.SnapshotVersion, latest)
+	}
+	return nil
 }
 
 func loadFiles(ctx context.Context, tx *sql.Tx, userID string) ([]FileEntry, error) {
@@ -493,6 +578,66 @@ VALUES ($1, $2, $3, $4, $5)`,
 	return err
 }
 
+func prepareReplaceImport(ctx context.Context, tx *sql.Tx, userID string, files []FileEntry, now time.Time) error {
+	requested := fileIDs(files)
+
+	if err := ensureNoFileConflictsReplace(ctx, tx, userID, files); err != nil {
+		return err
+	}
+
+	_, err := tx.ExecContext(ctx, `
+WITH requested AS (
+    SELECT DISTINCT ids.id
+    FROM unnest($2::uuid[]) AS ids(id)
+),
+replaced AS (
+    UPDATE files
+    SET status = 'deleted',
+        deleted_at = $3,
+        updated_at = $3
+    WHERE owner_id = $1
+      AND deleted_at IS NULL
+      AND id NOT IN (SELECT id FROM requested)
+    RETURNING id
+),
+revoke_links AS (
+    UPDATE public_links
+    SET revoked_at = $3,
+        updated_at = $3
+    WHERE owner_id = $1
+      AND revoked_at IS NULL
+      AND file_id IN (SELECT id FROM replaced)
+),
+revoke_shares AS (
+    UPDATE file_shares
+    SET revoked_at = $3,
+        updated_at = $3
+    WHERE owner_id = $1
+      AND revoked_at IS NULL
+      AND file_id IN (SELECT id FROM replaced)
+),
+queued_file_parts AS (
+    SELECT p.id, row_number() OVER (ORDER BY p.created_at ASC, p.part_number ASC) AS queue_position
+    FROM file_parts p
+    JOIN replaced f ON f.id = p.file_id
+    WHERE p.telegram_deleted_at IS NULL
+),
+queued_cleanup AS (
+    UPDATE file_parts p
+    SET telegram_delete_available_at = $3 + ((q.queue_position - 1) * interval '15 seconds'),
+        telegram_delete_error = NULL
+    FROM queued_file_parts q
+    WHERE p.id = q.id
+    RETURNING p.id
+)
+SELECT 1`,
+		userID,
+		requested,
+		now,
+	)
+	return err
+}
+
 func ensureNoFileConflicts(ctx context.Context, tx *sql.Tx, files []FileEntry) error {
 	for _, file := range files {
 		var exists bool
@@ -508,6 +653,32 @@ func ensureNoFileConflicts(ctx context.Context, tx *sql.Tx, files []FileEntry) e
 			}
 			if exists {
 				return fmt.Errorf("%w: file part %s already exists", ErrConflict, part.ID)
+			}
+		}
+	}
+	return nil
+}
+
+func ensureNoFileConflictsReplace(ctx context.Context, tx *sql.Tx, userID string, files []FileEntry) error {
+	for _, file := range files {
+		var existingOwner sql.NullString
+		if err := tx.QueryRowContext(ctx, `SELECT owner_id::text FROM files WHERE id = $1`, file.ID).Scan(&existingOwner); err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		if existingOwner.Valid && existingOwner.String != userID {
+			return fmt.Errorf("%w: file %s belongs to another user", ErrConflict, file.ID)
+		}
+		for _, part := range file.Parts {
+			var partOwner sql.NullString
+			if err := tx.QueryRowContext(ctx, `
+SELECT f.owner_id::text
+FROM file_parts p
+JOIN files f ON f.id = p.file_id
+WHERE p.id = $1`, part.ID).Scan(&partOwner); err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return err
+			}
+			if partOwner.Valid && partOwner.String != userID {
+				return fmt.Errorf("%w: file part %s belongs to another user", ErrConflict, part.ID)
 			}
 		}
 	}
@@ -642,8 +813,62 @@ func ensureNoParentCycles(files []FileEntry) error {
 	return nil
 }
 
-func importFiles(ctx context.Context, tx *sql.Tx, userID string, files []FileEntry) (int, int, error) {
+func importFiles(ctx context.Context, tx *sql.Tx, userID string, files []FileEntry, mode string) (int, int, error) {
+	if mode == ImportModeReplace {
+		requested := fileIDs(files)
+		if _, err := tx.ExecContext(ctx, `
+DELETE FROM file_parts
+WHERE file_id IN (
+    SELECT id
+    FROM files
+    WHERE owner_id = $1
+      AND id = ANY($2::uuid[])
+)`,
+			userID,
+			requested,
+		); err != nil {
+			return 0, 0, err
+		}
+	}
+
 	for _, file := range files {
+		if mode == ImportModeReplace {
+			if _, err := tx.ExecContext(ctx, `
+INSERT INTO files (
+    id, owner_id, parent_id, name_plain, mime_type, plaintext_size, ciphertext_size,
+    type, status, checksum, created_at, updated_at, deleted_at
+)
+VALUES ($1, $2, NULL, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+ON CONFLICT (id) DO UPDATE SET
+    owner_id = EXCLUDED.owner_id,
+    parent_id = NULL,
+    name_plain = EXCLUDED.name_plain,
+    mime_type = EXCLUDED.mime_type,
+    plaintext_size = EXCLUDED.plaintext_size,
+    ciphertext_size = EXCLUDED.ciphertext_size,
+    type = EXCLUDED.type,
+    status = EXCLUDED.status,
+    checksum = EXCLUDED.checksum,
+    created_at = EXCLUDED.created_at,
+    updated_at = EXCLUDED.updated_at,
+    deleted_at = EXCLUDED.deleted_at`,
+				file.ID,
+				userID,
+				nullableString(file.NamePlain),
+				nullableString(file.MimeType),
+				nullableInt64(file.PlaintextSize),
+				nullableInt64(file.CiphertextSize),
+				file.Type,
+				file.Status,
+				nullableBytes(file.Checksum),
+				file.CreatedAt,
+				file.UpdatedAt,
+				nullableTimePtr(file.DeletedAt),
+			); err != nil {
+				return 0, 0, err
+			}
+			continue
+		}
 		if _, err := tx.ExecContext(ctx, `
 INSERT INTO files (
     id, owner_id, parent_id, name_plain, mime_type, plaintext_size, ciphertext_size,
@@ -704,6 +929,14 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
 	}
 
 	return len(files), partsImported, nil
+}
+
+func fileIDs(files []FileEntry) []string {
+	ids := make([]string, 0, len(files))
+	for _, file := range files {
+		ids = append(ids, file.ID)
+	}
+	return ids
 }
 
 func nullableString(value string) sql.NullString {

@@ -6,6 +6,7 @@ const ManifestSchema = "televault.recovery.v1"
 
 type Manifest struct {
 	Schema          string      `json:"schema"`
+	InstanceID      string      `json:"instance_id,omitempty"`
 	SnapshotID      string      `json:"snapshot_id"`
 	SnapshotVersion int         `json:"snapshot_version"`
 	ExportedAt      time.Time   `json:"exported_at"`

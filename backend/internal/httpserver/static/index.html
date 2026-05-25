@@ -1207,6 +1207,8 @@
         telegram_code_invalid: 'Incorrect Telegram login code.',
         telegram_code_expired: 'Telegram login code expired. Send a new code.',
         qr_login_not_found: 'QR login expired. Start QR login again.',
+        recovery_replace_confirmation_required: 'Confirm recovery replace before importing.',
+        recovery_snapshot_is_older: 'Recovery map is older than the latest snapshot for this account on this instance.',
         community_user_limit_reached: 'This instance allows only one connected Telegram account in Community version.',
         invite_required: 'Access requires an invite from the instance owner.',
       };
@@ -3591,12 +3593,17 @@
     async function importRecoveryFile() {
       const file = el.recoveryFileInput.files[0];
       if (!file) return;
+      const confirmed = window.confirm('This import replaces your current vault metadata with the selected recovery map. Continue?');
+      if (!confirmed) {
+        setRecoveryStatus('Recovery import canceled.');
+        return;
+      }
       el.importRecoveryBtn.disabled = true;
       setRecoveryStatus('Importing...');
       try {
         const manifestText = await file.text();
         JSON.parse(manifestText);
-        const data = await api('/recovery/import', {
+        const data = await api('/recovery/import?mode=replace&confirm_replace=1', {
           method: 'POST',
           csrf: true,
           headers: { 'Content-Type': 'application/json' },
