@@ -363,6 +363,10 @@
     .compact-table th, .compact-table td {
       padding: 8px 10px;
     }
+    .table-wrap {
+      width: 100%;
+      overflow-x: auto;
+    }
     .subhead {
       display: flex;
       align-items: center;
@@ -574,6 +578,24 @@
       border-radius: 8px;
       box-shadow: 0 18px 40px rgba(16, 24, 40, .18);
     }
+    .share-modal {
+      width: min(760px, 100%);
+    }
+    .share-tabs {
+      align-self: start;
+    }
+    .share-tab-panel {
+      min-width: 0;
+    }
+    #shareInternalTabPanel .field-row {
+      grid-template-columns: minmax(0, 1fr) 180px 180px;
+    }
+    #sharePublicTabPanel .field-row {
+      grid-template-columns: minmax(0, 1fr) auto;
+    }
+    .share-modal .table {
+      min-width: 560px;
+    }
     .modal-head {
       display: flex;
       align-items: center;
@@ -591,5 +613,10 @@
       header { align-items: flex-start; }
       .userbar { flex-direction: column; align-items: flex-end; }
       .table th:nth-child(3), .table td:nth-child(3) { display: none; }
+      .share-modal .table th:nth-child(3),
+      .share-modal .table td:nth-child(3) { display: table-cell; }
       .field-row { grid-template-columns: 1fr; }
+      #shareInternalTabPanel .field-row { grid-template-columns: 1fr; }
+      #sharePublicTabPanel .field-row { grid-template-columns: 1fr; }
+      .share-modal .table { min-width: 0; }
     }

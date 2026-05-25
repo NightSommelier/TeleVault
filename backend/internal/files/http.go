@@ -267,14 +267,9 @@ func (h *Handler) CreateFolder(w http.ResponseWriter, r *http.Request) {
 	}
 
 	parentID := strings.TrimSpace(request.ParentID)
-	entitlement := h.entitlementForRequest(r.Context())
-	file, err := h.store.CreateFolderWithLimit(r.Context(), user.ID, parentID, name, entitlement.MaxWorkspaces)
+	file, err := h.store.CreateFolder(r.Context(), user.ID, parentID, name)
 	if errors.Is(err, ErrNotFound) {
 		writeError(w, http.StatusNotFound, "parent_folder_not_found")
-		return
-	}
-	if errors.Is(err, ErrWorkspaceLimit) {
-		writeError(w, http.StatusForbidden, "workspace_limit_reached")
 		return
 	}
 	if err != nil {
@@ -285,17 +280,6 @@ func (h *Handler) CreateFolder(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"file": fileResponse(file),
 	})
-}
-
-func (h *Handler) entitlementForRequest(ctx context.Context) licensing.Entitlement {
-	state, err := h.licenseStore.Current(ctx)
-	if err != nil {
-		if h.logger != nil {
-			h.logger.Warn("license state lookup failed; using community entitlement fallback", "error", err)
-		}
-		return licensing.EffectiveEntitlement(licensing.DefaultState())
-	}
-	return licensing.EffectiveEntitlement(state)
 }
 
 func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {

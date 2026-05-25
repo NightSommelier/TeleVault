@@ -155,7 +155,7 @@
     </main>
 
     <div id="shareModal" class="modal-backdrop hidden">
-      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="shareTitle">
+      <div class="modal share-modal" role="dialog" aria-modal="true" aria-labelledby="shareTitle">
         <div class="modal-head">
           <div>
             <div id="shareTitle" class="panel-title">Share file</div>
@@ -164,108 +164,115 @@
           <button id="closeShareBtn">Close</button>
         </div>
         <div class="modal-body stack">
-          <div class="field-row">
-            <div class="field">
-              <label for="shareRecipientSelect">Recipient</label>
-              <select id="shareRecipientSelect">
-                <option value="">Loading...</option>
-              </select>
-              <div id="shareRecipientHint" class="muted">Only registered TeleVault users from your Telegram contacts/chats are listed.</div>
-              <button id="shareManualToggleBtn" type="button">Enter ID manually</button>
-            </div>
-            <div class="field">
-              <label for="sharePermissionSelect">Access</label>
-              <select id="sharePermissionSelect">
-                <option value="read" selected>Read only</option>
-                <option value="read_delete">Read + delete</option>
-              </select>
-            </div>
-            <div class="field">
-              <label for="shareExpirySelect">Expires</label>
-              <select id="shareExpirySelect">
-                <option value="">No limit</option>
-                <option value="1h">1 hour</option>
-                <option value="1d">1 day</option>
-                <option value="7d">7 days</option>
-              </select>
-            </div>
+          <div class="segmented share-tabs" role="tablist" aria-label="Share mode">
+            <button id="shareInternalTabBtn" type="button" class="active" role="tab" aria-selected="true" aria-controls="shareInternalTabPanel">Internal share</button>
+            <button id="sharePublicTabBtn" type="button" role="tab" aria-selected="false" aria-controls="sharePublicTabPanel">Public link</button>
           </div>
-          <div id="shareManualField" class="field hidden">
-            <label for="shareTelegramInput">Telegram ID</label>
-            <input id="shareTelegramInput" type="number" min="1" step="1" placeholder="123456789">
-          </div>
-          <div class="actions">
-            <button id="createShareBtn" class="primary">Share</button>
-          </div>
-          <div id="shareStatus" class="status"></div>
-          <table class="table compact-table">
-            <thead>
-              <tr>
-                <th>User</th>
-                <th>Access</th>
-                <th>Expires</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody id="sharesBody">
-              <tr><td colspan="4" class="muted">No active shares.</td></tr>
-            </tbody>
-          </table>
-          <div class="subhead">
-            <div>
-              <div class="panel-title">Public links</div>
-              <div class="muted">Anyone with the link can download until it expires or is revoked.</div>
+          <div id="shareInternalTabPanel" class="stack share-tab-panel" role="tabpanel" aria-labelledby="shareInternalTabBtn">
+            <div class="field-row">
+              <div class="field">
+                <label for="shareRecipientSelect">Recipient</label>
+                <select id="shareRecipientSelect">
+                  <option value="">Loading...</option>
+                </select>
+                <div id="shareRecipientHint" class="muted">Only registered TeleVault users from your Telegram contacts/chats are listed.</div>
+                <button id="shareManualToggleBtn" type="button">Enter ID manually</button>
+              </div>
+              <div class="field">
+                <label for="sharePermissionSelect">Access</label>
+                <select id="sharePermissionSelect">
+                  <option value="read" selected>Read only</option>
+                  <option value="read_delete">Read + delete</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="shareExpirySelect">Expires</label>
+                <select id="shareExpirySelect">
+                  <option value="">No limit</option>
+                  <option value="1h">1 hour</option>
+                  <option value="1d">1 day</option>
+                  <option value="7d">7 days</option>
+                </select>
+              </div>
             </div>
-          </div>
-          <div class="field-row">
-            <div class="field">
-              <label for="publicExpirySelect">Access</label>
-              <select id="publicExpirySelect">
-                <option value="1h">1 hour</option>
-                <option value="1d" selected>1 day</option>
-                <option value="7d">7 days</option>
-                <option value="">No limit</option>
-              </select>
+            <div id="shareManualField" class="field hidden">
+              <label for="shareTelegramInput">Telegram ID</label>
+              <input id="shareTelegramInput" type="number" min="1" step="1" placeholder="123456789">
             </div>
             <div class="actions">
-              <button id="createPublicLinkBtn" class="primary">Create link</button>
+              <button id="createShareBtn" class="primary">Share</button>
+            </div>
+            <div class="table-wrap">
+              <table class="table compact-table">
+                <thead>
+                  <tr>
+                    <th>User</th>
+                    <th>Access</th>
+                    <th>Expires</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="sharesBody">
+                  <tr><td colspan="4" class="muted">No active shares.</td></tr>
+                </tbody>
+              </table>
             </div>
           </div>
-          <div class="field">
-            <label for="publicPasswordInput">Password</label>
-            <input id="publicPasswordInput" type="password" minlength="8" maxlength="1024" autocomplete="new-password" placeholder="Optional, at least 8 characters">
+          <div id="sharePublicTabPanel" class="stack share-tab-panel hidden" role="tabpanel" aria-labelledby="sharePublicTabBtn">
+            <div class="muted">Anyone with the link can download until it expires or is revoked.</div>
+            <div class="field-row">
+              <div class="field">
+                <label for="publicExpirySelect">Access</label>
+                <select id="publicExpirySelect">
+                  <option value="1h">1 hour</option>
+                  <option value="1d" selected>1 day</option>
+                  <option value="7d">7 days</option>
+                  <option value="">No limit</option>
+                </select>
+              </div>
+              <div class="actions">
+                <button id="createPublicLinkBtn" class="primary">Create link</button>
+              </div>
+            </div>
+            <div class="field">
+              <label for="publicPasswordInput">Password</label>
+              <input id="publicPasswordInput" type="password" minlength="8" maxlength="1024" autocomplete="new-password" placeholder="Optional, at least 8 characters">
+            </div>
+            <div class="field">
+              <label for="publicDownloadLimitInput">Download limit</label>
+              <input id="publicDownloadLimitInput" type="number" min="1" step="1" placeholder="Unlimited">
+            </div>
+            <div class="field">
+              <label for="publicDownloadLimitModeSelect">Limit mode</label>
+              <select id="publicDownloadLimitModeSelect">
+                <option value="hard" selected>Hard</option>
+                <option value="soft">Soft</option>
+              </select>
+            </div>
+            <div class="field">
+              <label><input id="publicShowChecksumInput" type="checkbox"> Show SHA-256 on public page</label>
+            </div>
+            <div id="publicLinkResult" class="copy-field hidden">
+              <input id="publicLinkInput" type="text" readonly>
+              <button id="copyPublicLinkBtn">Copy</button>
+            </div>
+            <div class="table-wrap">
+              <table class="table compact-table">
+                <thead>
+                  <tr>
+                    <th>Link created</th>
+                    <th>Expires</th>
+                    <th>Downloads</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="publicLinksBody">
+                  <tr><td colspan="4" class="muted">No active public links.</td></tr>
+                </tbody>
+              </table>
+            </div>
           </div>
-          <div class="field">
-            <label for="publicDownloadLimitInput">Download limit</label>
-            <input id="publicDownloadLimitInput" type="number" min="1" step="1" placeholder="Unlimited">
-          </div>
-          <div class="field">
-            <label for="publicDownloadLimitModeSelect">Limit mode</label>
-            <select id="publicDownloadLimitModeSelect">
-              <option value="hard" selected>Hard</option>
-              <option value="soft">Soft</option>
-            </select>
-          </div>
-          <div class="field">
-            <label><input id="publicShowChecksumInput" type="checkbox"> Show SHA-256 on public page</label>
-          </div>
-          <div id="publicLinkResult" class="copy-field hidden">
-            <input id="publicLinkInput" type="text" readonly>
-            <button id="copyPublicLinkBtn">Copy</button>
-          </div>
-          <table class="table compact-table">
-            <thead>
-              <tr>
-                <th>Link created</th>
-                <th>Expires</th>
-                <th>Downloads</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody id="publicLinksBody">
-              <tr><td colspan="4" class="muted">No active public links.</td></tr>
-            </tbody>
-          </table>
+          <div id="shareStatus" class="status"></div>
         </div>
       </div>
     </div>

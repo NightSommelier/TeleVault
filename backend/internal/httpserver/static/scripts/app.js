@@ -8,11 +8,14 @@
       folderStack: [],
       view: 'own',
       visibleFiles: [],
+      serverFiles: [],
       droppedFiles: [],
       selectedFileIds: new Set(),
+      selectionAnchorID: '',
       draggingItems: [],
       shareFile: null,
       shareRecipients: [],
+      shareTab: 'internal',
       detailsFile: null,
       detailsDownloadActivity: null,
       detailsRequestID: 0,
@@ -81,6 +84,10 @@
       shareModal: document.getElementById('shareModal'),
       closeShareBtn: document.getElementById('closeShareBtn'),
       shareFileName: document.getElementById('shareFileName'),
+      shareInternalTabBtn: document.getElementById('shareInternalTabBtn'),
+      sharePublicTabBtn: document.getElementById('sharePublicTabBtn'),
+      shareInternalTabPanel: document.getElementById('shareInternalTabPanel'),
+      sharePublicTabPanel: document.getElementById('sharePublicTabPanel'),
       shareRecipientSelect: document.getElementById('shareRecipientSelect'),
       shareRecipientHint: document.getElementById('shareRecipientHint'),
       shareManualToggleBtn: document.getElementById('shareManualToggleBtn'),
@@ -758,22 +765,88 @@
       }
     }
 
+    function sameFolderID(left, right) {
+      return String(left || '') === String(right || '');
+    }
+
+    function isSelectableFile(file) {
+      return Boolean(file) && !file.upload_id && !file.is_pending_upload;
+    }
+
+    function queueStatusForFileList(item) {
+      const status = String(item && item.status ? item.status : '').trim();
+      switch (status) {
+        case 'queued':
+        case 'hashing':
+        case 'staging':
+        case 'pending':
+        case 'uploading':
+          return status;
+        case 'needs_file':
+          return 'pending';
+        case 'telegram':
+        case 'completing':
+          return 'uploading';
+        default:
+          return status || 'pending';
+      }
+    }
+
+    function queueItemVisibleInFileList(item) {
+      if (!item) return false;
+      if (['complete', 'failed', 'canceled'].includes(item.status)) return false;
+      return sameFolderID(item.parentID, state.currentFolderId || '');
+    }
+
+    function withQueuedUploads(serverFiles) {
+      if (state.view !== 'own') return serverFiles;
+      const existingUploadIDs = new Set(
+        serverFiles.map((file) => String(file.upload_id || '').trim()).filter(Boolean),
+      );
+      const queuedRows = [];
+      for (const item of state.uploadQueue) {
+        if (!queueItemVisibleInFileList(item)) continue;
+        const uploadID = String(item.uploadID || '').trim();
+        if (uploadID && existingUploadIDs.has(uploadID)) continue;
+        const fileName = item.file && item.file.name
+          ? item.file.name
+          : (item.displayPath || 'Uploading file');
+        queuedRows.push({
+          id: `queue:${item.id}`,
+          upload_id: uploadID || `local:${item.id}`,
+          is_pending_upload: true,
+          type: 'file',
+          name: fileName,
+          status: queueStatusForFileList(item),
+          plaintext_size: item.file && Number.isFinite(item.file.size) ? item.file.size : 0,
+        });
+      }
+      return serverFiles.concat(queuedRows);
+    }
+
     function renderFiles(files) {
-      state.visibleFiles = Array.isArray(files) ? files.slice() : [];
+      const serverFiles = Array.isArray(files) ? files.slice() : [];
+      state.serverFiles = serverFiles;
+      const displayFiles = withQueuedUploads(serverFiles);
+      state.visibleFiles = displayFiles.slice();
       if (state.view !== 'own') {
         state.selectedFileIds = new Set();
+        state.selectionAnchorID = '';
       } else {
-        const visible = new Set(files.map((file) => file.id));
+        const visible = new Set(displayFiles.map((file) => file.id));
         state.selectedFileIds = new Set(Array.from(state.selectedFileIds).filter((id) => visible.has(id)));
+        if (!visible.has(state.selectionAnchorID)) {
+          state.selectionAnchorID = '';
+        }
       }
-      renderSelectionBar(files);
-      if (!files.length) {
+      renderSelectionBar(displayFiles);
+      if (!displayFiles.length) {
         const message = state.view === 'shared' ? 'No shared files.' : 'No files in this folder.';
         el.filesBody.innerHTML = `<tr><td colspan="4" class="muted">${message}</td></tr>`;
         if (state.view === 'own') wireFileSelectionHandlers([]);
         return;
       }
-      el.filesBody.innerHTML = files.map((file) => `
+      el.filesBody.innerHTML = displayFiles.map((file) => `
         <tr draggable="${state.view === 'own' && !file.upload_id ? 'true' : 'false'}" data-file-id="${file.id}" data-file-type="${file.type}" data-file-name="${escapeHTML(file.name || 'Untitled')}" data-upload-id="${escapeHTML(file.upload_id || '')}">
           <td>${renderFileName(file)}</td>
           <td><span class="badge ${file.status === 'ready' ? 'ok' : 'warn'}">${escapeHTML(file.status)}</span></td>
@@ -781,13 +854,13 @@
           <td><div class="actions row-actions">${renderFileActions(file)}</div></td>
         </tr>
       `).join('');
-      wireFileSelectionHandlers(files);
+      wireFileSelectionHandlers(displayFiles);
       el.filesBody.querySelectorAll('[data-open-folder]').forEach((button) => {
         button.addEventListener('click', () => {
-          const folder = files.find((file) => file.id === button.dataset.openFolder);
+          const folder = displayFiles.find((file) => file.id === button.dataset.openFolder);
           if (!folder) return;
           if (hasActiveSelection()) {
-            toggleFileSelection(folder.id, files);
+            toggleFileSelection(folder.id, displayFiles);
             return;
           }
           navigateToFolder(folder);
@@ -803,17 +876,17 @@
       });
       el.filesBody.querySelectorAll('[data-share]').forEach((button) => {
         button.addEventListener('click', () => {
-          const file = files.find((item) => item.id === button.dataset.share);
+          const file = displayFiles.find((item) => item.id === button.dataset.share);
           openShareDialog(file);
         });
       });
       el.filesBody.querySelectorAll('[data-details]').forEach((button) => {
         button.addEventListener('click', () => {
-          const file = files.find((item) => item.id === button.dataset.details);
+          const file = displayFiles.find((item) => item.id === button.dataset.details);
           openDetailsDialog(file);
         });
       });
-      if (state.view === 'own') wireFileRowDragHandlers(files);
+      if (state.view === 'own') wireFileRowDragHandlers(displayFiles);
     }
 
     function renderSharedRouteUnavailable(message) {
@@ -841,36 +914,57 @@
 
     function wireFileSelectionHandlers(files) {
       el.filesBody.querySelectorAll('[data-select-file]').forEach((input) => {
-        input.addEventListener('change', () => {
-          setFileSelection(input.dataset.selectFile, input.checked, files);
+        input.addEventListener('change', (event) => {
+          setFileSelection(input.dataset.selectFile, input.checked, files, { shiftKey: event.shiftKey });
         });
       });
       el.filesBody.querySelectorAll('[data-select-label]').forEach((label) => {
-        label.addEventListener('click', () => {
-          toggleFileSelection(label.dataset.selectLabel, files);
+        label.addEventListener('click', (event) => {
+          toggleFileSelection(label.dataset.selectLabel, files, { shiftKey: event.shiftKey });
         });
         label.addEventListener('keydown', (event) => {
           if (event.key !== 'Enter' && event.key !== ' ') return;
           event.preventDefault();
-          toggleFileSelection(label.dataset.selectLabel, files);
+          toggleFileSelection(label.dataset.selectLabel, files, { shiftKey: event.shiftKey });
         });
       });
     }
 
-    function setFileSelection(id, selected, files) {
+    function selectableVisibleFileIDs(files) {
+      return (Array.isArray(files) ? files : [])
+        .filter((file) => isSelectableFile(file))
+        .map((file) => file.id);
+    }
+
+    function setFileSelection(id, selected, files, options = {}) {
       if (!id || state.view !== 'own') return;
-      if (selected) {
+      const selectableIDs = selectableVisibleFileIDs(files);
+      const targetIndex = selectableIDs.indexOf(id);
+      if (targetIndex < 0) return;
+      const shouldSelect = Boolean(selected);
+      const anchorIndex = selectableIDs.indexOf(state.selectionAnchorID);
+      const useRange = Boolean(options.shiftKey) && anchorIndex >= 0;
+      if (useRange) {
+        const start = Math.min(anchorIndex, targetIndex);
+        const end = Math.max(anchorIndex, targetIndex);
+        for (let idx = start; idx <= end; idx += 1) {
+          const rowID = selectableIDs[idx];
+          if (shouldSelect) state.selectedFileIds.add(rowID);
+          else state.selectedFileIds.delete(rowID);
+        }
+      } else if (shouldSelect) {
         state.selectedFileIds.add(id);
       } else {
         state.selectedFileIds.delete(id);
       }
+      state.selectionAnchorID = id;
       syncSelectionCheckboxes();
       renderSelectionBar(files);
     }
 
-    function toggleFileSelection(id, files) {
+    function toggleFileSelection(id, files, options = {}) {
       if (!id || state.view !== 'own') return;
-      setFileSelection(id, !state.selectedFileIds.has(id), files);
+      setFileSelection(id, !state.selectedFileIds.has(id), files, options);
     }
 
     function hasActiveSelection() {
@@ -1384,6 +1478,9 @@
         el.detailsFileName.textContent = normalized;
         el.detailsFileNameInput.value = normalized;
         await applyRoute();
+        if (state.detailsFile && state.detailsFile.id === id) {
+          closeDetailsDialog();
+        }
       } catch (err) {
         setDetailsStatus(err.message, true);
       }
@@ -1409,20 +1506,41 @@
       el.publicDownloadLimitModeSelect.value = 'hard';
       el.publicLinkResult.classList.add('hidden');
       setShareStatus('');
+      showShareTab('internal');
       el.shareModal.classList.remove('hidden');
       await refreshShareRecipients();
       await refreshShares();
       await refreshPublicLinks();
-      if (el.shareManualField.classList.contains('hidden')) {
-        el.shareRecipientSelect.focus();
-      } else {
-        el.shareTelegramInput.focus();
-      }
+      focusShareTabInput(state.shareTab);
     }
 
     function closeShareDialog() {
       state.shareFile = null;
       el.shareModal.classList.add('hidden');
+    }
+
+    function focusShareTabInput(tab) {
+      if (tab === 'public') {
+        el.publicExpirySelect.focus();
+        return;
+      }
+      if (el.shareManualField.classList.contains('hidden')) {
+        el.shareRecipientSelect.focus();
+        return;
+      }
+      el.shareTelegramInput.focus();
+    }
+
+    function showShareTab(tab) {
+      const nextTab = tab === 'public' ? 'public' : 'internal';
+      state.shareTab = nextTab;
+      const internalActive = nextTab === 'internal';
+      el.shareInternalTabBtn.classList.toggle('active', internalActive);
+      el.sharePublicTabBtn.classList.toggle('active', !internalActive);
+      el.shareInternalTabBtn.setAttribute('aria-selected', internalActive ? 'true' : 'false');
+      el.sharePublicTabBtn.setAttribute('aria-selected', internalActive ? 'false' : 'true');
+      el.shareInternalTabPanel.classList.toggle('hidden', !internalActive);
+      el.sharePublicTabPanel.classList.toggle('hidden', internalActive);
     }
 
     async function openDetailsDialog(file) {
@@ -1624,6 +1742,7 @@
         el.publicDownloadLimitModeSelect.value = 'hard';
         el.publicShowChecksumInput.checked = false;
         el.publicLinkResult.classList.remove('hidden');
+        showShareTab('public');
         setShareStatus('Public link created.');
         await refreshPublicLinks();
       } catch (err) {
@@ -1899,14 +2018,33 @@
       }
       persistUploadQueueState();
       renderUploadQueue();
+      if (state.view === 'own') {
+        renderFiles(state.serverFiles || []);
+      }
+    }
+
+    function shouldRerenderQueueRows(prev, next) {
+      const prevVisible = queueItemVisibleInFileList(prev);
+      const nextVisible = queueItemVisibleInFileList(next);
+      if (prevVisible !== nextVisible) return true;
+      const prevStatus = queueStatusForFileList(prev);
+      const nextStatus = queueStatusForFileList(next);
+      if (prevStatus !== nextStatus) return true;
+      if (String(prev.uploadID || '') !== String(next.uploadID || '')) return true;
+      return false;
     }
 
     function updateQueueItem(id, patch) {
       const index = state.uploadQueue.findIndex((item) => item.id === id);
       if (index < 0) return;
-      state.uploadQueue[index] = { ...state.uploadQueue[index], ...patch };
+      const prev = state.uploadQueue[index];
+      const next = { ...prev, ...patch };
+      state.uploadQueue[index] = next;
       persistUploadQueueState();
       renderUploadQueue();
+      if (state.view === 'own' && shouldRerenderQueueRows(prev, next)) {
+        renderFiles(state.serverFiles || []);
+      }
     }
 
     async function runUploadQueue() {
@@ -2011,6 +2149,9 @@
         uploadCreatedAt: created.upload.created_at || new Date().toISOString(),
         fileMissing: false,
       });
+      if (state.view === 'own' && sameFolderID(item.parentID, state.currentFolderId || '')) {
+        await refreshFiles();
+      }
       await uploadParts(created.upload, item);
       if (item.cancelRequested) throw new Error('upload_canceled');
       updateQueueItem(item.id, {
@@ -3570,6 +3711,7 @@
 
     function clearSelection() {
       state.selectedFileIds.clear();
+      state.selectionAnchorID = '';
       renderSelectionBar(visibleFileIDs().map((id) => ({ id })));
       syncSelectionCheckboxes();
     }
@@ -3580,8 +3722,10 @@
       const visibleSelected = visibleIDs.every((id) => state.selectedFileIds.has(id));
       if (visibleSelected) {
         visibleIDs.forEach((id) => state.selectedFileIds.delete(id));
+        state.selectionAnchorID = '';
       } else {
         visibleIDs.forEach((id) => state.selectedFileIds.add(id));
+        state.selectionAnchorID = visibleIDs[visibleIDs.length - 1] || '';
       }
       syncSelectionCheckboxes();
       renderSelectionBar(visibleIDs.map((id) => ({ id })));
@@ -3731,6 +3875,14 @@
     el.closeShareBtn.addEventListener('click', closeShareDialog);
     el.closeMoveBtn.addEventListener('click', closeMoveDialog);
     el.confirmMoveBtn.addEventListener('click', confirmMoveSelected);
+    el.shareInternalTabBtn.addEventListener('click', () => {
+      showShareTab('internal');
+      focusShareTabInput('internal');
+    });
+    el.sharePublicTabBtn.addEventListener('click', () => {
+      showShareTab('public');
+      focusShareTabInput('public');
+    });
     el.shareManualToggleBtn.addEventListener('click', () => {
       toggleShareManualInput();
       if (el.shareManualField.classList.contains('hidden')) {
@@ -3804,7 +3956,13 @@
         closeShareDialog();
         return;
       }
-      if (!el.moveModal.classList.contains('hidden')) closeMoveDialog();
+      if (!el.moveModal.classList.contains('hidden')) {
+        closeMoveDialog();
+        return;
+      }
+      if (hasActiveSelection()) {
+        clearSelection();
+      }
     });
     window.addEventListener('hashchange', applyRoute);
     setUploadDebugEnabled(state.uploadDebugEnabled);

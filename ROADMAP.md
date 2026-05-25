@@ -22,8 +22,8 @@ What already works:
 
 The next work should focus on stability and first-release quality:
 
-- lock `v0.4.0` scope around offline-first licensing foundation, backend feature gates, Community owner binding behavior, and license-aware instance invites;
-- complete local TeleVault MFA in `v0.4.0`: TOTP + WebAuthn + 10 one-time recovery codes;
+- keep `v0.4.0` as the published licensing/invite/community-boundary release baseline;
+- complete local TeleVault MFA in `v0.4.1`: TOTP + WebAuthn + 10 one-time recovery codes;
 - harden large upload reliability and progress reporting;
 - improve resume and retry behavior for staged uploads;
 - add offline-first commercial licensing foundation: local signed license verification and backend feature gates;
@@ -111,5 +111,6 @@ If a future feature or doc makes TeleVault look more like a hosted storage provi
 
 ## Release Milestones
 
-- `v0.4.0` target: local signed-license verification, Community/Pro/Team backend gates, Community owner binding enforcement, invite-capacity enforcement, and local instance MFA (`TOTP + WebAuthn + 10 recovery codes`).
-- `v0.4.0` execution checklist: `docs/development/release-v0.4.0.md`.
+- `v0.4.0` published baseline: local signed-license verification, Community/Pro/Team backend gates, Community owner binding enforcement, and invite-capacity enforcement.
+- `v0.4.1` target: local instance MFA (`TOTP + WebAuthn + 10 recovery codes`) and MFA gate hardening/verification.
+- `v0.4.1` execution checklist: `docs/development/release-v0.4.1.md`.
