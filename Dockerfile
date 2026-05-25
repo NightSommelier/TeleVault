@@ -10,16 +10,21 @@ WORKDIR /src
 RUN apk add --no-cache git ca-certificates
 
 COPY backend/go.mod backend/go.sum ./backend/
+COPY VERSION /src/VERSION
 WORKDIR /src/backend
 RUN go mod download
 COPY backend/ ./
 
 RUN set -eux; \
     mkdir -p /out; \
+    RESOLVED_VERSION="${APP_VERSION:-}"; \
+    if [ -z "${RESOLVED_VERSION}" ]; then RESOLVED_VERSION="$(tr -d '[:space:]' < /src/VERSION)"; fi; \
+    RESOLVED_COMMIT="${APP_COMMIT:-unknown}"; \
+    RESOLVED_DATE="${APP_BUILD_DATE:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"; \
     LDFLAGS="-s -w"; \
-    if [ -n "${APP_VERSION:-}" ]; then LDFLAGS="${LDFLAGS} -X 'gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/buildinfo.Version=${APP_VERSION}'"; fi; \
-    if [ -n "${APP_COMMIT:-}" ]; then LDFLAGS="${LDFLAGS} -X 'gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/buildinfo.Commit=${APP_COMMIT}'"; fi; \
-    if [ -n "${APP_BUILD_DATE:-}" ]; then LDFLAGS="${LDFLAGS} -X 'gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/buildinfo.Date=${APP_BUILD_DATE}'"; fi; \
+    LDFLAGS="${LDFLAGS} -X 'gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/buildinfo.Version=${RESOLVED_VERSION}'"; \
+    LDFLAGS="${LDFLAGS} -X 'gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/buildinfo.Commit=${RESOLVED_COMMIT}'"; \
+    LDFLAGS="${LDFLAGS} -X 'gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/buildinfo.Date=${RESOLVED_DATE}'"; \
     for bin in api worker cleanup migrate smoke admin; do \
         CGO_ENABLED=0 GOOS=linux go build \
             -ldflags="${LDFLAGS}" \
