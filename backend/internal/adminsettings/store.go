@@ -98,6 +98,80 @@ WHERE id = TRUE`,
 	return settings, nil
 }
 
+func (s *Store) InstanceID(ctx context.Context) (string, error) {
+	var instanceID string
+	err := s.db.QueryRowContext(ctx, `
+SELECT instance_id::text
+FROM admin_settings
+WHERE id = TRUE`).Scan(&instanceID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", ErrInvalidSettings
+	}
+	if err != nil {
+		return "", err
+	}
+	return instanceID, nil
+}
+
+func (s *Store) ForceLocalMFA(ctx context.Context) (bool, error) {
+	var force bool
+	err := s.db.QueryRowContext(ctx, `
+SELECT force_local_mfa
+FROM admin_settings
+WHERE id = TRUE`).Scan(&force)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return force, nil
+}
+
+func (s *Store) UpdateForceLocalMFA(ctx context.Context, force bool, updatedBy string) (bool, error) {
+	var saved bool
+	err := s.db.QueryRowContext(ctx, `
+INSERT INTO admin_settings (
+    id,
+    upload_part_size_bytes,
+    telegram_document_limit_bytes,
+    upload_safety_margin_bytes,
+    max_parallel_uploads,
+    target_upload_bytes_per_second,
+    cooldown_between_parts_ms,
+    public_link_password_min_length,
+    force_local_mfa,
+    updated_by,
+    updated_at
+)
+SELECT TRUE,
+       upload_part_size_bytes,
+       telegram_document_limit_bytes,
+       upload_safety_margin_bytes,
+       max_parallel_uploads,
+       target_upload_bytes_per_second,
+       cooldown_between_parts_ms,
+       public_link_password_min_length,
+       $1,
+       NULLIF($2, '')::uuid,
+       now()
+FROM admin_settings
+WHERE id = TRUE
+ON CONFLICT (id)
+DO UPDATE SET
+    force_local_mfa = EXCLUDED.force_local_mfa,
+    updated_by = EXCLUDED.updated_by,
+    updated_at = now()
+RETURNING force_local_mfa`,
+		force,
+		updatedBy,
+	).Scan(&saved)
+	if err != nil {
+		return false, err
+	}
+	return saved, nil
+}
+
 func (s *Store) EffectiveUploadSettings(ctx context.Context, userID string) (EffectiveUploadSettings, error) {
 	settings, err := s.UploadSettings(ctx)
 	if err != nil {

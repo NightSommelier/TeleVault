@@ -7,7 +7,7 @@ fmt:
 	cd backend && gofmt -w $$(find . -name '*.go' -not -path './var/*')
 
 js-check:
-	perl -0ne 'print $$1 if /<script>(.*)<\/script>/s' backend/internal/httpserver/static/index.html | node --check
+	node --check backend/internal/httpserver/static/scripts/app.js
 
 lint: js-check
 	cd backend && GOCACHE=$(GO_CACHE) go vet ./...

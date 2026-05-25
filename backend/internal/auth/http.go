@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/config"
+	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/licensing"
 	"rsc.io/qr"
 )
 
@@ -95,6 +97,7 @@ func (h *Handler) CompleteTelegramQRLogin(w http.ResponseWriter, r *http.Request
 	}
 	id := strings.TrimSpace(request.QRLoginID)
 	request.Password = strings.TrimSpace(request.Password)
+	request.InviteToken = strings.TrimSpace(request.InviteToken)
 	if id == "" {
 		writeError(w, http.StatusBadRequest, "qr_login_id_required")
 		return
@@ -139,7 +142,7 @@ func (h *Handler) CompleteTelegramQRLogin(w http.ResponseWriter, r *http.Request
 			return
 		}
 		h.qrLogins.remove(id)
-		h.completeTelegramLogin(w, r, result.Session, result.Profile)
+		h.completeTelegramLogin(w, r, result.Session, result.Profile, request.InviteToken)
 		return
 	}
 
@@ -166,7 +169,7 @@ func (h *Handler) CompleteTelegramQRLogin(w http.ResponseWriter, r *http.Request
 			return
 		}
 		h.qrLogins.remove(id)
-		h.completeTelegramLogin(w, r, result.Session, result.Profile)
+		h.completeTelegramLogin(w, r, result.Session, result.Profile, request.InviteToken)
 	default:
 		writeJSON(w, http.StatusAccepted, map[string]any{
 			"status":   "pending",
@@ -240,6 +243,7 @@ func (h *Handler) LoginWithTelegram(w http.ResponseWriter, r *http.Request) {
 	request.Phone = strings.TrimSpace(request.Phone)
 	request.Code = strings.TrimSpace(request.Code)
 	request.Password = strings.TrimSpace(request.Password)
+	request.InviteToken = strings.TrimSpace(request.InviteToken)
 	if request.Phone == "" || request.Code == "" {
 		writeError(w, http.StatusBadRequest, "phone_and_code_required")
 		return
@@ -312,7 +316,7 @@ func (h *Handler) LoginWithTelegram(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.completeTelegramLogin(w, r, telegramSession, profile)
+	h.completeTelegramLogin(w, r, telegramSession, profile, request.InviteToken)
 }
 
 type telegramCodeRequest struct {
@@ -320,17 +324,19 @@ type telegramCodeRequest struct {
 }
 
 type telegramLoginRequest struct {
-	Phone    string `json:"phone"`
-	Code     string `json:"code"`
-	Password string `json:"password"`
+	Phone       string `json:"phone"`
+	Code        string `json:"code"`
+	Password    string `json:"password"`
+	InviteToken string `json:"invite_token"`
 }
 
 type telegramQRCompleteRequest struct {
-	QRLoginID string `json:"qr_login_id"`
-	Password  string `json:"password"`
+	QRLoginID   string `json:"qr_login_id"`
+	Password    string `json:"password"`
+	InviteToken string `json:"invite_token"`
 }
 
-func (h *Handler) completeTelegramLogin(w http.ResponseWriter, r *http.Request, telegramSession string, profile TelegramProfile) {
+func (h *Handler) completeTelegramLogin(w http.ResponseWriter, r *http.Request, telegramSession string, profile TelegramProfile, inviteToken string) {
 	refreshToken, err := NewRefreshToken()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "refresh_token_generation_failed")
@@ -349,8 +355,19 @@ func (h *Handler) completeTelegramLogin(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
+	var loginAccess LoginAccess
+	if inviteToken != "" {
+		inviteHash, err := HashRefreshToken(inviteToken, h.cfg.RefreshTokenPepper)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "invite_token_hash_failed")
+			return
+		}
+		loginAccess.InviteTokenHash = inviteHash
+	}
+
 	expiresAt := time.Now().Add(refreshTokenTTL)
-	user, err := h.store.CompleteTelegramLoginWithPolicy(
+	loginPolicy := h.resolveLoginPolicy(r.Context())
+	user, err := h.store.CompleteTelegramLoginWithAccessPolicyAndAccess(
 		r.Context(),
 		profile,
 		encryptedTelegramSession,
@@ -358,15 +375,48 @@ func (h *Handler) completeTelegramLogin(w http.ResponseWriter, r *http.Request, 
 		r.UserAgent(),
 		nil,
 		expiresAt,
-		h.cfg.AuthSingleUserMode,
+		loginPolicy,
+		loginAccess,
 	)
-	if errors.Is(err, ErrCommunityUserLimitReached) {
+	if errors.Is(err, ErrCommunityUserLimitReached) || errors.Is(err, ErrAccountLimitReached) {
 		h.store.RecordAuditEvent(r.Context(), "", AuditAuthLoginFailure, r)
-		writeError(w, http.StatusForbidden, "community_user_limit_reached")
+		if loginPolicy.BindCommunityOwner {
+			writeError(w, http.StatusForbidden, "community_user_limit_reached")
+		} else {
+			writeError(w, http.StatusForbidden, "account_limit_reached")
+		}
+		return
+	}
+	if errors.Is(err, ErrInviteRequired) || errors.Is(err, ErrInviteInvalid) {
+		h.store.RecordAuditEvent(r.Context(), "", AuditAuthLoginFailure, r)
+		writeError(w, http.StatusForbidden, "invite_required")
 		return
 	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "login_persist_failed")
+		return
+	}
+
+	localRequired, setupRequired, forceEnabled, err := h.resolveLocalMFARequirement(r.Context(), user.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "local_mfa_state_failed")
+		return
+	}
+	if localRequired {
+		if err := h.store.MarkSessionMFARequiredByToken(r.Context(), refreshHash, true); err != nil {
+			writeError(w, http.StatusInternalServerError, "local_mfa_state_failed")
+			return
+		}
+		SetRefreshCookie(w, h.cfg, refreshToken, expiresAt)
+		SetCSRFCookie(w, h.cfg, refreshToken, expiresAt)
+		h.store.RecordAuditEvent(r.Context(), user.ID, AuditAuthLoginSuccess, r)
+		writeJSON(w, http.StatusUnauthorized, map[string]any{
+			"error":          "local_mfa_required",
+			"mfa_required":   true,
+			"setup_required": setupRequired,
+			"force_enabled":  forceEnabled,
+			"methods":        []string{"totp", "webauthn", "recovery"},
+		})
 		return
 	}
 
@@ -376,6 +426,58 @@ func (h *Handler) completeTelegramLogin(w http.ResponseWriter, r *http.Request, 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"user": userResponse(user),
 	})
+}
+
+func (h *Handler) resolveLoginPolicy(ctx context.Context) LoginPolicy {
+	if h == nil || h.store == nil || h.store.db == nil {
+		if h != nil && h.logger != nil {
+			h.logger.Warn("license state store unavailable; using community login policy fallback")
+		}
+		return CommunityLoginPolicy()
+	}
+
+	state, err := licensing.NewStore(h.store.db).Current(ctx)
+	if err != nil {
+		if h.logger != nil {
+			h.logger.Warn("license state lookup failed; using community login policy fallback", "error", err)
+		}
+		return CommunityLoginPolicy()
+	}
+
+	entitlement := licensing.EffectiveEntitlement(state)
+	if entitlement.Edition == licensing.TierCommunity {
+		return CommunityLoginPolicy()
+	}
+	return LoginPolicy{
+		MaxConnectedTelegramAccounts: entitlement.MaxConnectedTelegramAccounts,
+		BindCommunityOwner:           false,
+	}
+}
+
+func (h *Handler) resolveLocalMFARequirement(ctx context.Context, userID string) (required bool, setupRequired bool, forceEnabled bool, err error) {
+	forceEnabled, err = h.store.IsLocalMFAForced(ctx, h.cfg.AuthForceMFA)
+	if err != nil {
+		return false, false, false, err
+	}
+	totpEnabled := false
+	totpState, totpErr := h.store.LocalTOTP(ctx, userID)
+	if totpErr == nil {
+		totpEnabled = totpState.Enabled
+	} else if !errors.Is(totpErr, ErrLocalMFANotConfigured) {
+		return false, false, false, totpErr
+	}
+	webAuthnConfigured := false
+	webAuthnCredentials, credErr := h.store.WebAuthnCredentials(ctx, userID)
+	if credErr != nil {
+		return false, false, false, credErr
+	}
+	if len(webAuthnCredentials) > 0 {
+		webAuthnConfigured = true
+	}
+
+	required = forceEnabled || totpEnabled || webAuthnConfigured
+	setupRequired = required && !(totpEnabled || webAuthnConfigured)
+	return required, setupRequired, forceEnabled, nil
 }
 
 func qrLoginResponse(id string, token TelegramQRLoginToken) map[string]any {

@@ -212,6 +212,230 @@ func TestAuthPersistenceSingleUserModeBindsToExistingTelegramIdentity(t *testing
 	}
 }
 
+func TestAuthPersistenceAccessPolicyEnforcesConnectedAccountLimit(t *testing.T) {
+	database := openIntegrationDB(t)
+	store := auth.NewSessionStore(database)
+	ctx := context.Background()
+	resetCommunityOwnerBinding(t, database)
+
+	firstTelegramID := int64(917_000_000_000 + time.Now().UnixNano()%1_000_000_000)
+	secondTelegramID := firstTelegramID + 1
+	thirdTelegramID := firstTelegramID + 2
+	t.Cleanup(func() {
+		_, _ = database.ExecContext(context.Background(), `DELETE FROM users WHERE telegram_id IN ($1, $2, $3)`, firstTelegramID, secondTelegramID, thirdTelegramID)
+	})
+
+	policy := auth.LoginPolicy{
+		MaxConnectedTelegramAccounts: 2,
+		BindCommunityOwner:           false,
+	}
+
+	if _, err := store.CompleteTelegramLoginWithAccessPolicy(
+		ctx,
+		auth.TelegramProfile{TelegramID: firstTelegramID, Username: fmt.Sprintf("integration_%d", firstTelegramID), DisplayName: "Integration Test"},
+		[]byte("encrypted-telegram-session"),
+		[]byte(fmt.Sprintf("policy-refresh-%d", firstTelegramID)),
+		"integration-test",
+		nil,
+		time.Now().Add(time.Hour),
+		policy,
+	); err != nil {
+		t.Fatalf("CompleteTelegramLoginWithAccessPolicy(first) error = %v", err)
+	}
+
+	if _, err := store.CompleteTelegramLoginWithAccessPolicy(
+		ctx,
+		auth.TelegramProfile{TelegramID: secondTelegramID, Username: fmt.Sprintf("integration_%d", secondTelegramID), DisplayName: "Integration Test"},
+		[]byte("encrypted-telegram-session"),
+		[]byte(fmt.Sprintf("policy-refresh-%d", secondTelegramID)),
+		"integration-test",
+		nil,
+		time.Now().Add(time.Hour),
+		policy,
+	); err != nil {
+		t.Fatalf("CompleteTelegramLoginWithAccessPolicy(second) error = %v", err)
+	}
+
+	if _, err := store.CompleteTelegramLoginWithAccessPolicy(
+		ctx,
+		auth.TelegramProfile{TelegramID: thirdTelegramID, Username: fmt.Sprintf("integration_%d", thirdTelegramID), DisplayName: "Integration Test"},
+		[]byte("encrypted-telegram-session"),
+		[]byte(fmt.Sprintf("policy-refresh-%d", thirdTelegramID)),
+		"integration-test",
+		nil,
+		time.Now().Add(time.Hour),
+		policy,
+	); !errors.Is(err, auth.ErrAccountLimitReached) {
+		t.Fatalf("CompleteTelegramLoginWithAccessPolicy(third) error = %v, want ErrAccountLimitReached", err)
+	}
+
+	if _, err := store.CompleteTelegramLoginWithAccessPolicy(
+		ctx,
+		auth.TelegramProfile{TelegramID: firstTelegramID, Username: fmt.Sprintf("integration_%d_updated", firstTelegramID), DisplayName: "Integration Test Updated"},
+		[]byte("encrypted-telegram-session"),
+		[]byte(fmt.Sprintf("policy-second-refresh-%d", firstTelegramID)),
+		"integration-test",
+		nil,
+		time.Now().Add(time.Hour),
+		policy,
+	); err != nil {
+		t.Fatalf("CompleteTelegramLoginWithAccessPolicy(relogin existing) error = %v", err)
+	}
+}
+
+func TestAuthPersistenceAccessPolicyRequiresInviteForNewJoiners(t *testing.T) {
+	database := openIntegrationDB(t)
+	store := auth.NewSessionStore(database)
+	ctx := context.Background()
+	resetCommunityOwnerBinding(t, database)
+
+	firstTelegramID := int64(919_000_000_000 + time.Now().UnixNano()%1_000_000_000)
+	secondTelegramID := firstTelegramID + 1
+	thirdTelegramID := firstTelegramID + 2
+	t.Cleanup(func() {
+		_, _ = database.ExecContext(context.Background(), `DELETE FROM users WHERE telegram_id IN ($1, $2, $3)`, firstTelegramID, secondTelegramID, thirdTelegramID)
+	})
+
+	policy := auth.LoginPolicy{
+		MaxConnectedTelegramAccounts: 2,
+		BindCommunityOwner:           false,
+	}
+
+	firstUser, err := store.CompleteTelegramLoginWithAccessPolicy(
+		ctx,
+		auth.TelegramProfile{TelegramID: firstTelegramID, Username: fmt.Sprintf("integration_%d", firstTelegramID), DisplayName: "Integration Test"},
+		[]byte("encrypted-telegram-session"),
+		[]byte(fmt.Sprintf("policy-refresh-%d", firstTelegramID)),
+		"integration-test",
+		nil,
+		time.Now().Add(time.Hour),
+		policy,
+	)
+	if err != nil {
+		t.Fatalf("CompleteTelegramLoginWithAccessPolicy(first bootstrap) error = %v", err)
+	}
+
+	if _, err := store.CompleteTelegramLoginWithAccessPolicy(
+		ctx,
+		auth.TelegramProfile{TelegramID: secondTelegramID, Username: fmt.Sprintf("integration_%d", secondTelegramID), DisplayName: "Integration Test"},
+		[]byte("encrypted-telegram-session"),
+		[]byte(fmt.Sprintf("policy-refresh-%d", secondTelegramID)),
+		"integration-test",
+		nil,
+		time.Now().Add(time.Hour),
+		policy,
+	); !errors.Is(err, auth.ErrInviteRequired) {
+		t.Fatalf("CompleteTelegramLoginWithAccessPolicy(second without invite) error = %v, want ErrInviteRequired", err)
+	}
+
+	rawInvite := "integration-invite-token-1"
+	inviteHash, err := auth.HashRefreshToken(rawInvite, "integration-pepper")
+	if err != nil {
+		t.Fatalf("HashRefreshToken(invite) error = %v", err)
+	}
+	if _, err := store.CreateInstanceInvite(
+		ctx,
+		firstUser.ID,
+		inviteHash,
+		sql.NullInt64{},
+		time.Now().Add(30*time.Minute),
+		1,
+		policy.MaxConnectedTelegramAccounts,
+	); err != nil {
+		t.Fatalf("CreateInstanceInvite() error = %v", err)
+	}
+
+	if _, err := store.CompleteTelegramLoginWithAccessPolicyAndAccess(
+		ctx,
+		auth.TelegramProfile{TelegramID: secondTelegramID, Username: fmt.Sprintf("integration_%d", secondTelegramID), DisplayName: "Integration Test"},
+		[]byte("encrypted-telegram-session"),
+		[]byte(fmt.Sprintf("policy-refresh-invite-%d", secondTelegramID)),
+		"integration-test",
+		nil,
+		time.Now().Add(time.Hour),
+		policy,
+		auth.LoginAccess{InviteTokenHash: inviteHash},
+	); err != nil {
+		t.Fatalf("CompleteTelegramLoginWithAccessPolicyAndAccess(second with invite) error = %v", err)
+	}
+
+	if _, err := store.CompleteTelegramLoginWithAccessPolicyAndAccess(
+		ctx,
+		auth.TelegramProfile{TelegramID: thirdTelegramID, Username: fmt.Sprintf("integration_%d", thirdTelegramID), DisplayName: "Integration Test"},
+		[]byte("encrypted-telegram-session"),
+		[]byte(fmt.Sprintf("policy-refresh-reuse-%d", thirdTelegramID)),
+		"integration-test",
+		nil,
+		time.Now().Add(time.Hour),
+		policy,
+		auth.LoginAccess{InviteTokenHash: inviteHash},
+	); !errors.Is(err, auth.ErrInviteInvalid) {
+		t.Fatalf("CompleteTelegramLoginWithAccessPolicyAndAccess(third with consumed invite) error = %v, want ErrInviteInvalid", err)
+	}
+}
+
+func TestAuthPersistenceCreateInviteRespectsCapacityReservation(t *testing.T) {
+	database := openIntegrationDB(t)
+	store := auth.NewSessionStore(database)
+	ctx := context.Background()
+	resetCommunityOwnerBinding(t, database)
+
+	firstTelegramID := int64(919_100_000_000 + time.Now().UnixNano()%1_000_000_000)
+	t.Cleanup(func() {
+		_, _ = database.ExecContext(context.Background(), `DELETE FROM users WHERE telegram_id = $1`, firstTelegramID)
+	})
+
+	policy := auth.LoginPolicy{
+		MaxConnectedTelegramAccounts: 2,
+		BindCommunityOwner:           false,
+	}
+	firstUser, err := store.CompleteTelegramLoginWithAccessPolicy(
+		ctx,
+		auth.TelegramProfile{TelegramID: firstTelegramID, Username: fmt.Sprintf("integration_%d", firstTelegramID), DisplayName: "Integration Test"},
+		[]byte("encrypted-telegram-session"),
+		[]byte(fmt.Sprintf("policy-refresh-%d", firstTelegramID)),
+		"integration-test",
+		nil,
+		time.Now().Add(time.Hour),
+		policy,
+	)
+	if err != nil {
+		t.Fatalf("CompleteTelegramLoginWithAccessPolicy(first bootstrap) error = %v", err)
+	}
+
+	inviteHash1, err := auth.HashRefreshToken("integration-invite-cap-1", "integration-pepper")
+	if err != nil {
+		t.Fatalf("HashRefreshToken(invite 1) error = %v", err)
+	}
+	if _, err := store.CreateInstanceInvite(
+		ctx,
+		firstUser.ID,
+		inviteHash1,
+		sql.NullInt64{},
+		time.Now().Add(30*time.Minute),
+		1,
+		policy.MaxConnectedTelegramAccounts,
+	); err != nil {
+		t.Fatalf("CreateInstanceInvite(first) error = %v", err)
+	}
+
+	inviteHash2, err := auth.HashRefreshToken("integration-invite-cap-2", "integration-pepper")
+	if err != nil {
+		t.Fatalf("HashRefreshToken(invite 2) error = %v", err)
+	}
+	if _, err := store.CreateInstanceInvite(
+		ctx,
+		firstUser.ID,
+		inviteHash2,
+		sql.NullInt64{},
+		time.Now().Add(30*time.Minute),
+		1,
+		policy.MaxConnectedTelegramAccounts,
+	); !errors.Is(err, auth.ErrInviteCapacityReached) {
+		t.Fatalf("CreateInstanceInvite(second) error = %v, want ErrInviteCapacityReached", err)
+	}
+}
+
 func TestFilesUploadsPersistenceOwnerIsolationAndCompletion(t *testing.T) {
 	database := openIntegrationDB(t)
 	sessionStore := auth.NewSessionStore(database)
@@ -599,6 +823,30 @@ WHERE file_id = $1
 	}
 	if maxAvailable.Sub(minAvailable) < 15*time.Second {
 		t.Fatalf("deleted file cleanup delay = %s, want at least 15s", maxAvailable.Sub(minAvailable))
+	}
+}
+
+func TestFilesPersistenceWorkspaceLimitOnRootFolders(t *testing.T) {
+	database := openIntegrationDB(t)
+	sessionStore := auth.NewSessionStore(database)
+	fileStore := files.NewStore(database)
+	ctx := context.Background()
+
+	telegramID := int64(918_000_000_000 + time.Now().UnixNano()%1_000_000_000)
+	user, cleanupUser := createUserThroughLogin(t, database, sessionStore, telegramID)
+	defer cleanupUser()
+
+	firstRoot, err := fileStore.CreateFolderWithLimit(ctx, user.ID, "", "workspace-one", 1)
+	if err != nil {
+		t.Fatalf("CreateFolderWithLimit(first root) error = %v", err)
+	}
+
+	if _, err := fileStore.CreateFolderWithLimit(ctx, user.ID, "", "workspace-two", 1); !errors.Is(err, files.ErrWorkspaceLimit) {
+		t.Fatalf("CreateFolderWithLimit(second root) error = %v, want files.ErrWorkspaceLimit", err)
+	}
+
+	if _, err := fileStore.CreateFolderWithLimit(ctx, user.ID, firstRoot.ID, "child-folder", 1); err != nil {
+		t.Fatalf("CreateFolderWithLimit(child) error = %v", err)
 	}
 }
 
@@ -1532,13 +1780,13 @@ func ensureLatestMigration(t *testing.T, database *sql.DB) {
 SELECT EXISTS (
     SELECT 1
     FROM schema_migrations
-			WHERE version = '000025'
+			WHERE version = '000029'
 )`).Scan(&exists)
 	if err != nil {
 		t.Fatalf("schema migration check failed: %v", err)
 	}
 	if !exists {
-		t.Fatalf("TEST_DATABASE_URL database is not migrated through 000025; run go run ./cmd/migrate up first")
+		t.Fatalf("TEST_DATABASE_URL database is not migrated through 000029; run go run ./cmd/migrate up first")
 	}
 }
 

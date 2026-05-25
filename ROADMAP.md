@@ -22,10 +22,13 @@ What already works:
 
 The next work should focus on stability and first-release quality:
 
+- lock `v0.4.0` scope around offline-first licensing foundation, backend feature gates, Community owner binding behavior, and license-aware instance invites;
+- complete local TeleVault MFA in `v0.4.0`: TOTP + WebAuthn + 10 one-time recovery codes;
 - harden large upload reliability and progress reporting;
 - improve resume and retry behavior for staged uploads;
-- add local TeleVault MFA for Community and higher editions: TOTP and/or WebAuthn with 10 recovery codes;
 - add offline-first commercial licensing foundation: local signed license verification and backend feature gates;
+- define instance invitation flow and license-aware join capacity for Pro/Team;
+- document and plan the public website as a static marketing-plus-docs entry point;
 - complete recovery bundle UX and documentation;
 - expand smoke coverage for auth, upload, download, public links, and recovery;
 - document backup and restore for database state, AGE identity, Telegram sessions, logs, and recovery bundles;
@@ -64,6 +67,9 @@ Commercial licensing should be built around a separate licensing server and loca
 - signed license artifact bound to `instance_id` and verified locally in TeleVault;
 - no mandatory runtime dependency on licensing-server reachability;
 - optional online renewals later, but no mandatory heartbeat checks;
+- Pro/Team capabilities are shipped as compiled commercial modules in signed build artifacts, not as runtime-loaded plugins;
+- an active license is required to download new commercial module releases, private image updates, and update metadata;
+- when a license expires, the instance keeps the last installed commercial modules in restricted mode, but new commercial module updates stop until renewal;
 - graceful expiration fallback to Community behavior without data lockout;
 - backup and restore guidance must include `instance_id` and installed license artifacts to avoid accidental loss after server reinstall/migration.
 
@@ -102,3 +108,8 @@ TeleVault should not drift toward these directions:
 - hardware-locked DRM or online-only activation.
 
 If a future feature or doc makes TeleVault look more like a hosted storage provider, it should be rewritten toward self-hosting, privacy, encryption, and user-controlled workflows.
+
+## Release Milestones
+
+- `v0.4.0` target: local signed-license verification, Community/Pro/Team backend gates, Community owner binding enforcement, invite-capacity enforcement, and local instance MFA (`TOTP + WebAuthn + 10 recovery codes`).
+- `v0.4.0` execution checklist: `docs/development/release-v0.4.0.md`.

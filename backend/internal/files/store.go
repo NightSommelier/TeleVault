@@ -15,6 +15,7 @@ var (
 	ErrInvalidMove       = errors.New("invalid file move")
 	ErrInvalidName       = errors.New("invalid file name")
 	ErrInvalidPermission = errors.New("invalid permission")
+	ErrWorkspaceLimit    = errors.New("workspace limit reached")
 )
 
 const (
@@ -46,6 +47,18 @@ type File struct {
 	Status         string
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
+}
+
+type PendingUpload struct {
+	UploadID      string
+	OwnerID       string
+	ParentID      sql.NullString
+	Name          string
+	MimeType      sql.NullString
+	PlaintextSize sql.NullInt64
+	Status        string
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
 }
 
 type FilePart struct {
@@ -200,6 +213,62 @@ ORDER BY type DESC, name_plain ASC, created_at ASC`,
 	}
 
 	return files, nil
+}
+
+func (s *Store) ListPendingUploads(ctx context.Context, ownerID string, parentID string) ([]PendingUpload, error) {
+	var rows *sql.Rows
+	var err error
+	if parentID == "" {
+		rows, err = s.db.QueryContext(ctx, `
+SELECT id, owner_id, parent_id, name_plain, mime_type, plaintext_size, status, created_at, updated_at
+FROM uploads
+WHERE owner_id = $1
+  AND parent_id IS NULL
+  AND status IN ('pending', 'uploading')
+  AND expires_at > now()
+ORDER BY created_at ASC`,
+			ownerID,
+		)
+	} else {
+		rows, err = s.db.QueryContext(ctx, `
+SELECT id, owner_id, parent_id, name_plain, mime_type, plaintext_size, status, created_at, updated_at
+FROM uploads
+WHERE owner_id = $1
+  AND parent_id = $2
+  AND status IN ('pending', 'uploading')
+  AND expires_at > now()
+ORDER BY created_at ASC`,
+			ownerID,
+			parentID,
+		)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]PendingUpload, 0, 8)
+	for rows.Next() {
+		var item PendingUpload
+		if err := rows.Scan(
+			&item.UploadID,
+			&item.OwnerID,
+			&item.ParentID,
+			&item.Name,
+			&item.MimeType,
+			&item.PlaintextSize,
+			&item.Status,
+			&item.CreatedAt,
+			&item.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (s *Store) GetByID(ctx context.Context, ownerID string, id string) (File, error) {
@@ -1253,6 +1322,20 @@ ORDER BY s.created_at DESC`,
 }
 
 func (s *Store) CreateFolder(ctx context.Context, ownerID string, parentID string, name string) (File, error) {
+	return s.CreateFolderWithLimit(ctx, ownerID, parentID, name, 0)
+}
+
+func (s *Store) CreateFolderWithLimit(ctx context.Context, ownerID string, parentID string, name string, maxRootFolders int) (File, error) {
+	if parentID == "" && maxRootFolders > 0 {
+		rootCount, err := s.CountRootFolders(ctx, ownerID)
+		if err != nil {
+			return File{}, err
+		}
+		if rootCount >= maxRootFolders {
+			return File{}, ErrWorkspaceLimit
+		}
+	}
+
 	if parentID != "" {
 		if err := s.ensureParentFolder(ctx, ownerID, parentID); err != nil {
 			return File{}, err
@@ -1272,6 +1355,23 @@ RETURNING id, owner_id, parent_id, name_plain, mime_type, plaintext_size, cipher
 	}
 
 	return file, nil
+}
+
+func (s *Store) CountRootFolders(ctx context.Context, ownerID string) (int, error) {
+	var count int
+	err := s.db.QueryRowContext(ctx, `
+SELECT COUNT(*)
+FROM files
+WHERE owner_id = $1
+  AND type = 'folder'
+  AND parent_id IS NULL
+  AND deleted_at IS NULL`,
+		ownerID,
+	).Scan(&count)
+	if err != nil {
+		return 0, err
+	}
+	return count, nil
 }
 
 func (s *Store) ensureParentFolder(ctx context.Context, ownerID string, parentID string) error {

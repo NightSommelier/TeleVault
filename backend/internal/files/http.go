@@ -24,6 +24,7 @@ import (
 
 	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/auth"
 	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/crypto/agefile"
+	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/licensing"
 	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/telegramartifact"
 )
 
@@ -161,6 +162,7 @@ type Handler struct {
 	sessionCrypto auth.TelegramSessionCrypto
 	ageIdentity   age.Identity
 	telegram      auth.TelegramStorageClient
+	licenseStore  *licensing.Store
 }
 
 type shareRecipientDiscovery interface {
@@ -182,6 +184,7 @@ func NewHandler(db *sql.DB, logger *slog.Logger, downloads *DownloadTracker, pub
 		sessionCrypto: sessionCrypto,
 		ageIdentity:   ageIdentity,
 		telegram:      telegram,
+		licenseStore:  licensing.NewStore(db),
 	}
 }
 
@@ -202,6 +205,14 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "file_list_failed")
 		return
+	}
+	pending, err := h.store.ListPendingUploads(r.Context(), user.ID, parentID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "file_list_failed")
+		return
+	}
+	for _, upload := range pending {
+		responses = append(responses, pendingUploadResponse(upload))
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -256,9 +267,14 @@ func (h *Handler) CreateFolder(w http.ResponseWriter, r *http.Request) {
 	}
 
 	parentID := strings.TrimSpace(request.ParentID)
-	file, err := h.store.CreateFolder(r.Context(), user.ID, parentID, name)
+	entitlement := h.entitlementForRequest(r.Context())
+	file, err := h.store.CreateFolderWithLimit(r.Context(), user.ID, parentID, name, entitlement.MaxWorkspaces)
 	if errors.Is(err, ErrNotFound) {
 		writeError(w, http.StatusNotFound, "parent_folder_not_found")
+		return
+	}
+	if errors.Is(err, ErrWorkspaceLimit) {
+		writeError(w, http.StatusForbidden, "workspace_limit_reached")
 		return
 	}
 	if err != nil {
@@ -269,6 +285,17 @@ func (h *Handler) CreateFolder(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"file": fileResponse(file),
 	})
+}
+
+func (h *Handler) entitlementForRequest(ctx context.Context) licensing.Entitlement {
+	state, err := h.licenseStore.Current(ctx)
+	if err != nil {
+		if h.logger != nil {
+			h.logger.Warn("license state lookup failed; using community entitlement fallback", "error", err)
+		}
+		return licensing.EffectiveEntitlement(licensing.DefaultState())
+	}
+	return licensing.EffectiveEntitlement(state)
 }
 
 func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
@@ -1145,6 +1172,8 @@ func filesResponse(files []File) []map[string]any {
 func fileResponse(file File) map[string]any {
 	return map[string]any{
 		"id":                 file.ID,
+		"upload_id":          nil,
+		"is_pending_upload":  false,
 		"owner_id":           file.OwnerID,
 		"owner_telegram_id":  nil,
 		"owner_username":     nil,
@@ -1160,6 +1189,29 @@ func fileResponse(file File) map[string]any {
 		"can_delete":         nil,
 		"created_at":         file.CreatedAt,
 		"updated_at":         file.UpdatedAt,
+	}
+}
+
+func pendingUploadResponse(upload PendingUpload) map[string]any {
+	return map[string]any{
+		"id":                 "upload:" + upload.UploadID,
+		"upload_id":          upload.UploadID,
+		"is_pending_upload":  true,
+		"owner_id":           upload.OwnerID,
+		"owner_telegram_id":  nil,
+		"owner_username":     nil,
+		"owner_display_name": nil,
+		"parent_id":          nullableStringValue(upload.ParentID),
+		"name":               upload.Name,
+		"mime_type":          nullableStringValue(upload.MimeType),
+		"plaintext_size":     nullableInt64Value(upload.PlaintextSize),
+		"ciphertext_size":    nil,
+		"type":               TypeFile,
+		"status":             upload.Status,
+		"access":             FileAccessOwner,
+		"can_delete":         false,
+		"created_at":         upload.CreatedAt,
+		"updated_at":         upload.UpdatedAt,
 	}
 }
 

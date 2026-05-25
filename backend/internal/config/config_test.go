@@ -224,6 +224,7 @@ func validConfig() Config {
 
 		AuthRateLimitEnabled:              true,
 		AuthSingleUserMode:                true,
+		AuthForceMFA:                      false,
 		TelegramAuthIPLimitPerMinute:      DefaultTelegramAuthIPLimitPerMinute,
 		TelegramSendCodePhoneLimitPerHour: DefaultTelegramSendCodePhoneLimitPerHour,
 		TelegramLoginPhoneLimitPerHour:    DefaultTelegramLoginPhoneLimitPerHour,
