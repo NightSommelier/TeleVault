@@ -125,6 +125,9 @@ func TestCompleteTelegramQRLoginMFAInvalid(t *testing.T) {
 	if body["error"] != "telegram_mfa_invalid" {
 		t.Fatalf("error = %v, want telegram_mfa_invalid", body["error"])
 	}
+	if _, err := handler.qrLogins.get("qr-1"); err != nil {
+		t.Fatalf("session lookup after invalid MFA failed: %v", err)
+	}
 }
 
 type stubTelegramAuthClient struct{}

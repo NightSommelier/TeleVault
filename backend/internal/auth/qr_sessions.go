@@ -8,12 +8,15 @@ import (
 
 var ErrQRLoginNotFound = errors.New("qr login session not found")
 
+const qrLoginMFAWindow = 10 * time.Minute
+
 type qrLoginSession struct {
 	id        string
 	token     TelegramQRLoginToken
 	results   <-chan TelegramQRLoginResult
 	passwords chan<- TelegramQRLoginPasswordAttempt
 	mfaNeeded bool
+	mfaUntil  time.Time
 	cancel    func()
 	expiresAt time.Time
 }
@@ -66,6 +69,9 @@ func (s *qrLoginSessions) markMFARequired(id string) error {
 		return ErrQRLoginNotFound
 	}
 	session.mfaNeeded = true
+	if session.mfaUntil.IsZero() {
+		session.mfaUntil = s.now().Add(qrLoginMFAWindow)
+	}
 	return nil
 }
 
@@ -103,7 +109,12 @@ func (s *qrLoginSessions) get(id string) (*qrLoginSession, error) {
 	if !ok {
 		return nil, ErrQRLoginNotFound
 	}
-	if !session.expiresAt.IsZero() && !session.expiresAt.After(s.now()) {
+	now := s.now()
+	deadline := session.expiresAt
+	if session.mfaNeeded && !session.mfaUntil.IsZero() {
+		deadline = session.mfaUntil
+	}
+	if !deadline.IsZero() && !deadline.After(now) {
 		delete(s.sessions, id)
 		if session.cancel != nil {
 			session.cancel()
