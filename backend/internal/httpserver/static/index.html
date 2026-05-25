@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>TeleVault</title>
+  <link rel="icon" type="image/png" href="/logo.png">
   <style>
     :root {
       color-scheme: light;
@@ -96,11 +97,8 @@
       width: 30px;
       height: 30px;
       border-radius: 7px;
-      background: var(--primary);
-      display: grid;
-      place-items: center;
-      color: white;
-      font-weight: 700;
+      object-fit: cover;
+      display: block;
     }
     h1 { font-size: 17px; margin: 0; font-weight: 650; }
     .userbar { display: flex; align-items: center; gap: 10px; color: var(--muted); min-width: 0; }
@@ -574,7 +572,7 @@
   <div class="shell">
     <header>
       <div class="brand">
-        <div class="mark">TV</div>
+        <img class="mark" src="/logo.png" alt="TeleVault logo">
         <h1>TeleVault</h1>
         <span id="appVersion" class="version-pill"></span>
       </div>
