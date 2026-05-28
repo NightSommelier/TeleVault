@@ -8,6 +8,8 @@ What already works:
 
 - self-hosted Docker Compose deployment;
 - Telegram login with phone, QR, and 2FA;
+- local 2FA methods (TOTP, passkeys, recovery codes);
+- remembered-device re-entry with local challenge verification;
 - encrypted upload and download flow;
 - folder and file management;
 - staged uploads drained by a background worker;
@@ -16,6 +18,9 @@ What already works:
 - admin upload settings;
 - recovery export/import foundation;
 - persistent application logs;
+- local signed-license install and verification in admin settings;
+- configurable Telegram client profile (`device/system/app/lang`) for MTProto sessions;
+- Community owner binding and invite-capacity enforcement;
 - no telemetry by default.
 
 ## Near Term
@@ -23,11 +28,10 @@ What already works:
 The next work should focus on stability and first-release quality:
 
 - keep `v0.4.0` as the published licensing/invite/community-boundary release baseline;
-- complete local TeleVault MFA in `v0.4.1`: TOTP + WebAuthn + 10 one-time recovery codes;
+- close `v0.4.2` release verification (remembered login, local challenge re-entry, Telegram session safety mode);
 - harden large upload reliability and progress reporting;
 - improve resume and retry behavior for staged uploads;
-- add offline-first commercial licensing foundation: local signed license verification and backend feature gates;
-- define instance invitation flow and license-aware join capacity for Pro/Team;
+- keep Community behavior and fallback on missing/invalid/expired paid license fully stable;
 - document and plan the public website as a static marketing-plus-docs entry point;
 - complete recovery bundle UX and documentation;
 - expand smoke coverage for auth, upload, download, public links, and recovery;
@@ -59,11 +63,10 @@ Pro should add convenience for power users and homelabs:
 - richer recovery and administration tooling;
 - advanced Desktop workflows.
 
-## Licensing Infrastructure (Planned)
+## Licensing Infrastructure
 
-Commercial licensing should be built around a separate licensing server and local instance verification:
+Commercial licensing is built around a separate licensing server and local instance verification:
 
-- separate licensing server repository and deployment;
 - signed license artifact bound to `instance_id` and verified locally in TeleVault;
 - no mandatory runtime dependency on licensing-server reachability;
 - optional online renewals later, but no mandatory heartbeat checks;
@@ -72,6 +75,11 @@ Commercial licensing should be built around a separate licensing server and loca
 - when a license expires, the instance keeps the last installed commercial modules in restricted mode, but new commercial module updates stop until renewal;
 - graceful expiration fallback to Community behavior without data lockout;
 - backup and restore guidance must include `instance_id` and installed license artifacts to avoid accidental loss after server reinstall/migration.
+
+Current MVP status:
+
+- operator-driven subscription/invoice flow with manual payment verification;
+- payment-provider automation remains a next stage.
 
 ## Team
 
@@ -112,5 +120,7 @@ If a future feature or doc makes TeleVault look more like a hosted storage provi
 ## Release Milestones
 
 - `v0.4.0` published baseline: local signed-license verification, Community/Pro/Team backend gates, Community owner binding enforcement, and invite-capacity enforcement.
-- `v0.4.1` target: local instance MFA (`TOTP + WebAuthn + 10 recovery codes`) and MFA gate hardening/verification.
-- `v0.4.1` execution checklist: `docs/development/release-v0.4.1.md`.
+- `v0.4.1` scope implemented in current tree: local instance 2FA (`TOTP + WebAuthn + 10 recovery codes`) and gate hardening.
+- `v0.4.2` in stabilization: remembered-device re-entry, local challenge re-auth, Telegram-disconnected safety mode.
+- `v0.4.2` public release summary draft: `docs/development/release-notes-v0.4.2-community.md`.
+- `v0.5.0` target: commercial module/update-right channel hardening, payment-provider integration path, and recovery-map/storage portability hardening.

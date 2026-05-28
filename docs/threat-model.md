@@ -99,7 +99,7 @@ Date: 2026-05-19
 - Use memory-hard password hashing for password-protected public links.
 - Keep public-link passwords out of logs, audit payloads, and persisted plaintext storage.
 - Store only ciphertext in Telegram.
-- When Telegram-side artifact metadata is intentionally masked, use deterministic decoy names, MIME types, and reversible wrappers so Telegram does not see an obvious `age-encryption.org/v1` header at byte zero. This hides the raw age fingerprint and original names, but it does not make the object a fully valid media file, and it does not protect against size analysis, traffic analysis, or a motivated attacker who knows TeleVault's wrapper format.
+- When Telegram-side artifact metadata is intentionally masked, use a deterministic masking profile that avoids exposing obvious encryption fingerprints at byte zero. This improves transport privacy signals but does not eliminate size or traffic analysis risk.
 - Store only ciphertext in upload staging.
 - Protect `UPLOAD_STAGING_DIR` with owner-only filesystem permissions and exclude it from Git/backups unless intentionally backed up with the database and age identity.
 - Use durable queue leases, bounded worker concurrency, and retry/backoff for transient Telegram failures.
