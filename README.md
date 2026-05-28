@@ -163,8 +163,7 @@ Detailed roadmap: [ROADMAP.md](./ROADMAP.md)
 Contributions are welcome. Start with:
 
 1. [CONTRIBUTING.md](./CONTRIBUTING.md)
-2. [docs/development/](./docs/development/)
-3. Open issues and roadmap alignment before large feature work
+2. Open issues and roadmap alignment before large feature work
 
 ## License
 
