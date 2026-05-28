@@ -6,7 +6,7 @@ TeleVault is a self-hosted encrypted file management utility with Telegram integ
 
 Preferred reporting channel: GitHub Security Advisories.
 
-Fallback email: `security@televault.example` (replace with a real mailbox before the first public release).
+Fallback email: `sommelier@matrix.co.ua`.
 
 ## Reporting a Vulnerability
 

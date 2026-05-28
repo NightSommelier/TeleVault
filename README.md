@@ -9,7 +9,7 @@
     <a href="#roadmap">Roadmap</a>
   </p>
   <p>
-    <img alt="License" src="https://img.shields.io/badge/license-AGPL--3.0-0f766e" />
+    <img alt="License" src="https://img.shields.io/badge/license-AGPLv3%20%2B%20Commercial-0f766e" />
     <img alt="Release" src="https://img.shields.io/github/v/release/NightSommelier/TeleVault" />
     <img alt="Docker Pulls" src="https://img.shields.io/badge/docker-pulls-community-lightgrey" />
     <img alt="Stars" src="https://img.shields.io/github/stars/NightSommelier/TeleVault" />
@@ -167,6 +167,8 @@ Contributions are welcome. Start with:
 
 ## License
 
-TeleVault Community edition is licensed under AGPL-3.0.
+TeleVault uses dual licensing: `AGPLv3 + Commercial License`.
 
-See [LICENSE](./LICENSE) for full text.
+For commercial licensing, contact `sommelier@matrix.co.ua`.
+
+See [LICENSE.md](./LICENSE.md) for details.

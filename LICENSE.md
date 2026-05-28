@@ -1,4 +1,19 @@
-SPDX-License-Identifier: AGPL-3.0-only
+SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-TeleVault-Commercial
+
+TeleVault Dual-License Notice
+=============================
+
+TeleVault is available under a dual-license model:
+
+1. GNU Affero General Public License v3.0 (AGPLv3), or
+2. Commercial License from the copyright holder.
+
+You may choose either license for your use case.
+
+For commercial licensing, contact:
+sommelier@matrix.co.ua
+
+If you do not have a separate commercial agreement, AGPLv3 terms apply.
 
 GNU AFFERO GENERAL PUBLIC LICENSE
 Version 3, 19 November 2007
