@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"filippo.io/age"
-	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/crypto/agefile"
+	"github.com/NightSommelier/TeleVault/backend/internal/crypto/agefile"
 )
 
 func TestSpecForArtifactIDIsDeterministic(t *testing.T) {

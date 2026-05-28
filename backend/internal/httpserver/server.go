@@ -10,17 +10,17 @@ import (
 	"net/http"
 
 	"filippo.io/age"
-	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/adminsettings"
-	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/auth"
-	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/buildinfo"
-	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/clientip"
-	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/config"
-	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/crypto/secrets"
-	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/db"
-	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/files"
-	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/recovery"
-	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/uploads"
-	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/valkey"
+	"github.com/NightSommelier/TeleVault/backend/internal/adminsettings"
+	"github.com/NightSommelier/TeleVault/backend/internal/auth"
+	"github.com/NightSommelier/TeleVault/backend/internal/buildinfo"
+	"github.com/NightSommelier/TeleVault/backend/internal/clientip"
+	"github.com/NightSommelier/TeleVault/backend/internal/config"
+	"github.com/NightSommelier/TeleVault/backend/internal/crypto/secrets"
+	"github.com/NightSommelier/TeleVault/backend/internal/db"
+	"github.com/NightSommelier/TeleVault/backend/internal/files"
+	"github.com/NightSommelier/TeleVault/backend/internal/recovery"
+	"github.com/NightSommelier/TeleVault/backend/internal/uploads"
+	"github.com/NightSommelier/TeleVault/backend/internal/valkey"
 )
 
 //go:embed static/*
@@ -79,18 +79,32 @@ func (s *Server) routes() {
 	}
 	authHandler := auth.NewHandlerWithRateLimiter(s.cfg, s.logger, s.db, telegramSessionCrypto, s.telegram, rateLimitStore, s.clientIP)
 	s.mux.HandleFunc("POST /auth/telegram/send-code", authHandler.SendTelegramCode)
+	s.mux.HandleFunc("POST /auth/telegram/resend-code", authHandler.ResendTelegramCode)
 	s.mux.HandleFunc("POST /auth/telegram/login", authHandler.LoginWithTelegram)
+	s.mux.Handle("POST /auth/telegram/reconnect", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(authHandler.ReconnectTelegramSession))))
 	s.mux.HandleFunc("POST /auth/telegram/qr/start", authHandler.StartTelegramQRLogin)
 	s.mux.HandleFunc("POST /auth/telegram/qr/complete", authHandler.CompleteTelegramQRLogin)
+	s.mux.HandleFunc("GET /auth/remembered-account", authHandler.RememberedAccount)
+	s.mux.Handle("POST /auth/remembered-login", http.HandlerFunc(authHandler.LoginWithRememberedDevice))
+	s.mux.Handle("POST /auth/remembered-device/forget", authHandler.RequireCSRF(http.HandlerFunc(authHandler.ForgetRememberedDevice)))
 	s.mux.Handle("GET /auth/mfa/status", authHandler.RequireAuthAllowUnverifiedMFA(http.HandlerFunc(authHandler.LocalMFAStatus)))
 	s.mux.Handle("POST /auth/mfa/totp/enroll/start", authHandler.RequireAuthAllowUnverifiedMFA(authHandler.RequireCSRF(http.HandlerFunc(authHandler.StartTOTPEnrollment))))
 	s.mux.Handle("POST /auth/mfa/totp/enroll/confirm", authHandler.RequireAuthAllowUnverifiedMFA(authHandler.RequireCSRF(http.HandlerFunc(authHandler.ConfirmTOTPEnrollment))))
 	s.mux.Handle("POST /auth/mfa/totp/verify", authHandler.RequireAuthAllowUnverifiedMFA(authHandler.RequireCSRF(http.HandlerFunc(authHandler.VerifyLocalTOTP))))
+	s.mux.Handle("DELETE /auth/mfa/totp", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(authHandler.DisableLocalTOTP))))
 	s.mux.Handle("POST /auth/mfa/webauthn/register/start", authHandler.RequireAuthAllowUnverifiedMFA(authHandler.RequireCSRF(http.HandlerFunc(authHandler.StartWebAuthnRegistration))))
 	s.mux.Handle("POST /auth/mfa/webauthn/register/finish", authHandler.RequireAuthAllowUnverifiedMFA(authHandler.RequireCSRF(http.HandlerFunc(authHandler.FinishWebAuthnRegistration))))
 	s.mux.Handle("POST /auth/mfa/webauthn/verify/start", authHandler.RequireAuthAllowUnverifiedMFA(authHandler.RequireCSRF(http.HandlerFunc(authHandler.StartWebAuthnVerify))))
 	s.mux.Handle("POST /auth/mfa/webauthn/verify/finish", authHandler.RequireAuthAllowUnverifiedMFA(authHandler.RequireCSRF(http.HandlerFunc(authHandler.FinishWebAuthnVerify))))
+	s.mux.Handle("DELETE /auth/mfa/webauthn", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(authHandler.DisableWebAuthn))))
+	s.mux.Handle("PATCH /auth/mfa/webauthn/{credential_id}", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(authHandler.RenameWebAuthnCredential))))
+	s.mux.Handle("DELETE /auth/mfa/webauthn/{credential_id}", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(authHandler.DeleteWebAuthnCredential))))
+	s.mux.Handle("POST /auth/mfa/recovery/regenerate", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(authHandler.RegenerateRecoveryCodes))))
 	s.mux.Handle("POST /auth/mfa/recovery/verify", authHandler.RequireAuthAllowUnverifiedMFA(authHandler.RequireCSRF(http.HandlerFunc(authHandler.VerifyRecoveryCode))))
+	s.mux.Handle("DELETE /auth/mfa/recovery", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(authHandler.DisableRecoveryCodes))))
+	s.mux.Handle("POST /auth/local-password/set", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(authHandler.SetLocalPassword))))
+	s.mux.Handle("POST /auth/local-password/verify", authHandler.RequireAuthAllowUnverifiedMFA(authHandler.RequireCSRF(http.HandlerFunc(authHandler.VerifyLocalPassword))))
+	s.mux.Handle("DELETE /auth/local-password", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(authHandler.DisableLocalPassword))))
 	s.mux.Handle("POST /auth/refresh", authHandler.RequireCSRF(http.HandlerFunc(authHandler.Refresh)))
 	s.mux.Handle("POST /auth/logout", authHandler.RequireCSRF(http.HandlerFunc(authHandler.Logout)))
 	s.mux.Handle("GET /me", authHandler.RequireAuth(http.HandlerFunc(authHandler.Me)))
@@ -112,21 +126,21 @@ func (s *Server) routes() {
 	filesHandler := files.NewHandler(s.db, s.logger, downloadTracker, publicLimiter, telegramSessionCrypto, s.ageIdentity, s.telegram)
 	s.mux.Handle("GET /files", authHandler.RequireAuth(http.HandlerFunc(filesHandler.List)))
 	s.mux.Handle("GET /shared", authHandler.RequireAuth(http.HandlerFunc(filesHandler.ListSharedWithMe)))
-	s.mux.Handle("POST /folders", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(filesHandler.CreateFolder))))
+	s.mux.Handle("POST /folders", authHandler.RequireAuth(authHandler.RequireTelegramSessionWritable(authHandler.RequireCSRF(http.HandlerFunc(filesHandler.CreateFolder)))))
 	s.mux.Handle("GET /files/{id}", authHandler.RequireAuth(http.HandlerFunc(filesHandler.Get)))
 	s.mux.Handle("GET /files/{id}/activity", authHandler.RequireAuth(http.HandlerFunc(filesHandler.DownloadActivity)))
-	s.mux.Handle("PATCH /files/{id}", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(filesHandler.Patch))))
-	s.mux.Handle("DELETE /files/{id}", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(filesHandler.Delete))))
-	s.mux.Handle("PATCH /files/bulk-move", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(filesHandler.BulkMove))))
-	s.mux.Handle("POST /files/bulk-delete", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(filesHandler.BulkDelete))))
-	s.mux.Handle("GET /files/{id}/download", authHandler.RequireAuth(http.HandlerFunc(filesHandler.Download)))
-	s.mux.Handle("GET /share-recipients", authHandler.RequireAuth(http.HandlerFunc(filesHandler.ListShareRecipients)))
+	s.mux.Handle("PATCH /files/{id}", authHandler.RequireAuth(authHandler.RequireTelegramSessionWritable(authHandler.RequireCSRF(http.HandlerFunc(filesHandler.Patch)))))
+	s.mux.Handle("DELETE /files/{id}", authHandler.RequireAuth(authHandler.RequireTelegramSessionWritable(authHandler.RequireCSRF(http.HandlerFunc(filesHandler.Delete)))))
+	s.mux.Handle("PATCH /files/bulk-move", authHandler.RequireAuth(authHandler.RequireTelegramSessionWritable(authHandler.RequireCSRF(http.HandlerFunc(filesHandler.BulkMove)))))
+	s.mux.Handle("POST /files/bulk-delete", authHandler.RequireAuth(authHandler.RequireTelegramSessionWritable(authHandler.RequireCSRF(http.HandlerFunc(filesHandler.BulkDelete)))))
+	s.mux.Handle("GET /files/{id}/download", authHandler.RequireAuth(authHandler.RequireTelegramSessionWritable(http.HandlerFunc(filesHandler.Download))))
+	s.mux.Handle("GET /share-recipients", authHandler.RequireAuth(authHandler.RequireTelegramSessionWritable(http.HandlerFunc(filesHandler.ListShareRecipients))))
 	s.mux.Handle("GET /files/{id}/shares", authHandler.RequireAuth(http.HandlerFunc(filesHandler.ListShares)))
-	s.mux.Handle("POST /files/{id}/shares", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(filesHandler.CreateShare))))
-	s.mux.Handle("DELETE /files/{id}/shares/{share_id}", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(filesHandler.RevokeShare))))
+	s.mux.Handle("POST /files/{id}/shares", authHandler.RequireAuth(authHandler.RequireTelegramSessionWritable(authHandler.RequireCSRF(http.HandlerFunc(filesHandler.CreateShare)))))
+	s.mux.Handle("DELETE /files/{id}/shares/{share_id}", authHandler.RequireAuth(authHandler.RequireTelegramSessionWritable(authHandler.RequireCSRF(http.HandlerFunc(filesHandler.RevokeShare)))))
 	s.mux.Handle("GET /files/{id}/public-links", authHandler.RequireAuth(http.HandlerFunc(filesHandler.ListPublicLinks)))
-	s.mux.Handle("POST /files/{id}/public-links", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(filesHandler.CreatePublicLink))))
-	s.mux.Handle("DELETE /files/{id}/public-links/{link_id}", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(filesHandler.RevokePublicLink))))
+	s.mux.Handle("POST /files/{id}/public-links", authHandler.RequireAuth(authHandler.RequireTelegramSessionWritable(authHandler.RequireCSRF(http.HandlerFunc(filesHandler.CreatePublicLink)))))
+	s.mux.Handle("DELETE /files/{id}/public-links/{link_id}", authHandler.RequireAuth(authHandler.RequireTelegramSessionWritable(authHandler.RequireCSRF(http.HandlerFunc(filesHandler.RevokePublicLink)))))
 	s.mux.HandleFunc("GET /public/{token}", filesHandler.PublicMetadata)
 	s.mux.HandleFunc("GET /public/{token}/download", filesHandler.PublicDownload)
 	s.mux.HandleFunc("POST /public/{token}/download", filesHandler.PublicDownload)
@@ -149,23 +163,24 @@ func (s *Server) routes() {
 			}, nil
 		},
 	})
-	s.mux.Handle("POST /uploads", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(uploadsHandler.Create))))
+	s.mux.Handle("POST /uploads", authHandler.RequireAuth(authHandler.RequireTelegramSessionWritable(authHandler.RequireCSRF(http.HandlerFunc(uploadsHandler.Create)))))
 	s.mux.Handle("GET /uploads/{id}", authHandler.RequireAuth(http.HandlerFunc(uploadsHandler.Get)))
-	s.mux.Handle("POST /uploads/{id}/parts/{part_number}", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(uploadsHandler.UploadPart))))
-	s.mux.Handle("POST /uploads/{id}/parts/{part_number}/chunks", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(uploadsHandler.UploadPartChunk))))
-	s.mux.Handle("POST /uploads/{id}/complete", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(uploadsHandler.Complete))))
-	s.mux.Handle("DELETE /uploads/{id}", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(uploadsHandler.Cancel))))
+	s.mux.Handle("POST /uploads/{id}/parts/{part_number}", authHandler.RequireAuth(authHandler.RequireTelegramSessionWritable(authHandler.RequireCSRF(http.HandlerFunc(uploadsHandler.UploadPart)))))
+	s.mux.Handle("POST /uploads/{id}/parts/{part_number}/chunks", authHandler.RequireAuth(authHandler.RequireTelegramSessionWritable(authHandler.RequireCSRF(http.HandlerFunc(uploadsHandler.UploadPartChunk)))))
+	s.mux.Handle("POST /uploads/{id}/complete", authHandler.RequireAuth(authHandler.RequireTelegramSessionWritable(authHandler.RequireCSRF(http.HandlerFunc(uploadsHandler.Complete)))))
+	s.mux.Handle("DELETE /uploads/{id}", authHandler.RequireAuth(authHandler.RequireTelegramSessionWritable(authHandler.RequireCSRF(http.HandlerFunc(uploadsHandler.Cancel)))))
 	s.mux.Handle("POST /uploads/client-events", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(uploadsHandler.ClientEvent))))
 
 	recoveryHandler := recovery.NewHandler(s.db, s.secrets)
 	s.mux.Handle("POST /recovery/export", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(recoveryHandler.Export))))
-	s.mux.Handle("POST /recovery/import", authHandler.RequireAuth(authHandler.RequireCSRF(http.HandlerFunc(recoveryHandler.Import))))
+	s.mux.Handle("POST /recovery/import", authHandler.RequireAuth(authHandler.RequireTelegramSessionWritable(authHandler.RequireCSRF(http.HandlerFunc(recoveryHandler.Import)))))
 
 	adminHandler := adminsettings.NewHandler(s.db, s.cfg)
 	s.mux.Handle("GET /admin/settings", authHandler.RequireAuth(authHandler.RequireAdmin(http.HandlerFunc(adminHandler.GetSettings))))
 	s.mux.Handle("PATCH /admin/settings/upload", authHandler.RequireAuth(authHandler.RequireAdmin(authHandler.RequireCSRF(http.HandlerFunc(adminHandler.PatchUploadSettings)))))
 	s.mux.Handle("PATCH /admin/settings/security", authHandler.RequireAuth(authHandler.RequireAdmin(authHandler.RequireCSRF(http.HandlerFunc(adminHandler.PatchSecurity)))))
 	s.mux.Handle("PATCH /admin/settings/license", authHandler.RequireAuth(authHandler.RequireAdmin(authHandler.RequireCSRF(http.HandlerFunc(adminHandler.PatchLicense)))))
+	s.mux.Handle("DELETE /admin/settings/license", authHandler.RequireAuth(authHandler.RequireAdmin(authHandler.RequireCSRF(http.HandlerFunc(adminHandler.DeleteLicense)))))
 	s.mux.Handle("GET /admin/invites", authHandler.RequireAuth(authHandler.RequireAdmin(http.HandlerFunc(adminHandler.ListInvites))))
 	s.mux.Handle("POST /admin/invites", authHandler.RequireAuth(authHandler.RequireAdmin(authHandler.RequireCSRF(http.HandlerFunc(adminHandler.CreateInvite)))))
 	s.mux.Handle("DELETE /admin/invites/{invite_id}", authHandler.RequireAuth(authHandler.RequireAdmin(authHandler.RequireCSRF(http.HandlerFunc(adminHandler.RevokeInvite)))))

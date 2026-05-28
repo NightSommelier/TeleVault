@@ -12,13 +12,13 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/adminusers"
-	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/auth"
-	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/config"
-	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/crypto/secrets"
-	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/db"
-	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/telegramauth"
-	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/telegramprobe"
+	"github.com/NightSommelier/TeleVault/backend/internal/adminusers"
+	"github.com/NightSommelier/TeleVault/backend/internal/auth"
+	"github.com/NightSommelier/TeleVault/backend/internal/config"
+	"github.com/NightSommelier/TeleVault/backend/internal/crypto/secrets"
+	"github.com/NightSommelier/TeleVault/backend/internal/db"
+	"github.com/NightSommelier/TeleVault/backend/internal/telegramauth"
+	"github.com/NightSommelier/TeleVault/backend/internal/telegramprobe"
 )
 
 func main() {
@@ -228,7 +228,13 @@ func probeTelegramLimit(ctx context.Context, args []string) error {
 		return err
 	}
 
-	telegramClient := telegramauth.NewClient(telegramAppID, cfg.TelegramAPIHash)
+	telegramClient := telegramauth.NewClientWithProfile(telegramAppID, cfg.TelegramAPIHash, telegramauth.ClientProfile{
+		DeviceModel:    cfg.TelegramClientDeviceModel,
+		SystemVersion:  cfg.TelegramClientSystemVersion,
+		AppVersion:     cfg.TelegramClientAppVersion,
+		LangCode:       cfg.TelegramClientLangCode,
+		SystemLangCode: cfg.TelegramClientSystemLangCode,
+	})
 	result, err := telegramprobe.Run(ctx, telegramClient, session, nullString(account.StoragePeer), plan)
 	if err != nil {
 		_ = probeStore.MarkFailed(context.Background(), account.UserID, err, nextProbeAt)

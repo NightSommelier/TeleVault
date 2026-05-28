@@ -17,8 +17,10 @@
       </div>
       <div id="userbar" class="userbar hidden">
         <span id="userName"></span>
+        <button id="securityBtn">Security</button>
         <button id="adminBtn" class="admin-btn hidden">Admin</button>
         <button id="logoutBtn">Log out</button>
+        <button id="logoutForgetBtn">Log out and forget device</button>
       </div>
     </header>
 
@@ -26,25 +28,60 @@
       <div class="panel login-box">
         <div class="panel-head">
           <div class="panel-title">Telegram sign in</div>
-          <button id="startQrBtn" class="primary">Start QR</button>
         </div>
         <div class="panel-body stack">
-          <div id="loginPhoneRow" class="field-row">
-            <div class="field">
-              <label for="loginPhoneInput">Phone</label>
-              <input id="loginPhoneInput" type="text" autocomplete="tel" placeholder="+380...">
+          <div id="rememberedBox" class="stack hidden">
+            <div id="rememberedUser" class="muted"></div>
+            <div id="rememberedStatus" class="muted"></div>
+            <div class="actions">
+              <button id="continueRememberedBtn" class="primary">Continue</button>
+              <button id="forgetRememberedBtn">Forget device</button>
+              <button id="useAnotherAccountBtn">Use another Telegram account</button>
             </div>
-            <div id="loginCodeField" class="field hidden">
-              <label id="loginCodeLabel" for="loginCodeInput">Code</label>
-              <input id="loginCodeInput" type="text" inputmode="numeric" autocomplete="one-time-code" placeholder="12345">
+            <div class="muted">This starts sign-in for another Telegram account. It will not reconnect the current account.</div>
+          </div>
+          <div id="loginTelegramBox" class="stack">
+            <div id="loginPhoneRow" class="stack">
+              <div class="field-row phone-row">
+                <div id="loginCountryField" class="field">
+                  <label for="loginCountrySelect">Country</label>
+                  <select id="loginCountrySelect"></select>
+                </div>
+                <div id="loginPhoneField" class="field">
+                  <label for="loginPhoneInput">Phone</label>
+                  <input id="loginPhoneInput" type="text" autocomplete="tel" placeholder="+380501234567">
+                </div>
+              </div>
+              <div id="loginPhoneHint" class="muted">Paste full number or type local number for selected country.</div>
+              <div id="loginPhonePreview" class="muted"></div>
             </div>
+          </div>
+          <div id="loginCodeField" class="field hidden">
+            <label id="loginCodeLabel" for="loginCodeInput">Code</label>
+            <input id="loginCodeInput" name="telegram_code" type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="one-time-code" autocapitalize="none" spellcheck="false" placeholder="12345">
           </div>
           <div id="loginPasswordField" class="field hidden">
-            <label for="loginPasswordInput">2FA password (if required)</label>
+            <label id="loginPasswordLabel" for="loginPasswordInput">Telegram two-step password (if required)</label>
             <input id="loginPasswordInput" type="password" autocomplete="current-password" placeholder="Telegram two-step password">
           </div>
+          <div id="localPasswordAction" class="stack hidden">
+            <div class="actions">
+              <button id="loginUsePasswordBtn">Use local password</button>
+            </div>
+            <div id="localPasswordField" class="field hidden">
+              <label for="localPasswordInput">Local password</label>
+              <div class="password-inline">
+                <input id="localPasswordInput" type="password" autocomplete="current-password" placeholder="Enter local password">
+                <button id="localPasswordToggleBtn" type="button" class="password-toggle" aria-label="Show local password" title="Show local password">
+                  <span class="eye-icon" aria-hidden="true"></span>
+                </button>
+              </div>
+            </div>
+          </div>
           <div class="actions">
+            <button id="startQrBtn" class="primary">Start QR</button>
             <button id="sendCodeBtn">Send code</button>
+            <button id="loginUseWebauthnBtn" class="hidden">Use passkey</button>
             <button id="loginWithCodeBtn" class="primary hidden">Sign in</button>
           </div>
           <img id="qrImage" class="qr hidden" alt="Telegram login QR code">
@@ -125,6 +162,10 @@
               <button id="upBtn">Up</button>
               <button id="refreshBtn">Refresh</button>
             </div>
+          </div>
+          <div id="readOnlyBanner" class="status hidden">
+            Telegram session is missing. Reconnect Telegram to upload, download, or change files.
+            <button id="reconnectTelegramBtn">Reconnect Telegram</button>
           </div>
           <div id="selectionBar" class="selection-bar hidden">
             <div id="selectionSummary" class="selection-summary"></div>
@@ -335,6 +376,74 @@
       </div>
     </div>
 
+    <div id="securityModal" class="modal-backdrop hidden">
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="securityTitle">
+        <div class="modal-head">
+          <div>
+            <div id="securityTitle" class="panel-title">Account security</div>
+            <div class="muted">Local 2FA for this TeleVault account</div>
+          </div>
+          <button id="closeSecurityBtn">Close</button>
+        </div>
+        <div class="modal-body stack">
+          <div class="field">
+            <label for="mfaRecoveryRemainingInput">Recovery codes remaining</label>
+            <input id="mfaRecoveryRemainingInput" type="text" readonly>
+          </div>
+          <div class="actions">
+            <button id="startTotpEnrollBtn">Set up TOTP</button>
+            <button id="disableTotpBtn">Disable TOTP</button>
+            <button id="regenerateRecoveryBtn">Regenerate recovery codes</button>
+          </div>
+          <div class="field">
+            <label for="mfaPasskeyNameInput">Passkey name</label>
+            <div class="actions">
+              <input id="mfaPasskeyNameInput" type="text" maxlength="80" autocomplete="off" placeholder="My laptop">
+              <button id="registerWebauthnBtn">Add passkey</button>
+            </div>
+          </div>
+          <div class="field">
+            <label>Passkeys</label>
+            <table class="table compact-table">
+              <tbody id="mfaPasskeysBody">
+                <tr><td class="muted">No passkeys configured.</td><td></td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="field">
+            <label for="mfaLocalPasswordInput">Local password fallback</label>
+            <div class="actions">
+              <input id="mfaLocalPasswordInput" type="password" autocomplete="new-password" placeholder="At least 5 characters">
+              <input id="mfaLocalPasswordConfirmInput" type="password" autocomplete="new-password" placeholder="Confirm password" class="hidden">
+              <button id="setLocalPasswordBtn">Set password</button>
+              <button id="disableLocalPasswordBtn">Disable local password</button>
+            </div>
+          </div>
+          <div id="mfaTotpEnrollBox" class="stack hidden">
+            <div class="field">
+              <label for="mfaTotpSecretInput">TOTP secret</label>
+              <input id="mfaTotpSecretInput" type="text" readonly>
+            </div>
+            <img id="mfaTotpQR" class="qr hidden" alt="TOTP enrollment QR code">
+            <div class="field">
+              <label for="mfaTotpCodeInput">Authenticator code</label>
+              <input id="mfaTotpCodeInput" name="totp" type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="one-time-code" autocapitalize="none" spellcheck="false" placeholder="123456">
+            </div>
+            <div class="actions">
+              <button id="confirmTotpEnrollBtn" class="primary">Confirm TOTP</button>
+            </div>
+          </div>
+          <div id="mfaRecoveryCodesBox" class="stack hidden">
+            <div class="field">
+              <label for="mfaRecoveryCodesOutput">Recovery codes (show once)</label>
+              <textarea id="mfaRecoveryCodesOutput" rows="8" readonly></textarea>
+            </div>
+          </div>
+          <div id="mfaStatus" class="status"></div>
+        </div>
+      </div>
+    </div>
+
     <div id="adminModal" class="modal-backdrop hidden">
       <div class="modal" role="dialog" aria-modal="true" aria-labelledby="adminTitle">
         <div class="modal-head">
@@ -438,65 +547,11 @@
                 <input id="adminLicenseFileInput" class="hidden-input" type="file" accept="application/json,.json">
                 <button id="pickAdminLicenseFileBtn" type="button">Choose file</button>
                 <button id="saveAdminLicenseBtn" class="primary">Install license</button>
+                <button id="removeAdminLicenseBtn" type="button" class="danger">Remove license</button>
               </div>
               <div id="adminLicenseStatus" class="status"></div>
             </div>
           </details>
-          <div class="subhead">
-            <div>
-              <div class="panel-title">Account overrides</div>
-              <div class="muted">Configured Telegram account limits.</div>
-            </div>
-          </div>
-          <div id="adminAccountEditor" class="stack hidden">
-            <div class="muted" id="adminAccountEditorTitle">Select an account override to edit.</div>
-            <div class="field-row">
-              <div class="field">
-                <label for="adminAccountDocumentLimitInput">Document limit bytes</label>
-                <input id="adminAccountDocumentLimitInput" type="number" min="1048576" step="1048576">
-              </div>
-              <div class="field">
-                <label for="adminAccountSafetyMarginInput">Safety margin bytes</label>
-                <input id="adminAccountSafetyMarginInput" type="number" min="0" step="1048576">
-              </div>
-            </div>
-            <div class="field-row">
-              <div class="field">
-                <label for="adminAccountParallelInput">Parallel uploads</label>
-                <input id="adminAccountParallelInput" type="number" min="1" max="16" step="1" placeholder="Use global">
-              </div>
-              <div class="field">
-                <label for="adminAccountRateInput">Target bytes per second</label>
-                <input id="adminAccountRateInput" type="number" min="0" step="1048576" placeholder="Use global">
-              </div>
-            </div>
-            <div class="field-row">
-              <div class="field">
-                <label for="adminAccountCooldownInput">Cooldown ms</label>
-                <input id="adminAccountCooldownInput" type="number" min="0" step="100" placeholder="Use global">
-              </div>
-              <label class="checkbox-line">
-                <input id="adminAccountPremiumInput" type="checkbox">
-                Premium account
-              </label>
-            </div>
-            <div class="actions">
-              <button id="saveAdminAccountLimitBtn" class="primary">Save account override</button>
-            </div>
-          </div>
-          <table class="table compact-table">
-            <thead>
-              <tr>
-                <th>User</th>
-                <th>Limit</th>
-                <th>Policy</th>
-                <th>Action</th>
-              </tr>
-            </thead>
-            <tbody id="adminLimitsBody">
-              <tr><td colspan="4" class="muted">No account overrides.</td></tr>
-            </tbody>
-          </table>
         </div>
       </div>
     </div>

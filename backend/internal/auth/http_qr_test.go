@@ -136,10 +136,18 @@ func (stubTelegramAuthClient) SendCode(context.Context, string) (TelegramCodeCha
 	return TelegramCodeChallenge{}, nil
 }
 
+func (stubTelegramAuthClient) ResendCode(context.Context, string, TelegramCodeChallenge) (TelegramCodeChallenge, error) {
+	return TelegramCodeChallenge{}, nil
+}
+
 func (stubTelegramAuthClient) SignIn(context.Context, TelegramLoginRequest) (string, TelegramProfile, error) {
 	return "", TelegramProfile{}, nil
 }
 
 func (stubTelegramAuthClient) StartQRLogin(context.Context) (TelegramQRLoginAttempt, error) {
 	return TelegramQRLoginAttempt{}, nil
+}
+
+func (stubTelegramAuthClient) ValidateSession(context.Context, string) error {
+	return nil
 }

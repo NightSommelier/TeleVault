@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/licensing"
+	"github.com/NightSommelier/TeleVault/backend/internal/licensing"
 )
 
 func TestLicensingPersistenceLicenseStateRoundTrip(t *testing.T) {

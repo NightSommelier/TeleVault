@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/telegramartifact"
+	"github.com/NightSommelier/TeleVault/backend/internal/telegramartifact"
 )
 
 func TestNormalizeName(t *testing.T) {

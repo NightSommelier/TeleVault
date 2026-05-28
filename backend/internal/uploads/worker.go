@@ -13,8 +13,8 @@ import (
 	"sync"
 	"time"
 
-	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/auth"
-	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/telegramartifact"
+	"github.com/NightSommelier/TeleVault/backend/internal/auth"
+	"github.com/NightSommelier/TeleVault/backend/internal/telegramartifact"
 )
 
 const (

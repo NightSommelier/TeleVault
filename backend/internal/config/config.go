@@ -28,29 +28,40 @@ const (
 	DefaultTelegramLoginPhoneLimitPerHour    = 10
 	DefaultPublicDownloadIPLimitPerMinute    = 120
 	DefaultPublicDownloadTokenLimitPerMinute = 240
+
+	DefaultTelegramClientDeviceModel    = "Desktop"
+	DefaultTelegramClientSystemVersion  = "Linux"
+	DefaultTelegramClientAppVersion     = "TeleVault"
+	DefaultTelegramClientLangCode       = "en"
+	DefaultTelegramClientSystemLangCode = "en"
 )
 
 type Config struct {
-	Env                 string
-	AppDebug            bool
-	LogLevel            string
-	LogFileDir          string
-	LogFileMaxBytes     int64
-	LogFileMaxBackups   int
-	HTTPAddr            string
-	DatabaseURL         string
-	ValkeyAddr          string
-	AppSessionSecret    string
-	RefreshTokenPepper  string
-	AppAgeIdentity      string
-	TelegramSessionKey  string
-	TelegramAPIID       string
-	TelegramAPIHash     string
-	CORSAllowedOrigins  []string
-	SecureCookie        bool
-	CookieSameSite      string
-	CredentialsCORSMode bool
-	ContainerRuntime    bool
+	Env                          string
+	AppDebug                     bool
+	LogLevel                     string
+	LogFileDir                   string
+	LogFileMaxBytes              int64
+	LogFileMaxBackups            int
+	HTTPAddr                     string
+	DatabaseURL                  string
+	ValkeyAddr                   string
+	AppSessionSecret             string
+	RefreshTokenPepper           string
+	AppAgeIdentity               string
+	TelegramSessionKey           string
+	TelegramAPIID                string
+	TelegramAPIHash              string
+	TelegramClientDeviceModel    string
+	TelegramClientSystemVersion  string
+	TelegramClientAppVersion     string
+	TelegramClientLangCode       string
+	TelegramClientSystemLangCode string
+	CORSAllowedOrigins           []string
+	SecureCookie                 bool
+	CookieSameSite               string
+	CredentialsCORSMode          bool
+	ContainerRuntime             bool
 
 	UploadPartSizeBytes        int64
 	TelegramDocumentLimitBytes int64
@@ -75,21 +86,26 @@ type DatabaseConfig struct {
 
 func Load() (Config, error) {
 	cfg := Config{
-		Env:                getEnv("APP_ENV", EnvDevelopment),
-		AppDebug:           parseBoolDefault(os.Getenv("APP_DEBUG"), false),
-		HTTPAddr:           getEnv("HTTP_ADDR", ":8080"),
-		DatabaseURL:        os.Getenv("DATABASE_URL"),
-		ValkeyAddr:         getEnv("VALKEY_ADDR", getEnv("REDIS_ADDR", "localhost:6379")),
-		AppSessionSecret:   os.Getenv("APP_SESSION_SECRET"),
-		RefreshTokenPepper: os.Getenv("REFRESH_TOKEN_PEPPER"),
-		AppAgeIdentity:     os.Getenv("APP_AGE_IDENTITY"),
-		TelegramSessionKey: os.Getenv("TELEGRAM_SESSION_KEY"),
-		TelegramAPIID:      os.Getenv("TELEGRAM_API_ID"),
-		TelegramAPIHash:    os.Getenv("TELEGRAM_API_HASH"),
-		CookieSameSite:     getEnv("COOKIE_SAME_SITE", "Lax"),
-		ContainerRuntime:   parseBoolDefault(os.Getenv("TELEVAULT_CONTAINER"), false),
-		UploadStagingDir:   getEnv("UPLOAD_STAGING_DIR", DefaultUploadStagingDir),
-		LogFileDir:         strings.TrimSpace(os.Getenv("LOG_FILE_DIR")),
+		Env:                          getEnv("APP_ENV", EnvDevelopment),
+		AppDebug:                     parseBoolDefault(os.Getenv("APP_DEBUG"), false),
+		HTTPAddr:                     getEnv("HTTP_ADDR", ":8080"),
+		DatabaseURL:                  os.Getenv("DATABASE_URL"),
+		ValkeyAddr:                   getEnv("VALKEY_ADDR", getEnv("REDIS_ADDR", "localhost:6379")),
+		AppSessionSecret:             os.Getenv("APP_SESSION_SECRET"),
+		RefreshTokenPepper:           os.Getenv("REFRESH_TOKEN_PEPPER"),
+		AppAgeIdentity:               os.Getenv("APP_AGE_IDENTITY"),
+		TelegramSessionKey:           os.Getenv("TELEGRAM_SESSION_KEY"),
+		TelegramAPIID:                os.Getenv("TELEGRAM_API_ID"),
+		TelegramAPIHash:              os.Getenv("TELEGRAM_API_HASH"),
+		TelegramClientDeviceModel:    strings.TrimSpace(getEnv("TELEGRAM_CLIENT_DEVICE_MODEL", DefaultTelegramClientDeviceModel)),
+		TelegramClientSystemVersion:  strings.TrimSpace(getEnv("TELEGRAM_CLIENT_SYSTEM_VERSION", DefaultTelegramClientSystemVersion)),
+		TelegramClientAppVersion:     strings.TrimSpace(getEnv("TELEGRAM_CLIENT_APP_VERSION", DefaultTelegramClientAppVersion)),
+		TelegramClientLangCode:       strings.TrimSpace(getEnv("TELEGRAM_CLIENT_LANG_CODE", DefaultTelegramClientLangCode)),
+		TelegramClientSystemLangCode: strings.TrimSpace(getEnv("TELEGRAM_CLIENT_SYSTEM_LANG_CODE", DefaultTelegramClientSystemLangCode)),
+		CookieSameSite:               getEnv("COOKIE_SAME_SITE", "Lax"),
+		ContainerRuntime:             parseBoolDefault(os.Getenv("TELEVAULT_CONTAINER"), false),
+		UploadStagingDir:             getEnv("UPLOAD_STAGING_DIR", DefaultUploadStagingDir),
+		LogFileDir:                   strings.TrimSpace(os.Getenv("LOG_FILE_DIR")),
 	}
 	cfg.LogLevel = strings.ToLower(strings.TrimSpace(getEnv("LOG_LEVEL", defaultLogLevel(cfg.AppDebug))))
 
@@ -213,6 +229,11 @@ func (cfg Config) Validate() error {
 	if cfg.TelegramAPIHash == "" {
 		problems = append(problems, "TELEGRAM_API_HASH is required")
 	}
+	validateTelegramClientField(&problems, "TELEGRAM_CLIENT_DEVICE_MODEL", cfg.TelegramClientDeviceModel, 64)
+	validateTelegramClientField(&problems, "TELEGRAM_CLIENT_SYSTEM_VERSION", cfg.TelegramClientSystemVersion, 64)
+	validateTelegramClientField(&problems, "TELEGRAM_CLIENT_APP_VERSION", cfg.TelegramClientAppVersion, 64)
+	validateTelegramLangCode(&problems, "TELEGRAM_CLIENT_LANG_CODE", cfg.TelegramClientLangCode)
+	validateTelegramLangCode(&problems, "TELEGRAM_CLIENT_SYSTEM_LANG_CODE", cfg.TelegramClientSystemLangCode)
 
 	if cfg.CookieSameSite != "Lax" && cfg.CookieSameSite != "Strict" {
 		problems = append(problems, "COOKIE_SAME_SITE must be Lax or Strict")
@@ -381,5 +402,29 @@ func requireBase64Secret(problems *[]string, name string, value string, decodedL
 	}
 	if len(decoded) != decodedLen {
 		*problems = append(*problems, fmt.Sprintf("%s must decode to %d bytes", name, decodedLen))
+	}
+}
+
+func validateTelegramClientField(problems *[]string, name string, value string, maxLen int) {
+	if value == "" {
+		*problems = append(*problems, fmt.Sprintf("%s is required", name))
+		return
+	}
+	if len(value) > maxLen {
+		*problems = append(*problems, fmt.Sprintf("%s must be at most %d characters", name, maxLen))
+	}
+}
+
+func validateTelegramLangCode(problems *[]string, name string, value string) {
+	validateTelegramClientField(problems, name, value, 16)
+	if value == "" {
+		return
+	}
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || r == '-' {
+			continue
+		}
+		*problems = append(*problems, fmt.Sprintf("%s must contain only letters and hyphen", name))
+		return
 	}
 }

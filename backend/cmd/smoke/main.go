@@ -17,12 +17,12 @@ import (
 	"strings"
 	"time"
 
-	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/auth"
-	appconfig "gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/config"
-	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/crypto/secrets"
-	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/db"
-	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/telegramauth"
-	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/uploads"
+	"github.com/NightSommelier/TeleVault/backend/internal/auth"
+	appconfig "github.com/NightSommelier/TeleVault/backend/internal/config"
+	"github.com/NightSommelier/TeleVault/backend/internal/crypto/secrets"
+	"github.com/NightSommelier/TeleVault/backend/internal/db"
+	"github.com/NightSommelier/TeleVault/backend/internal/telegramauth"
+	"github.com/NightSommelier/TeleVault/backend/internal/uploads"
 )
 
 const smokeWorkerID = "smoke-worker"
@@ -243,7 +243,13 @@ func drainStagedPart(ctx context.Context, logger *slog.Logger) error {
 		uploads.NewStore(database),
 		spool,
 		auth.NewTelegramSessionCrypto(secretsBox),
-		telegramauth.NewClient(telegramAppID, cfg.TelegramAPIHash),
+		telegramauth.NewClientWithProfile(telegramAppID, cfg.TelegramAPIHash, telegramauth.ClientProfile{
+			DeviceModel:    cfg.TelegramClientDeviceModel,
+			SystemVersion:  cfg.TelegramClientSystemVersion,
+			AppVersion:     cfg.TelegramClientAppVersion,
+			LangCode:       cfg.TelegramClientLangCode,
+			SystemLangCode: cfg.TelegramClientSystemLangCode,
+		}),
 		uploads.WorkerSettings{
 			WorkerID:      smokeWorkerID,
 			LeaseDuration: 5 * time.Minute,

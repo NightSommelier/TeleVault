@@ -190,6 +190,36 @@ func TestValidateRejectsInvalidAgeIdentityShape(t *testing.T) {
 	assertErrorContains(t, err, "APP_AGE_IDENTITY must look like an age secret identity")
 }
 
+func TestValidateRequiresTelegramClientProfileFields(t *testing.T) {
+	cfg := validConfig()
+	cfg.TelegramClientDeviceModel = ""
+	cfg.TelegramClientSystemVersion = ""
+	cfg.TelegramClientAppVersion = ""
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("Validate() error = nil, want telegram client profile field errors")
+	}
+
+	assertErrorContains(t, err, "TELEGRAM_CLIENT_DEVICE_MODEL is required")
+	assertErrorContains(t, err, "TELEGRAM_CLIENT_SYSTEM_VERSION is required")
+	assertErrorContains(t, err, "TELEGRAM_CLIENT_APP_VERSION is required")
+}
+
+func TestValidateRejectsInvalidTelegramClientLanguageCodes(t *testing.T) {
+	cfg := validConfig()
+	cfg.TelegramClientLangCode = "en_001"
+	cfg.TelegramClientSystemLangCode = "123"
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("Validate() error = nil, want telegram client language code errors")
+	}
+
+	assertErrorContains(t, err, "TELEGRAM_CLIENT_LANG_CODE must contain only letters and hyphen")
+	assertErrorContains(t, err, "TELEGRAM_CLIENT_SYSTEM_LANG_CODE must contain only letters and hyphen")
+}
+
 func TestDatabaseConfigRequiresDatabaseURL(t *testing.T) {
 	err := (DatabaseConfig{}).Validate()
 	if err == nil {
@@ -201,21 +231,26 @@ func TestDatabaseConfigRequiresDatabaseURL(t *testing.T) {
 
 func validConfig() Config {
 	return Config{
-		Env:                 EnvDevelopment,
-		LogLevel:            "info",
-		HTTPAddr:            ":8080",
-		DatabaseURL:         validDatabaseURL,
-		ValkeyAddr:          "localhost:6379",
-		AppSessionSecret:    validSessionSecret,
-		RefreshTokenPepper:  validRefreshTokenPepper,
-		AppAgeIdentity:      validAgeIdentity,
-		TelegramSessionKey:  validTelegramSessionKey,
-		TelegramAPIID:       "12345",
-		TelegramAPIHash:     "telegram-api-hash",
-		CORSAllowedOrigins:  []string{"http://localhost:3000"},
-		SecureCookie:        false,
-		CookieSameSite:      "Lax",
-		CredentialsCORSMode: true,
+		Env:                          EnvDevelopment,
+		LogLevel:                     "info",
+		HTTPAddr:                     ":8080",
+		DatabaseURL:                  validDatabaseURL,
+		ValkeyAddr:                   "localhost:6379",
+		AppSessionSecret:             validSessionSecret,
+		RefreshTokenPepper:           validRefreshTokenPepper,
+		AppAgeIdentity:               validAgeIdentity,
+		TelegramSessionKey:           validTelegramSessionKey,
+		TelegramAPIID:                "12345",
+		TelegramAPIHash:              "telegram-api-hash",
+		TelegramClientDeviceModel:    DefaultTelegramClientDeviceModel,
+		TelegramClientSystemVersion:  DefaultTelegramClientSystemVersion,
+		TelegramClientAppVersion:     DefaultTelegramClientAppVersion,
+		TelegramClientLangCode:       DefaultTelegramClientLangCode,
+		TelegramClientSystemLangCode: DefaultTelegramClientSystemLangCode,
+		CORSAllowedOrigins:           []string{"http://localhost:3000"},
+		SecureCookie:                 false,
+		CookieSameSite:               "Lax",
+		CredentialsCORSMode:          true,
 
 		UploadPartSizeBytes:        DefaultUploadPartSizeBytes,
 		TelegramDocumentLimitBytes: DefaultTelegramDocumentLimitBytes,

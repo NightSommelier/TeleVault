@@ -7,7 +7,7 @@ import (
 	"io"
 	"testing"
 
-	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/auth"
+	"github.com/NightSommelier/TeleVault/backend/internal/auth"
 )
 
 func TestDryRunBuildsProbeSizes(t *testing.T) {

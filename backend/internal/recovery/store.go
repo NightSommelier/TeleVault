@@ -12,7 +12,7 @@ import (
 
 	"filippo.io/age"
 
-	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/crypto/secrets"
+	"github.com/NightSommelier/TeleVault/backend/internal/crypto/secrets"
 )
 
 var ErrNotFound = errors.New("recovery resource not found")

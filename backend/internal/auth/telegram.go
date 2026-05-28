@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"time"
 
-	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/crypto/secrets"
+	"github.com/NightSommelier/TeleVault/backend/internal/crypto/secrets"
 )
 
 const telegramChallengeTTL = 10 * time.Minute
@@ -21,6 +21,22 @@ var ErrTelegramMFARequired = errors.New("telegram mfa required")
 var ErrTelegramMFAInvalid = errors.New("telegram mfa invalid")
 var ErrTelegramCodeInvalid = errors.New("telegram code invalid")
 var ErrTelegramCodeExpired = errors.New("telegram code expired")
+var ErrTelegramSendCodeRateLimited = errors.New("telegram send code rate limited")
+var ErrTelegramPhoneInvalid = errors.New("telegram phone invalid")
+var ErrTelegramSessionInvalid = errors.New("telegram session invalid")
+var ErrTelegramSessionNotFound = errors.New("telegram session not found")
+
+type TelegramRateLimitError struct {
+	RetryAfter time.Duration
+}
+
+func (e TelegramRateLimitError) Error() string {
+	return ErrTelegramSendCodeRateLimited.Error()
+}
+
+func (e TelegramRateLimitError) Unwrap() error {
+	return ErrTelegramSendCodeRateLimited
+}
 
 type TelegramProfile struct {
 	TelegramID  int64
@@ -31,6 +47,10 @@ type TelegramProfile struct {
 type TelegramCodeChallenge struct {
 	PhoneCodeHash string
 	Session       string
+	CodeType      string
+	CodeLength    int
+	NextCodeType  string
+	TimeoutSecs   int
 }
 
 type TelegramLoginRequest struct {
@@ -47,8 +67,10 @@ type StoredAuthChallenge struct {
 
 type TelegramAuthClient interface {
 	SendCode(ctx context.Context, phone string) (TelegramCodeChallenge, error)
+	ResendCode(ctx context.Context, phone string, challenge TelegramCodeChallenge) (TelegramCodeChallenge, error)
 	SignIn(ctx context.Context, request TelegramLoginRequest) (session string, profile TelegramProfile, err error)
 	StartQRLogin(ctx context.Context) (TelegramQRLoginAttempt, error)
+	ValidateSession(ctx context.Context, session string) error
 }
 
 type TelegramQRLoginToken struct {
@@ -84,6 +106,11 @@ type TelegramStorageClient interface {
 	UploadEncryptedPart(ctx context.Context, session string, storagePeer string, name string, mimeType string, body io.Reader) (TelegramUploadResult, error)
 	DownloadEncryptedPart(ctx context.Context, session string, storagePeer string, messageID int64, dst io.Writer) error
 	DeleteEncryptedPart(ctx context.Context, session string, storagePeer string, messageID int64) error
+}
+
+type StoredTelegramSession struct {
+	EncryptedSession []byte
+	OwnerTelegramID  int64
 }
 
 type TelegramSessionCrypto struct {
@@ -217,4 +244,35 @@ DO UPDATE SET
 		nullableString(storagePeer),
 	)
 	return err
+}
+
+func (s *SessionStore) HasTelegramSession(ctx context.Context, userID string) (bool, error) {
+	var exists bool
+	if err := s.db.QueryRowContext(ctx, `
+SELECT EXISTS(
+    SELECT 1
+    FROM telegram_sessions
+    WHERE user_id = $1
+)`, userID).Scan(&exists); err != nil {
+		return false, err
+	}
+	return exists, nil
+}
+
+func (s *SessionStore) StoredTelegramSession(ctx context.Context, userID string) (StoredTelegramSession, error) {
+	var session StoredTelegramSession
+	err := s.db.QueryRowContext(ctx, `
+SELECT ts.encrypted_session, u.telegram_id
+FROM telegram_sessions ts
+JOIN users u ON u.id = ts.user_id
+WHERE ts.user_id = $1`,
+		userID,
+	).Scan(&session.EncryptedSession, &session.OwnerTelegramID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return StoredTelegramSession{}, ErrTelegramSessionNotFound
+	}
+	if err != nil {
+		return StoredTelegramSession{}, err
+	}
+	return session, nil
 }

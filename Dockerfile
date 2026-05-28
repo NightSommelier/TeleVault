@@ -22,9 +22,9 @@ RUN set -eux; \
     RESOLVED_COMMIT="${APP_COMMIT:-unknown}"; \
     RESOLVED_DATE="${APP_BUILD_DATE:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"; \
     LDFLAGS="-s -w"; \
-    LDFLAGS="${LDFLAGS} -X 'gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/buildinfo.Version=${RESOLVED_VERSION}'"; \
-    LDFLAGS="${LDFLAGS} -X 'gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/buildinfo.Commit=${RESOLVED_COMMIT}'"; \
-    LDFLAGS="${LDFLAGS} -X 'gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/buildinfo.Date=${RESOLVED_DATE}'"; \
+    LDFLAGS="${LDFLAGS} -X 'github.com/NightSommelier/TeleVault/backend/internal/buildinfo.Version=${RESOLVED_VERSION}'"; \
+    LDFLAGS="${LDFLAGS} -X 'github.com/NightSommelier/TeleVault/backend/internal/buildinfo.Commit=${RESOLVED_COMMIT}'"; \
+    LDFLAGS="${LDFLAGS} -X 'github.com/NightSommelier/TeleVault/backend/internal/buildinfo.Date=${RESOLVED_DATE}'"; \
     for bin in api worker cleanup migrate smoke admin; do \
         CGO_ENABLED=0 GOOS=linux go build \
             -ldflags="${LDFLAGS}" \

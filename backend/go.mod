@@ -1,4 +1,4 @@
-module gitrepo.pp.ua/Sommelier/TeleVault/backend
+module github.com/NightSommelier/TeleVault/backend
 
 go 1.26.2
 

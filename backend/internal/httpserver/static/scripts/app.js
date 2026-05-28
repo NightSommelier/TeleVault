@@ -28,12 +28,26 @@
       uploadDebugAllowed: true,
       uploadDebugEnabled: false,
       uploadDebugLines: [],
-      adminAccountLimits: [],
-      adminEditingAccountID: '',
       movePickerFolders: [],
       sharedRouteUnavailableMessage: '',
       adminInstanceID: '',
       adminLicense: null,
+      mfaStatus: null,
+      rememberedUser: null,
+      localMFAMethods: [],
+      qrExpiresAt: null,
+      qrCountdownTimer: null,
+      readOnlyMapMode: false,
+      loginAltAccountMode: false,
+      reconnectMode: false,
+      phoneCountry: 'ua',
+      normalizedPhone: '',
+      telegramCodeRetryAt: 0,
+      telegramCodeRetryTimer: null,
+      telegramCodeNextType: '',
+      telegramCodeCanResend: false,
+      telegramCodePhone: '',
+      telegramSessionStatus: '',
     };
 
     const el = {
@@ -42,17 +56,38 @@
       userbar: document.getElementById('userbar'),
       appVersion: document.getElementById('appVersion'),
       userName: document.getElementById('userName'),
+      securityBtn: document.getElementById('securityBtn'),
       adminBtn: document.getElementById('adminBtn'),
+      logoutForgetBtn: document.getElementById('logoutForgetBtn'),
       startQrBtn: document.getElementById('startQrBtn'),
       sendCodeBtn: document.getElementById('sendCodeBtn'),
       loginWithCodeBtn: document.getElementById('loginWithCodeBtn'),
+      rememberedBox: document.getElementById('rememberedBox'),
+      rememberedUser: document.getElementById('rememberedUser'),
+      rememberedStatus: document.getElementById('rememberedStatus'),
+      continueRememberedBtn: document.getElementById('continueRememberedBtn'),
+      forgetRememberedBtn: document.getElementById('forgetRememberedBtn'),
+      useAnotherAccountBtn: document.getElementById('useAnotherAccountBtn'),
+      loginTelegramBox: document.getElementById('loginTelegramBox'),
       loginPhoneRow: document.getElementById('loginPhoneRow'),
+      loginCountryField: document.getElementById('loginCountryField'),
+      loginCountrySelect: document.getElementById('loginCountrySelect'),
+      loginPhoneField: document.getElementById('loginPhoneField'),
+      loginPhoneHint: document.getElementById('loginPhoneHint'),
+      loginPhonePreview: document.getElementById('loginPhonePreview'),
       loginCodeField: document.getElementById('loginCodeField'),
       loginCodeLabel: document.getElementById('loginCodeLabel'),
       loginPhoneInput: document.getElementById('loginPhoneInput'),
       loginCodeInput: document.getElementById('loginCodeInput'),
       loginPasswordField: document.getElementById('loginPasswordField'),
+      loginPasswordLabel: document.getElementById('loginPasswordLabel'),
       loginPasswordInput: document.getElementById('loginPasswordInput'),
+      localPasswordAction: document.getElementById('localPasswordAction'),
+      localPasswordField: document.getElementById('localPasswordField'),
+      localPasswordInput: document.getElementById('localPasswordInput'),
+      localPasswordToggleBtn: document.getElementById('localPasswordToggleBtn'),
+      loginUseWebauthnBtn: document.getElementById('loginUseWebauthnBtn'),
+      loginUsePasswordBtn: document.getElementById('loginUsePasswordBtn'),
       qrImage: document.getElementById('qrImage'),
       loginStatus: document.getElementById('loginStatus'),
       logoutBtn: document.getElementById('logoutBtn'),
@@ -123,6 +158,27 @@
       copyDetailsFileIDBtn: document.getElementById('copyDetailsFileIDBtn'),
       detailsBody: document.getElementById('detailsBody'),
       detailsStatus: document.getElementById('detailsStatus'),
+      securityModal: document.getElementById('securityModal'),
+      closeSecurityBtn: document.getElementById('closeSecurityBtn'),
+      mfaRecoveryRemainingInput: document.getElementById('mfaRecoveryRemainingInput'),
+      startTotpEnrollBtn: document.getElementById('startTotpEnrollBtn'),
+      confirmTotpEnrollBtn: document.getElementById('confirmTotpEnrollBtn'),
+      mfaPasskeyNameInput: document.getElementById('mfaPasskeyNameInput'),
+      registerWebauthnBtn: document.getElementById('registerWebauthnBtn'),
+      mfaPasskeysBody: document.getElementById('mfaPasskeysBody'),
+      disableTotpBtn: document.getElementById('disableTotpBtn'),
+      regenerateRecoveryBtn: document.getElementById('regenerateRecoveryBtn'),
+      mfaLocalPasswordInput: document.getElementById('mfaLocalPasswordInput'),
+      mfaLocalPasswordConfirmInput: document.getElementById('mfaLocalPasswordConfirmInput'),
+      setLocalPasswordBtn: document.getElementById('setLocalPasswordBtn'),
+      disableLocalPasswordBtn: document.getElementById('disableLocalPasswordBtn'),
+      mfaTotpEnrollBox: document.getElementById('mfaTotpEnrollBox'),
+      mfaTotpSecretInput: document.getElementById('mfaTotpSecretInput'),
+      mfaTotpQR: document.getElementById('mfaTotpQR'),
+      mfaTotpCodeInput: document.getElementById('mfaTotpCodeInput'),
+      mfaRecoveryCodesBox: document.getElementById('mfaRecoveryCodesBox'),
+      mfaRecoveryCodesOutput: document.getElementById('mfaRecoveryCodesOutput'),
+      mfaStatus: document.getElementById('mfaStatus'),
       exportRecoveryBtn: document.getElementById('exportRecoveryBtn'),
       importRecoveryBtn: document.getElementById('importRecoveryBtn'),
       recoveryFileInput: document.getElementById('recoveryFileInput'),
@@ -150,22 +206,26 @@
       adminLicenseFileInput: document.getElementById('adminLicenseFileInput'),
       pickAdminLicenseFileBtn: document.getElementById('pickAdminLicenseFileBtn'),
       saveAdminLicenseBtn: document.getElementById('saveAdminLicenseBtn'),
+      removeAdminLicenseBtn: document.getElementById('removeAdminLicenseBtn'),
       adminLicenseStatus: document.getElementById('adminLicenseStatus'),
-      adminAccountEditor: document.getElementById('adminAccountEditor'),
-      adminAccountEditorTitle: document.getElementById('adminAccountEditorTitle'),
-      adminAccountDocumentLimitInput: document.getElementById('adminAccountDocumentLimitInput'),
-      adminAccountSafetyMarginInput: document.getElementById('adminAccountSafetyMarginInput'),
-      adminAccountParallelInput: document.getElementById('adminAccountParallelInput'),
-      adminAccountRateInput: document.getElementById('adminAccountRateInput'),
-      adminAccountCooldownInput: document.getElementById('adminAccountCooldownInput'),
-      adminAccountPremiumInput: document.getElementById('adminAccountPremiumInput'),
-      saveAdminAccountLimitBtn: document.getElementById('saveAdminAccountLimitBtn'),
-      adminLimitsBody: document.getElementById('adminLimitsBody'),
+      readOnlyBanner: document.getElementById('readOnlyBanner'),
+      reconnectTelegramBtn: document.getElementById('reconnectTelegramBtn'),
     };
 
     function csrfToken() {
       const found = document.cookie.split('; ').find((entry) => entry.startsWith('td_csrf='));
       return found ? decodeURIComponent(found.slice('td_csrf='.length)) : '';
+    }
+
+    function parseRetryAfterSeconds(value) {
+      const raw = String(value || '').trim();
+      if (!raw) return 0;
+      const seconds = Number.parseInt(raw, 10);
+      if (Number.isFinite(seconds) && seconds > 0) return seconds;
+      const absolute = Date.parse(raw);
+      if (!Number.isFinite(absolute)) return 0;
+      const diff = Math.ceil((absolute - Date.now()) / 1000);
+      return diff > 0 ? diff : 0;
     }
 
     async function api(path, options = {}) {
@@ -180,6 +240,7 @@
         credentials: 'same-origin',
       });
       if (!response.ok) {
+        const retryAfterSeconds = parseRetryAfterSeconds(response.headers.get('Retry-After'));
         let code = '';
         let message = response.statusText;
         let payload = null;
@@ -192,6 +253,7 @@
         const err = new Error(humanizeError(message));
         err.code = code || String(message || '').trim();
         err.payload = payload;
+        err.retryAfterSeconds = retryAfterSeconds;
         throw err;
       }
       if (response.status === 204) return null;
@@ -213,6 +275,7 @@
         public_link_list_failed: 'Failed to load public links.',
         public_link_create_failed: 'Failed to create public link.',
         public_link_revoke_failed: 'Failed to revoke public link.',
+        download_failed: 'Failed to download file.',
         telegram_id_required: 'Telegram ID is required.',
         share_recipient_required: 'Select a recipient or enter Telegram ID.',
         invalid_max_downloads: 'Download limit must be a positive integer.',
@@ -228,6 +291,11 @@
         telegram_mfa_invalid: 'Incorrect Telegram two-step password.',
         telegram_code_invalid: 'Incorrect Telegram login code.',
         telegram_code_expired: 'Telegram login code expired. Send a new code.',
+        telegram_send_code_failed: 'Failed to request Telegram login code.',
+        telegram_resend_code_failed: 'Failed to request next Telegram login code.',
+        auth_rate_limited: 'Too many login code requests. Wait before requesting another code.',
+        phone_invalid_format: 'Phone number format is invalid.',
+        invalid_auth_challenge: 'Login challenge expired. Send a new code.',
         qr_login_not_found: 'QR login expired. Start QR login again.',
         recovery_replace_confirmation_required: 'Confirm recovery replace before importing.',
         recovery_snapshot_is_older: 'Recovery map is older than the latest snapshot for this account on this instance.',
@@ -241,17 +309,41 @@
         license_state_load_failed: 'Failed to load license state.',
         license_keys_not_configured: 'License public keys are not configured.',
         invite_required: 'Access requires an invite from the instance owner.',
-        local_mfa_required: 'Local instance MFA required.',
-        local_mfa_code_required: 'Enter local MFA code.',
-        local_mfa_code_invalid: 'Local MFA code is invalid.',
-        local_mfa_not_configured: 'Local MFA is not configured yet.',
-        local_mfa_state_failed: 'Failed to load local MFA state.',
-        local_mfa_enroll_start_failed: 'Failed to start local MFA enrollment.',
-        local_mfa_enroll_confirm_failed: 'Failed to confirm local MFA enrollment.',
-        local_mfa_verify_failed: 'Failed to verify local MFA code.',
+        local_mfa_required: 'Local instance 2FA required.',
+        local_mfa_code_required: 'Enter local 2FA code.',
+        local_mfa_code_invalid: 'Local 2FA code is invalid.',
+        local_mfa_not_configured: 'Local 2FA is not configured yet.',
+        local_mfa_state_failed: 'Failed to load local 2FA state.',
+        local_mfa_enroll_start_failed: 'Failed to start local 2FA enrollment.',
+        local_mfa_enroll_confirm_failed: 'Failed to confirm local 2FA enrollment.',
+        local_mfa_verify_failed: 'Failed to verify local 2FA code.',
+        local_password_invalid: 'Local password is invalid.',
+        local_password_not_configured: 'Local password is not configured.',
+        local_password_set_failed: 'Failed to set local password.',
+        local_password_verify_failed: 'Failed to verify local password.',
+        local_password_disable_failed: 'Failed to disable local password.',
+        local_password_mismatch: 'Passwords do not match.',
+        local_password_too_short: 'Local password must be at least 5 characters.',
+        local_mfa_disable_failed: 'Failed to disable local TOTP.',
+        webauthn_disable_failed: 'Failed to disable passkeys.',
+        webauthn_rename_failed: 'Failed to rename passkey.',
+        webauthn_credential_required: 'Passkey identifier is required.',
+        webauthn_credential_not_found: 'Passkey was not found.',
+        recovery_codes_disable_failed: 'Failed to disable recovery codes.',
+        recovery_codes_required_for_totp: 'Recovery codes are required while TOTP is enabled.',
+        remember_device_invalid: 'Saved device login expired. Sign in with Telegram again.',
+        remember_device_lookup_failed: 'Failed to load saved device login.',
+        remember_device_persist_failed: 'Failed to save this device.',
+        telegram_login_required: 'Telegram login is required for this account.',
+        telegram_session_missing_read_only: 'Telegram session is missing. Instance is in read-only map mode.',
+        telegram_session_stale: 'Telegram session is no longer valid. Reconnect Telegram for write access.',
+        telegram_session_check_failed: 'Unable to verify Telegram session right now. Try again in a moment.',
+        telegram_account_mismatch: 'This Telegram account does not match the current TeleVault account.',
+        telegram_session_status_failed: 'Failed to check Telegram session status.',
         recovery_code_required: 'Enter recovery code.',
         recovery_code_invalid: 'Recovery code is invalid.',
         recovery_code_verify_failed: 'Failed to verify recovery code.',
+        recovery_codes_regenerate_failed: 'Failed to regenerate recovery codes.',
         webauthn_not_configured: 'WebAuthn is not configured for this account.',
         webauthn_challenge_required: 'WebAuthn challenge is required.',
         webauthn_challenge_invalid: 'WebAuthn challenge is invalid or expired.',
@@ -262,6 +354,287 @@
         webauthn_verify_failed: 'WebAuthn verification failed.',
       };
       return mapped[key] || key;
+    }
+
+    const PHONE_COUNTRIES = [
+      { id: 'ua', iso: 'UA', dial: '380', mask: '00-000-00-00' },
+      { id: 'pl', iso: 'PL', dial: '48', mask: '000-000-000' },
+      { id: 'de', iso: 'DE', dial: '49', mask: '0000-0000000' },
+      { id: 'fr', iso: 'FR', dial: '33', mask: '0-00-00-00-00' },
+      { id: 'es', iso: 'ES', dial: '34', mask: '000-000-000' },
+      { id: 'it', iso: 'IT', dial: '39', mask: '000-000-0000' },
+      { id: 'cz', iso: 'CZ', dial: '420', mask: '000-000-000' },
+      { id: 'lt', iso: 'LT', dial: '370', mask: '000-00000' },
+      { id: 'lv', iso: 'LV', dial: '371', mask: '00-000-000' },
+      { id: 'ee', iso: 'EE', dial: '372', mask: '0000-0000' },
+      { id: 'nl', iso: 'NL', dial: '31', mask: '00-000-0000' },
+      { id: 'gb', iso: 'GB', dial: '44', mask: '0000-000-000' },
+      { id: 'usca', iso: 'US', dial: '1', mask: '000-000-0000' },
+      { id: 'tr', iso: 'TR', dial: '90', mask: '000-000-0000' },
+      { id: 'md', iso: 'MD', dial: '373', mask: '000-00-000' },
+      { id: 'ro', iso: 'RO', dial: '40', mask: '000-000-000' },
+      { id: 'ge', iso: 'GE', dial: '995', mask: '000-000-000' },
+      { id: 'int', iso: 'INT', dial: '', mask: '+0 00-000-00-00' },
+    ];
+
+    const TELEGRAM_RETRY_TYPES = {
+      sms: 'SMS',
+      call: 'Call',
+      flash_call: 'Flash call',
+      missed_call: 'Missed call',
+      fragment_sms: 'Fragment SMS',
+    };
+
+    function normalizeTelegramRetryType(value) {
+      return String(value || '').trim();
+    }
+
+    function supportedTelegramRetryType(value) {
+      const normalized = normalizeTelegramRetryType(value);
+      if (!normalized) return '';
+      return Object.prototype.hasOwnProperty.call(TELEGRAM_RETRY_TYPES, normalized) ? normalized : '';
+    }
+
+    function telegramRetryLabel(value) {
+      const normalized = supportedTelegramRetryType(value);
+      return normalized ? TELEGRAM_RETRY_TYPES[normalized] : '';
+    }
+
+    function phoneCountryByID(id) {
+      return PHONE_COUNTRIES.find((entry) => entry.id === id) || PHONE_COUNTRIES[0];
+    }
+
+    function detectPhoneCountryByDial(allDigits) {
+      const candidates = PHONE_COUNTRIES.filter((entry) => entry.dial);
+      candidates.sort((left, right) => right.dial.length - left.dial.length);
+      return candidates.find((entry) => allDigits.startsWith(entry.dial)) || null;
+    }
+
+    function normalizePhone(rawValue, countryID) {
+      const raw = String(rawValue || '').trim();
+      if (!raw) return { ok: false, reason: 'empty' };
+      const hasPlus = raw.startsWith('+');
+      const digits = raw.replace(/\D+/g, '');
+      if (!digits) return { ok: false, reason: 'empty' };
+
+      if (hasPlus) {
+        if (digits.length < 8 || digits.length > 15) return { ok: false, reason: 'length' };
+        const detected = detectPhoneCountryByDial(digits);
+        return {
+          ok: true,
+          e164: `+${digits}`,
+          countryID: detected ? detected.id : 'int',
+        };
+      }
+
+      const detectedNoPlus = detectPhoneCountryByDial(digits);
+      if (detectedNoPlus && digits.length >= 8 && digits.length <= 15 && digits.length > detectedNoPlus.dial.length+4) {
+        return {
+          ok: true,
+          e164: `+${digits}`,
+          countryID: detectedNoPlus.id,
+        };
+      }
+
+      const country = phoneCountryByID(countryID);
+      if (!country || !country.dial) return { ok: false, reason: 'intl_required' };
+      let localDigits = digits.replace(/^0+/, '');
+      if (!localDigits) return { ok: false, reason: 'empty' };
+      const fullDigits = `${country.dial}${localDigits}`;
+      if (fullDigits.length < 8 || fullDigits.length > 15) return { ok: false, reason: 'length' };
+      return {
+        ok: true,
+        e164: `+${fullDigits}`,
+        countryID: country.id,
+      };
+    }
+
+    function refreshPhonePreview() {
+      const normalized = normalizePhone(el.loginPhoneInput.value, state.phoneCountry);
+      if (!normalized.ok) {
+        state.normalizedPhone = '';
+        if (!String(el.loginPhoneInput.value || '').trim()) {
+          el.loginPhonePreview.textContent = '';
+        } else if (normalized.reason === 'intl_required') {
+          el.loginPhonePreview.textContent = 'Use international format: +<country code><number>.';
+        } else {
+          el.loginPhonePreview.textContent = 'Phone format looks invalid.';
+        }
+        return;
+      }
+      if (normalized.countryID !== state.phoneCountry && normalized.countryID !== 'int') {
+        state.phoneCountry = normalized.countryID;
+        el.loginCountrySelect.value = normalized.countryID;
+        updatePhoneCountryHint();
+      }
+      state.normalizedPhone = normalized.e164;
+      el.loginPhonePreview.textContent = `Will send code to ${normalized.e164}`;
+    }
+
+    function updatePhoneCountryHint() {
+      const country = phoneCountryByID(state.phoneCountry);
+      if (!country.dial) {
+        el.loginPhoneInput.placeholder = country.mask;
+        el.loginPhoneHint.textContent = `Manual format: ${country.mask}`;
+        return;
+      }
+      el.loginPhoneInput.placeholder = country.mask;
+      el.loginPhoneHint.textContent = `Format: ${country.mask} (or paste full international number).`;
+    }
+
+    function setPhoneCountryOptions() {
+      const rows = PHONE_COUNTRIES.map((entry) => {
+        const dial = entry.dial ? `+${entry.dial}` : 'manual';
+        return `<option value="${entry.id}">${entry.iso} ${dial}</option>`;
+      });
+      el.loginCountrySelect.innerHTML = rows.join('');
+      if (!PHONE_COUNTRIES.some((entry) => entry.id === state.phoneCountry)) {
+        state.phoneCountry = PHONE_COUNTRIES[0].id;
+      }
+      el.loginCountrySelect.value = state.phoneCountry;
+      updatePhoneCountryHint();
+      refreshPhonePreview();
+    }
+
+    function requireNormalizedPhone() {
+      refreshPhonePreview();
+      if (!state.normalizedPhone) {
+        throw new Error(humanizeError('phone_invalid_format'));
+      }
+      return state.normalizedPhone;
+    }
+
+    function clearTelegramCodeRetryState() {
+      clearInterval(state.telegramCodeRetryTimer);
+      state.telegramCodeRetryTimer = null;
+      state.telegramCodeRetryAt = 0;
+      state.telegramCodeNextType = '';
+      state.telegramCodeCanResend = false;
+      state.telegramCodePhone = '';
+      el.sendCodeBtn.textContent = 'Send code';
+      el.sendCodeBtn.disabled = false;
+    }
+
+    function updateTelegramCodeRetryButton() {
+      const now = Date.now();
+      const retryAt = Number(state.telegramCodeRetryAt || 0);
+      if (retryAt > now) {
+        const remaining = Math.max(1, Math.ceil((retryAt - now) / 1000));
+        el.sendCodeBtn.disabled = true;
+        el.sendCodeBtn.textContent = `Retry in ${remaining}s`;
+        return;
+      }
+
+      const retryType = supportedTelegramRetryType(state.telegramCodeNextType);
+      if (state.telegramCodeCanResend && retryType) {
+        el.sendCodeBtn.disabled = false;
+        el.sendCodeBtn.textContent = `Try ${telegramRetryLabel(retryType)}`;
+        return;
+      }
+
+      el.sendCodeBtn.disabled = false;
+      el.sendCodeBtn.textContent = 'Send code';
+    }
+
+    function applyTelegramCodeDeliveryState(delivery, phone) {
+      const payload = delivery && typeof delivery === 'object' ? delivery : {};
+      const timeout = Number(payload.timeout_seconds || 0);
+      const nextType = normalizeTelegramRetryType(payload.next_type);
+      clearInterval(state.telegramCodeRetryTimer);
+      state.telegramCodeRetryTimer = null;
+      state.telegramCodeRetryAt = 0;
+      state.telegramCodePhone = phone;
+      state.telegramCodeNextType = nextType;
+      state.telegramCodeCanResend = Boolean(supportedTelegramRetryType(nextType));
+      if (timeout > 0) {
+        state.telegramCodeRetryAt = Date.now() + (timeout * 1000);
+        state.telegramCodeRetryTimer = setInterval(() => {
+          if (Date.now() >= state.telegramCodeRetryAt) {
+            clearInterval(state.telegramCodeRetryTimer);
+            state.telegramCodeRetryTimer = null;
+            state.telegramCodeRetryAt = 0;
+          }
+          updateTelegramCodeRetryButton();
+        }, 1000);
+      }
+      updateTelegramCodeRetryButton();
+    }
+
+    function applyTelegramRateLimitCooldown(retryAfterSeconds) {
+      const cooldown = Number(retryAfterSeconds || 0);
+      if (cooldown <= 0) return;
+      clearInterval(state.telegramCodeRetryTimer);
+      state.telegramCodeRetryTimer = null;
+      state.telegramCodeRetryAt = Date.now() + (cooldown * 1000);
+      state.telegramCodeRetryTimer = setInterval(() => {
+        if (Date.now() >= state.telegramCodeRetryAt) {
+          clearInterval(state.telegramCodeRetryTimer);
+          state.telegramCodeRetryTimer = null;
+          state.telegramCodeRetryAt = 0;
+        }
+        updateTelegramCodeRetryButton();
+      }, 1000);
+      updateTelegramCodeRetryButton();
+    }
+
+    function describeTelegramCodeDelivery(delivery) {
+      const payload = delivery && typeof delivery === 'object' ? delivery : {};
+      const type = String(payload.type || '').trim();
+      const length = Number(payload.length || 0);
+      const timeout = Number(payload.timeout_seconds || 0);
+      const nextType = String(payload.next_type || '').trim();
+      const details = [];
+
+      switch (type) {
+        case 'app':
+          details.push('Code sent to Telegram app.');
+          break;
+        case 'sms':
+          details.push('Code sent by SMS.');
+          break;
+        case 'call':
+          details.push('Code will be delivered by phone call.');
+          break;
+        case 'flash_call':
+          details.push('Code will be delivered via flash call.');
+          break;
+        case 'missed_call':
+          details.push('Code will be delivered via missed call.');
+          break;
+        case 'fragment_sms':
+          details.push('Code delivered via Fragment.');
+          break;
+        case 'firebase_sms':
+          details.push('Code will be delivered via Firebase SMS.');
+          break;
+        case 'sms_word':
+          details.push('Code sent by SMS as a word.');
+          break;
+        case 'sms_phrase':
+          details.push('Code sent by SMS as a phrase.');
+          break;
+        case 'email':
+          details.push('Code sent by email.');
+          break;
+        case 'email_setup_required':
+          details.push('Email login setup is required in Telegram.');
+          break;
+        default:
+          details.push('Code sent.');
+          break;
+      }
+
+      if (length > 0) {
+        details.push(`Code length: ${length}.`);
+      }
+      if (timeout > 0) {
+        details.push(`Wait ${timeout}s before retry.`);
+      }
+      if (nextType) {
+        details.push(`Next method: ${nextType}.`);
+      }
+      details.push('Enter the code and sign in.');
+      return details.join(' ');
     }
 
     function uploadHTTPErrorMessage(status, statusText, code) {
@@ -286,13 +659,46 @@
       el.publicPasswordInput.placeholder = `Optional, at least ${minLength} characters`;
     }
 
-    function showApp(user) {
+    function applyReadOnlyMode() {
+      const readOnly = Boolean(state.readOnlyMapMode);
+      el.readOnlyBanner.classList.toggle('hidden', !readOnly);
+      el.createFolderBtn.disabled = readOnly;
+      el.uploadBtn.disabled = readOnly;
+      el.deleteSelectedBtn.disabled = readOnly;
+      el.moveSelectedBtn.disabled = readOnly;
+      el.dropZone.classList.toggle('disabled', readOnly);
+    }
+
+    function readOnlyMapModeMessage() {
+      if (state.telegramSessionStatus === 'stale') {
+        return humanizeError('telegram_session_stale');
+      }
+      return humanizeError('telegram_session_missing_read_only');
+    }
+
+    function requireWritableAction(setStatus) {
+      if (!state.readOnlyMapMode) {
+        return true;
+      }
+      if (typeof setStatus === 'function') {
+        setStatus(readOnlyMapModeMessage(), true);
+      } else {
+        setUploadStatus(readOnlyMapModeMessage(), true);
+      }
+      return false;
+    }
+
+    function showApp(user, session) {
       state.user = user;
+      state.readOnlyMapMode = Boolean(session && session.read_only_map_mode);
+      state.telegramSessionStatus = session && session.telegram_session_status ? String(session.telegram_session_status) : '';
+      state.reconnectMode = false;
       el.loginView.classList.add('hidden');
       el.appView.classList.remove('hidden');
       el.userbar.classList.remove('hidden');
       el.userName.textContent = user.displayName || user.username || `Telegram ${user.telegram_id}`;
       el.adminBtn.classList.toggle('hidden', user.role !== 'admin');
+      applyReadOnlyMode();
       restoreFolderState();
       restoreUploadQueueState();
       if (!window.location.hash) window.location.hash = state.currentFolderId ? folderRoute(state.currentFolderId) : '#/';
@@ -315,9 +721,15 @@
       state.uploadQueueRunning = false;
       state.uploadMonitorRunning = false;
       state.nextUploadQueueID = 1;
+      state.mfaStatus = null;
+      state.readOnlyMapMode = false;
+      state.telegramSessionStatus = '';
+      state.localMFAMethods = [];
+      state.reconnectMode = false;
       persistUploadQueueState();
       renderUploadQueue();
       closeDetailsDialog();
+      closeSecurityDialog();
       el.loginView.classList.remove('hidden');
       el.appView.classList.add('hidden');
       el.userbar.classList.add('hidden');
@@ -325,33 +737,101 @@
       resetLoginForm();
       el.loginStatus.textContent = message || 'Not signed in.';
       updateTabSafetyIndicator();
+      applyReadOnlyMode();
+    }
+
+    function setTelegramCodeInputDefaults() {
+      el.loginCodeLabel.textContent = 'Code';
+      el.loginCodeInput.name = 'telegram_code';
+      el.loginCodeInput.autocomplete = 'one-time-code';
+      el.loginCodeInput.inputMode = 'numeric';
+      el.loginCodeInput.pattern = '[0-9]*';
+      el.loginCodeInput.autocapitalize = 'none';
+      el.loginCodeInput.spellcheck = false;
+      el.loginCodeInput.placeholder = '12345';
+    }
+
+    function setLocalUnifiedCodeInputDefaults() {
+      el.loginCodeLabel.textContent = '2FA code or recovery key';
+      el.loginCodeInput.name = 'totp';
+      el.loginCodeInput.autocomplete = 'one-time-code';
+      el.loginCodeInput.inputMode = 'text';
+      el.loginCodeInput.pattern = '';
+      el.loginCodeInput.autocapitalize = 'none';
+      el.loginCodeInput.spellcheck = false;
+      el.loginCodeInput.placeholder = '123456 or ABCD-EFGH-IJKL';
+    }
+
+    function resetLocalPasswordField() {
+      el.localPasswordInput.type = 'password';
+      el.localPasswordInput.value = '';
+      el.localPasswordToggleBtn.classList.remove('visible');
+      el.localPasswordToggleBtn.setAttribute('aria-label', 'Show local password');
+      el.localPasswordToggleBtn.setAttribute('title', 'Show local password');
     }
 
     function resetLoginForm() {
       clearInterval(state.qrTimer);
+      clearInterval(state.qrCountdownTimer);
+      clearTelegramCodeRetryState();
       state.qrLoginId = null;
+      state.qrExpiresAt = null;
       state.loginMFAContext = '';
+      state.loginAltAccountMode = false;
+      state.reconnectMode = false;
       el.loginStatus.classList.remove('error');
-      el.startQrBtn.classList.remove('hidden');
-      el.sendCodeBtn.classList.remove('hidden');
       el.loginPhoneRow.classList.remove('hidden');
+      el.loginCountryField.classList.remove('hidden');
+      el.loginPhoneField.classList.remove('hidden');
+      el.localPasswordAction.classList.add('hidden');
+      el.localPasswordField.classList.add('hidden');
+      el.loginUseWebauthnBtn.classList.add('hidden');
+      resetLocalPasswordField();
       el.qrImage.classList.add('hidden');
       el.qrImage.src = '';
       el.loginCodeField.classList.add('hidden');
-      el.loginCodeLabel.textContent = 'Code';
+      setTelegramCodeInputDefaults();
       el.loginPasswordField.classList.add('hidden');
+      el.loginPasswordLabel.textContent = 'Telegram two-step password (if required)';
+      el.loginPasswordInput.placeholder = 'Telegram two-step password';
       el.loginWithCodeBtn.classList.add('hidden');
       el.loginCodeInput.value = '';
       el.loginPasswordInput.value = '';
+      refreshPhonePreview();
+      applyLoginEntryMode();
+    }
+
+    function applyLoginEntryMode() {
+      const hasRemembered = Boolean(state.rememberedUser);
+      const showTelegramLogin = !hasRemembered || state.loginAltAccountMode;
+      el.loginTelegramBox.classList.toggle('hidden', !showTelegramLogin);
+      el.startQrBtn.classList.toggle('hidden', !showTelegramLogin || state.reconnectMode);
+      el.sendCodeBtn.classList.toggle('hidden', !showTelegramLogin);
+      el.useAnotherAccountBtn.classList.toggle('hidden', !hasRemembered);
+
+      if (!showTelegramLogin) {
+        el.loginCodeField.classList.add('hidden');
+        el.loginPasswordField.classList.add('hidden');
+        el.loginWithCodeBtn.classList.add('hidden');
+        el.localPasswordAction.classList.add('hidden');
+        el.localPasswordField.classList.add('hidden');
+        el.loginUseWebauthnBtn.classList.add('hidden');
+        el.qrImage.classList.add('hidden');
+        el.qrImage.src = '';
+        clearInterval(state.qrTimer);
+        clearInterval(state.qrCountdownTimer);
+        clearTelegramCodeRetryState();
+      }
     }
 
     async function loadMe() {
       try {
         await loadAppInfo();
         const data = await api('/me');
-        showApp(data.user);
+        showApp(data.user, data.session || null);
       } catch (_) {
         showLogin();
+        await loadRememberedAccount();
       }
     }
 
@@ -374,9 +854,111 @@
       }
     }
 
+    async function loadRememberedAccount() {
+      el.rememberedBox.classList.add('hidden');
+      state.rememberedUser = null;
+      state.loginAltAccountMode = false;
+      try {
+        const data = await api('/auth/remembered-account');
+        if (!data || !data.available || !data.user) {
+          applyLoginEntryMode();
+          return;
+        }
+        state.rememberedUser = data.user;
+        state.localMFAMethods = Array.isArray(data.methods) ? data.methods.slice() : [];
+        el.rememberedUser.textContent = `Continue as ${data.user.displayName || data.user.username || `Telegram ${data.user.telegram_id}`}`;
+        const tg = String(data.telegram_session_status || '').trim();
+        el.rememberedStatus.textContent = tg === 'ok'
+          ? 'Telegram session linked.'
+          : 'Telegram session missing: map-only mode until re-link.';
+        el.rememberedBox.classList.remove('hidden');
+      } catch (_) {
+      }
+      applyLoginEntryMode();
+    }
+
+    async function continueRememberedLogin() {
+      el.continueRememberedBtn.disabled = true;
+      el.loginStatus.classList.remove('error');
+      el.loginStatus.textContent = 'Signing in...';
+      try {
+        await api('/auth/remembered-login', { method: 'POST' });
+      } catch (err) {
+        if (err && err.code === 'local_mfa_required') {
+          try {
+            await startLocalMFAFlow(err);
+            return;
+          } catch (mfaErr) {
+            el.loginStatus.classList.add('error');
+            el.loginStatus.textContent = mfaErr.message;
+            return;
+          }
+        }
+        el.loginStatus.classList.add('error');
+        el.loginStatus.textContent = err.message;
+        await loadRememberedAccount();
+        return;
+      } finally {
+        el.continueRememberedBtn.disabled = false;
+      }
+      await loadMe();
+    }
+
+    async function forgetRememberedDevice() {
+      el.forgetRememberedBtn.disabled = true;
+      try {
+        await api('/auth/remembered-device/forget', { method: 'POST', csrf: true });
+      } catch (_) {
+      } finally {
+        el.forgetRememberedBtn.disabled = false;
+      }
+      state.rememberedUser = null;
+      el.rememberedBox.classList.add('hidden');
+      el.loginStatus.classList.remove('error');
+      el.loginStatus.textContent = 'Saved local sign-in removed. Use Telegram sign-in again.';
+      state.loginAltAccountMode = true;
+      applyLoginEntryMode();
+    }
+
+    function useAnotherAccount() {
+      clearInterval(state.qrTimer);
+      clearInterval(state.qrCountdownTimer);
+      clearTelegramCodeRetryState();
+      state.qrLoginId = null;
+      state.qrExpiresAt = null;
+      state.loginMFAContext = '';
+      state.reconnectMode = false;
+      state.loginAltAccountMode = true;
+      el.loginCodeField.classList.add('hidden');
+      el.loginPasswordField.classList.add('hidden');
+      el.loginWithCodeBtn.classList.add('hidden');
+      el.loginCodeInput.value = '';
+      el.loginPasswordInput.value = '';
+      el.qrImage.classList.add('hidden');
+      el.qrImage.src = '';
+      el.loginPhoneRow.classList.remove('hidden');
+      applyLoginEntryMode();
+      el.loginStatus.classList.remove('error');
+      el.loginStatus.textContent = 'Signing in with another Telegram account.';
+      el.loginPhoneInput.focus();
+    }
+
+    function startReconnectTelegram() {
+      showLogin('Reconnect Telegram for this account.');
+      state.loginAltAccountMode = true;
+      state.reconnectMode = true;
+      applyLoginEntryMode();
+      el.loginStatus.classList.remove('error');
+      el.loginStatus.textContent = 'Sign in with the same Telegram account to reconnect this session.';
+      el.loginPhoneInput.focus();
+    }
+
     async function startQR() {
       clearInterval(state.qrTimer);
+      clearInterval(state.qrCountdownTimer);
+      clearTelegramCodeRetryState();
       state.qrLoginId = null;
+      state.qrExpiresAt = null;
       state.loginMFAContext = '';
       el.loginCodeField.classList.add('hidden');
       el.loginPasswordField.classList.add('hidden');
@@ -399,40 +981,64 @@
 
     async function sendTelegramCode() {
       clearInterval(state.qrTimer);
+      clearInterval(state.qrCountdownTimer);
       state.qrLoginId = null;
+      state.qrExpiresAt = null;
       el.qrImage.classList.add('hidden');
       state.loginMFAContext = '';
       el.loginPasswordField.classList.add('hidden');
       el.loginPasswordInput.value = '';
-      const phone = String(el.loginPhoneInput.value || '').trim();
-      if (!phone) {
+      let phone = '';
+      try {
+        phone = requireNormalizedPhone();
+      } catch (err) {
         el.loginStatus.classList.add('error');
-        el.loginStatus.textContent = 'Phone is required.';
+        el.loginStatus.textContent = err.message;
         return;
       }
+      const retryType = supportedTelegramRetryType(state.telegramCodeNextType);
+      const canResend = Boolean(state.telegramCodeCanResend &&
+        retryType &&
+        Number(state.telegramCodeRetryAt || 0) <= Date.now() &&
+        state.telegramCodePhone === phone);
+      const endpoint = canResend ? '/auth/telegram/resend-code' : '/auth/telegram/send-code';
       el.sendCodeBtn.disabled = true;
       el.loginStatus.classList.remove('error');
-      el.loginStatus.textContent = 'Sending code...';
+      el.loginStatus.textContent = canResend ? `Requesting ${telegramRetryLabel(retryType)} code...` : 'Sending code...';
       try {
-        await api('/auth/telegram/send-code', {
+        const data = await api(endpoint, {
           method: 'POST',
           body: JSON.stringify({ phone }),
         });
         state.loginMFAContext = 'phone';
         el.loginCodeField.classList.remove('hidden');
         el.loginWithCodeBtn.classList.remove('hidden');
-        el.loginStatus.textContent = 'Code sent. Enter the code and sign in.';
+        applyTelegramCodeDeliveryState(data && data.delivery, phone);
+        el.loginStatus.textContent = describeTelegramCodeDelivery(data && data.delivery);
         el.loginCodeInput.focus();
       } catch (err) {
         el.loginStatus.classList.add('error');
-        el.loginStatus.textContent = err.message;
+        if (err && err.code === 'invalid_auth_challenge') {
+          clearTelegramCodeRetryState();
+          el.loginCodeInput.value = '';
+        }
+        if (err && err.code === 'auth_rate_limited') {
+          applyTelegramRateLimitCooldown(err.retryAfterSeconds);
+          const retryAfterSeconds = Number(err.retryAfterSeconds || 0);
+          el.loginStatus.textContent = retryAfterSeconds > 0
+            ? `Too many login code requests. Try again in ${retryAfterSeconds}s.`
+            : err.message;
+        } else {
+          el.loginStatus.textContent = err.message;
+        }
       } finally {
-        el.sendCodeBtn.disabled = false;
+        updateTelegramCodeRetryButton();
       }
     }
 
     async function loginWithCode() {
       const password = String(el.loginPasswordInput.value || '');
+      const localPassword = String(el.localPasswordInput.value || '');
       const code = String(el.loginCodeInput.value || '').trim();
       el.loginWithCodeBtn.disabled = true;
       el.loginStatus.classList.remove('error');
@@ -441,7 +1047,7 @@
         if (state.loginMFAContext === 'local_totp_setup') {
           if (!code) {
             el.loginStatus.classList.add('error');
-            el.loginStatus.textContent = 'Enter local MFA code.';
+            el.loginStatus.textContent = 'Enter local 2FA code.';
             el.loginCodeInput.focus();
             return;
           }
@@ -451,22 +1057,53 @@
             body: JSON.stringify({ code }),
           });
           if (Array.isArray(data.recovery_codes) && data.recovery_codes.length > 0) {
-            el.loginStatus.textContent = `Local MFA enabled. Save recovery codes now: ${data.recovery_codes.join(', ')}`;
+            el.loginStatus.textContent = `Local 2FA enabled. Save recovery codes now: ${data.recovery_codes.join(', ')}`;
           }
           showApp(data.user);
           return;
         }
-        if (state.loginMFAContext === 'local_totp_verify') {
+        if (state.loginMFAContext === 'local_code_verify') {
+          if (hasMethod('password') && !el.localPasswordField.classList.contains('hidden') && localPassword) {
+            const data = await api('/auth/local-password/verify', {
+              method: 'POST',
+              csrf: true,
+              body: JSON.stringify({ password: localPassword }),
+            });
+            showApp(data.user);
+            return;
+          }
           if (!code) {
             el.loginStatus.classList.add('error');
-            el.loginStatus.textContent = 'Enter local MFA code.';
+            el.loginStatus.textContent = 'Enter 2FA code or recovery key.';
             el.loginCodeInput.focus();
             return;
           }
-          const data = await api('/auth/mfa/totp/verify', {
+          const localCodeResolution = resolveLocalCodeVerificationInput(code);
+          if (!localCodeResolution.ok) {
+            el.loginStatus.classList.add('error');
+            el.loginStatus.textContent = localCodeResolution.message;
+            el.loginCodeInput.focus();
+            return;
+          }
+          const data = await api(localCodeResolution.path, {
             method: 'POST',
             csrf: true,
-            body: JSON.stringify({ code }),
+            body: JSON.stringify({ code: localCodeResolution.code }),
+          });
+          showApp(data.user);
+          return;
+        }
+        if (state.loginMFAContext === 'local_password_verify') {
+          if (!localPassword) {
+            el.loginStatus.classList.add('error');
+            el.loginStatus.textContent = 'Enter local password.';
+            el.localPasswordInput.focus();
+            return;
+          }
+          const data = await api('/auth/local-password/verify', {
+            method: 'POST',
+            csrf: true,
+            body: JSON.stringify({ password: localPassword }),
           });
           showApp(data.user);
           return;
@@ -485,30 +1122,42 @@
             body: JSON.stringify(qrPayload),
           });
           clearInterval(state.qrTimer);
+          clearInterval(state.qrCountdownTimer);
           state.qrLoginId = null;
+          state.qrExpiresAt = null;
           el.qrImage.classList.add('hidden');
           showApp(data.user);
           return;
         }
 
-        const phone = String(el.loginPhoneInput.value || '').trim();
-        if (!phone || !code) {
+        let phone = '';
+        try {
+          phone = requireNormalizedPhone();
+        } catch (err) {
           el.loginStatus.classList.add('error');
-          el.loginStatus.textContent = 'Phone and code are required.';
+          el.loginStatus.textContent = err.message;
+          return;
+        }
+        if (!code) {
+          el.loginStatus.classList.add('error');
+          el.loginStatus.textContent = 'Code is required.';
           return;
         }
         const payload = { phone, code };
         if (password) {
           payload.password = password;
         }
-        const data = await api('/auth/telegram/login', {
+        const authPath = state.reconnectMode ? '/auth/telegram/reconnect' : '/auth/telegram/login';
+        const data = await api(authPath, {
           method: 'POST',
           body: JSON.stringify(payload),
         });
         clearInterval(state.qrTimer);
+        clearInterval(state.qrCountdownTimer);
         state.qrLoginId = null;
+        state.qrExpiresAt = null;
         el.qrImage.classList.add('hidden');
-        showApp(data.user);
+        showApp(data.user, data.session || null);
       } catch (err) {
         if (err && err.code === 'telegram_mfa_required') {
           state.loginMFAContext = state.qrLoginId ? 'qr' : 'phone';
@@ -614,42 +1263,54 @@
       return out;
     }
 
-    async function tryWebAuthnLocalMFAVerify() {
+    async function runWebAuthnLocalMFAVerify() {
       if (!window.PublicKeyCredential || !navigator.credentials || !navigator.credentials.get) {
-        return false;
+        return null;
       }
       const start = await api('/auth/mfa/webauthn/verify/start', { method: 'POST', csrf: true });
       const challengeID = start && start.challenge_id ? String(start.challenge_id) : '';
-      if (!challengeID) return false;
+      if (!challengeID) return null;
       const publicKey = normalizeWebAuthnRequestOptions(start.public_key || start);
-      if (!publicKey) return false;
+      if (!publicKey) return null;
       const credential = await navigator.credentials.get({ publicKey });
       const response = serializeWebAuthnCredential(credential);
-      const finish = await api(`/auth/mfa/webauthn/verify/finish?challenge_id=${encodeURIComponent(challengeID)}`, {
+      return api(`/auth/mfa/webauthn/verify/finish?challenge_id=${encodeURIComponent(challengeID)}`, {
         method: 'POST',
         csrf: true,
         body: JSON.stringify(response),
       });
+    }
+
+    async function tryWebAuthnLocalMFAVerify() {
+      const finish = await runWebAuthnLocalMFAVerify();
+      if (!finish) return false;
       showApp(finish.user);
       return true;
     }
 
-    async function tryWebAuthnLocalMFARegister() {
+    async function runWebAuthnLocalMFARegister(displayName) {
       if (!window.PublicKeyCredential || !navigator.credentials || !navigator.credentials.create) {
-        return false;
+        return null;
       }
       const start = await api('/auth/mfa/webauthn/register/start', { method: 'POST', csrf: true });
       const challengeID = start && start.challenge_id ? String(start.challenge_id) : '';
-      if (!challengeID) return false;
+      if (!challengeID) return null;
       const publicKey = normalizeWebAuthnCreationOptions(start.public_key || start);
-      if (!publicKey) return false;
+      if (!publicKey) return null;
       const credential = await navigator.credentials.create({ publicKey });
       const response = serializeWebAuthnCredential(credential);
-      const finish = await api(`/auth/mfa/webauthn/register/finish?challenge_id=${encodeURIComponent(challengeID)}`, {
+      const cleanDisplayName = String(displayName || '').trim();
+      const finishURL = `/auth/mfa/webauthn/register/finish?challenge_id=${encodeURIComponent(challengeID)}&display_name=${encodeURIComponent(cleanDisplayName)}`;
+      return api(finishURL, {
         method: 'POST',
         csrf: true,
         body: JSON.stringify(response),
       });
+    }
+
+    async function tryWebAuthnLocalMFARegister() {
+      const finish = await runWebAuthnLocalMFARegister('Passkey');
+      if (!finish) return false;
       showApp(finish.user);
       return true;
     }
@@ -658,11 +1319,98 @@
       if (context === 'qr') {
         el.loginCodeField.classList.add('hidden');
       }
+      el.localPasswordAction.classList.add('hidden');
+      el.localPasswordField.classList.add('hidden');
+      el.loginUseWebauthnBtn.classList.add('hidden');
       el.loginPasswordField.classList.remove('hidden');
       el.loginWithCodeBtn.classList.remove('hidden');
+      el.loginPasswordLabel.textContent = 'Telegram two-step password (if required)';
+      el.loginPasswordInput.placeholder = 'Telegram two-step password';
       if (focus) {
         el.loginPasswordInput.focus();
       }
+    }
+
+    function hasMethod(method) {
+      return Array.isArray(state.localMFAMethods) && state.localMFAMethods.includes(method);
+    }
+
+    function resolveLocalCodeVerificationInput(rawCode) {
+      const compact = String(rawCode || '').trim().replace(/\s+/g, '');
+      if (!compact) {
+        return { ok: false, message: 'Enter 2FA code or recovery key.' };
+      }
+      if (hasMethod('totp') && /^\d{6}$/.test(compact)) {
+        return { ok: true, path: '/auth/mfa/totp/verify', code: compact };
+      }
+      if (hasMethod('recovery')) {
+        return { ok: true, path: '/auth/mfa/recovery/verify', code: compact.toUpperCase() };
+      }
+      if (hasMethod('totp')) {
+        return { ok: false, message: 'Enter a 6-digit 2FA code.' };
+      }
+      return { ok: false, message: 'No local 2FA code method is available.' };
+    }
+
+    function showLocalCodeVerification(focus) {
+      state.loginMFAContext = 'local_code_verify';
+      el.loginStatus.classList.remove('error');
+      el.loginPhoneRow.classList.add('hidden');
+      el.loginPasswordField.classList.add('hidden');
+      el.localPasswordField.classList.add('hidden');
+      resetLocalPasswordField();
+      el.loginCodeField.classList.remove('hidden');
+      el.loginWithCodeBtn.classList.remove('hidden');
+      setLocalUnifiedCodeInputDefaults();
+      if (focus) {
+        el.loginCodeInput.focus();
+      }
+    }
+
+    function showLocalPasswordVerification() {
+      const hasCodeMethods = hasMethod('totp') || hasMethod('recovery');
+      state.loginMFAContext = hasCodeMethods ? 'local_code_verify' : 'local_password_verify';
+      el.loginStatus.classList.remove('error');
+      el.loginPhoneRow.classList.add('hidden');
+      el.loginPasswordField.classList.add('hidden');
+      if (hasCodeMethods) {
+        el.loginCodeField.classList.remove('hidden');
+        setLocalUnifiedCodeInputDefaults();
+      } else {
+        el.loginCodeField.classList.add('hidden');
+      }
+      el.localPasswordField.classList.remove('hidden');
+      el.loginWithCodeBtn.classList.remove('hidden');
+      el.localPasswordInput.focus();
+    }
+
+    function toggleLocalPasswordVisibility() {
+      const showPassword = el.localPasswordInput.type === 'password';
+      el.localPasswordInput.type = showPassword ? 'text' : 'password';
+      el.localPasswordToggleBtn.classList.toggle('visible', showPassword);
+      const label = showPassword ? 'Hide local password' : 'Show local password';
+      el.localPasswordToggleBtn.setAttribute('aria-label', label);
+      el.localPasswordToggleBtn.setAttribute('title', label);
+    }
+
+    function renderLocalMFAActions() {
+      el.loginUseWebauthnBtn.classList.toggle('hidden', !hasMethod('webauthn'));
+      const allowPassword = hasMethod('password');
+      el.localPasswordAction.classList.toggle('hidden', !allowPassword);
+      if (!allowPassword) {
+        el.localPasswordField.classList.add('hidden');
+        resetLocalPasswordField();
+      }
+    }
+
+    function isWebAuthnUserAgentDenied(err) {
+      const name = String(err && err.name ? err.name : '').trim();
+      if (name === 'NotAllowedError' || name === 'SecurityError') return true;
+      const message = String(err && err.message ? err.message : '').toLowerCase();
+      return message.includes('not allowed by the user agent')
+        || message.includes('denied permission')
+        || message.includes('operation either timed out')
+        || message.includes('the operation was cancelled');
     }
 
     async function startLocalMFAFlow(errorResponse) {
@@ -672,43 +1420,88 @@
       el.loginPhoneRow.classList.add('hidden');
       el.loginPasswordField.classList.add('hidden');
       el.loginPasswordInput.value = '';
+      el.localPasswordField.classList.add('hidden');
+      resetLocalPasswordField();
       el.loginCodeField.classList.remove('hidden');
       el.loginWithCodeBtn.classList.remove('hidden');
-      el.loginCodeLabel.textContent = 'Local MFA code';
       const setupRequired = Boolean(errorResponse && errorResponse.payload && errorResponse.payload.setup_required);
+      const methods = (errorResponse && errorResponse.payload && Array.isArray(errorResponse.payload.methods))
+        ? errorResponse.payload.methods.slice()
+        : [];
+      state.localMFAMethods = methods;
       if (setupRequired) {
         try {
           const registered = await tryWebAuthnLocalMFARegister();
           if (registered) return;
         } catch (_) {}
+        el.loginUseWebauthnBtn.classList.add('hidden');
+        el.localPasswordAction.classList.add('hidden');
         const data = await api('/auth/mfa/totp/enroll/start', { method: 'POST', csrf: true });
         if (data && data.totp && data.totp.qr_image_url) {
           el.qrImage.src = data.totp.qr_image_url;
           el.qrImage.classList.remove('hidden');
         }
         state.loginMFAContext = 'local_totp_setup';
-        el.loginStatus.textContent = 'Scan QR code in authenticator app and enter local MFA code.';
+        el.loginCodeLabel.textContent = 'Local 2FA code';
+        el.loginCodeInput.name = 'totp';
+        el.loginCodeInput.autocomplete = 'one-time-code';
+        el.loginCodeInput.inputMode = 'numeric';
+        el.loginCodeInput.pattern = '[0-9]*';
+        el.loginCodeInput.autocapitalize = 'none';
+        el.loginCodeInput.spellcheck = false;
+        el.loginCodeInput.placeholder = '123456';
+        el.loginStatus.textContent = 'Scan QR code in authenticator app and enter local 2FA code.';
       } else {
-        try {
-          const verified = await tryWebAuthnLocalMFAVerify();
-          if (verified) return;
-        } catch (_) {}
-        state.loginMFAContext = 'local_totp_verify';
+        renderLocalMFAActions();
+        if (hasMethod('totp') || hasMethod('recovery')) {
+          showLocalCodeVerification(false);
+        } else if (hasMethod('password')) {
+          showLocalPasswordVerification();
+        } else if (hasMethod('webauthn')) {
+          state.loginMFAContext = '';
+          el.loginPhoneRow.classList.add('hidden');
+          el.loginCodeField.classList.add('hidden');
+          el.loginPasswordField.classList.add('hidden');
+          el.localPasswordField.classList.add('hidden');
+          el.loginWithCodeBtn.classList.add('hidden');
+        } else {
+          throw new Error(humanizeError('telegram_login_required'));
+        }
         el.qrImage.classList.add('hidden');
         el.qrImage.src = '';
-        el.loginStatus.textContent = 'Enter local MFA code from authenticator app.';
+        if (hasMethod('webauthn') && !hasMethod('totp') && !hasMethod('recovery') && !hasMethod('password')) {
+          el.loginStatus.textContent = 'Use passkey to continue.';
+        } else {
+          el.loginStatus.textContent = 'Verify local 2FA to continue.';
+        }
       }
-      el.loginCodeInput.value = '';
-      el.loginCodeInput.focus();
+      if (state.loginMFAContext !== 'local_password_verify') {
+        el.loginCodeInput.value = '';
+      }
+    }
+
+    function renderQRCountdown() {
+      if (!state.qrExpiresAt) return;
+      const remaining = Math.max(0, Math.floor((state.qrExpiresAt.getTime() - Date.now()) / 1000));
+      if (remaining <= 0) {
+        el.loginStatus.textContent = 'QR expired. Start QR again.';
+        return;
+      }
+      const mm = String(Math.floor(remaining / 60)).padStart(2, '0');
+      const ss = String(remaining % 60).padStart(2, '0');
+      el.loginStatus.textContent = `QR expires in ${mm}:${ss}`;
     }
 
     function updateQR(qr) {
       state.qrLoginId = qr.id;
+      state.qrExpiresAt = qr && qr.expires_at ? new Date(qr.expires_at) : null;
       if (qr.qr_image_url) {
         el.qrImage.src = qr.qr_image_url;
         el.qrImage.classList.remove('hidden');
       }
-      el.loginStatus.textContent = `Expires ${new Date(qr.expires_at).toLocaleTimeString()}`;
+      clearInterval(state.qrCountdownTimer);
+      state.qrCountdownTimer = setInterval(renderQRCountdown, 1000);
+      renderQRCountdown();
     }
 
     async function pollQR() {
@@ -723,11 +1516,13 @@
           return;
         }
         clearInterval(state.qrTimer);
+        clearInterval(state.qrCountdownTimer);
         el.qrImage.classList.add('hidden');
         showApp(data.user);
       } catch (err) {
         if (err && err.code === 'telegram_mfa_required') {
           clearInterval(state.qrTimer);
+          clearInterval(state.qrCountdownTimer);
           state.loginMFAContext = 'qr';
           showLoginMFA(true, 'qr');
           el.qrImage.classList.add('hidden');
@@ -735,14 +1530,17 @@
           return;
         }
         clearInterval(state.qrTimer);
+        clearInterval(state.qrCountdownTimer);
         el.loginStatus.classList.add('error');
         el.loginStatus.textContent = err.message;
       }
     }
 
-    async function logout() {
-      await api('/auth/logout', { method: 'POST', csrf: true });
-      showLogin('Signed out.');
+    async function logout(forgetDevice) {
+      const payload = { forget_device: Boolean(forgetDevice) };
+      await api('/auth/logout', { method: 'POST', csrf: true, body: JSON.stringify(payload) });
+      showLogin(forgetDevice ? 'Signed out and local device access removed.' : 'Signed out.');
+      await loadRememberedAccount();
     }
 
     async function refreshFiles() {
@@ -867,8 +1665,10 @@
         });
       });
       el.filesBody.querySelectorAll('[data-download]').forEach((button) => {
-        button.addEventListener('click', () => {
-          window.location.href = `/files/${button.dataset.download}/download`;
+        button.addEventListener('click', async () => {
+          const file = displayFiles.find((item) => item.id === button.dataset.download);
+          if (!file) return;
+          await downloadFile(file.id, file.name || 'download.bin');
         });
       });
       el.filesBody.querySelectorAll('[data-delete]').forEach((button) => {
@@ -1028,19 +1828,82 @@
       if (file.upload_id || file.is_pending_upload) {
         return `<span class="muted">In progress</span>`;
       }
+      const readOnly = Boolean(state.readOnlyMapMode);
       if (state.view === 'shared') {
-        const deleteButton = file.can_delete ? `<button data-delete="${file.id}">Delete</button>` : '';
+        const deleteButton = file.can_delete
+          ? `<button data-delete="${file.id}" ${readOnly ? 'disabled title="Read-only mode"' : ''}>Delete</button>`
+          : '';
         if (file.type === 'folder') {
           return `<button data-open-folder="${file.id}">Open</button><button data-details="${file.id}">Details</button>${deleteButton}`;
         }
-        return `<a class="button-link" href="/files/${encodeURIComponent(file.id)}/download" download>Download</a><button data-details="${file.id}">Details</button>${deleteButton}`;
+        return `<button data-download="${file.id}">Download</button><button data-details="${file.id}">Details</button>${deleteButton}`;
       }
-      const downloadLink = `<a class="button-link" href="/files/${encodeURIComponent(file.id)}/download" download>Download</a>`;
-      const deleteButton = `<button data-delete="${file.id}">Delete</button>`;
+      const downloadButton = `<button data-download="${file.id}">Download</button>`;
+      const deleteButton = `<button data-delete="${file.id}" ${readOnly ? 'disabled title="Read-only mode"' : ''}>Delete</button>`;
       if (file.type === 'folder') {
         return `<button data-open-folder="${file.id}">Open</button><button data-details="${file.id}">Details</button>${deleteButton}`;
       }
-      return `${downloadLink}<button data-details="${file.id}">Details</button><button data-share="${file.id}">Share</button>${deleteButton}`;
+      return `${downloadButton}<button data-details="${file.id}">Details</button><button data-share="${file.id}" ${readOnly ? 'disabled title="Read-only mode"' : ''}>Share</button>${deleteButton}`;
+    }
+
+    function downloadFileNameFromHeader(headerValue, fallbackName) {
+      const fallback = String(fallbackName || 'download.bin');
+      const raw = String(headerValue || '').trim();
+      if (!raw) return fallback;
+      const utf8Match = raw.match(/filename\*\s*=\s*UTF-8''([^;]+)/i);
+      if (utf8Match && utf8Match[1]) {
+        try {
+          return decodeURIComponent(utf8Match[1]);
+        } catch (_) {
+          return utf8Match[1];
+        }
+      }
+      const quotedMatch = raw.match(/filename\s*=\s*"([^"]+)"/i);
+      if (quotedMatch && quotedMatch[1]) return quotedMatch[1];
+      const plainMatch = raw.match(/filename\s*=\s*([^;]+)/i);
+      if (plainMatch && plainMatch[1]) return plainMatch[1].trim();
+      return fallback;
+    }
+
+    async function downloadFile(id, fallbackName) {
+      if (!id) return;
+      if (!requireWritableAction()) return;
+      try {
+        const response = await fetch(`/files/${encodeURIComponent(id)}/download`, {
+          credentials: 'same-origin',
+        });
+        if (!response.ok) {
+          let code = 'download_failed';
+          try {
+            const payload = await response.json();
+            code = payload && payload.error ? String(payload.error) : code;
+          } catch (_) {
+            code = 'download_failed';
+          }
+          throw new Error(humanizeError(code));
+        }
+        const blob = await response.blob();
+        const fileName = downloadFileNameFromHeader(response.headers.get('Content-Disposition'), fallbackName);
+        const url = URL.createObjectURL(blob);
+        try {
+          const link = document.createElement('a');
+          link.href = url;
+          link.download = fileName;
+          document.body.appendChild(link);
+          link.click();
+          link.remove();
+        } finally {
+          URL.revokeObjectURL(url);
+        }
+        setUploadStatus(`Downloaded ${fileName}.`);
+      } catch (err) {
+        const raw = String((err && err.message) || '').trim();
+        if (raw.includes('NetworkError') || raw.includes('Failed to fetch')) {
+          setUploadStatus(`${humanizeError('download_failed')} ${humanizeError('telegram_session_stale')}`, true);
+          return;
+        }
+        setUploadStatus(raw || humanizeError('download_failed'), true);
+      }
     }
 
     function renderFileName(file) {
@@ -1300,6 +2163,7 @@
     }
 
     async function createFolder() {
+      if (!requireWritableAction()) return;
       const name = el.folderNameInput.value.trim();
       if (!name) return;
       el.createFolderBtn.disabled = true;
@@ -1322,6 +2186,7 @@
     }
 
     async function deleteFile(id) {
+      if (!requireWritableAction()) return;
       if (!id) return;
       const file = state.visibleFiles.find((item) => item.id === id);
       const isSharedDelete = state.view === 'shared' && file && file.access === 'shared_read_delete';
@@ -1333,6 +2198,7 @@
     }
 
     async function deleteFiles(ids, confirmDelete = true) {
+      if (!requireWritableAction()) return;
       const normalized = Array.from(new Set((ids || []).map((id) => String(id).trim()).filter(Boolean)));
       if (!normalized.length) return;
       if (confirmDelete && !window.confirm(`Delete ${normalized.length} selected item${normalized.length === 1 ? '' : 's'}?`)) return;
@@ -1359,6 +2225,7 @@
     }
 
     async function openMoveDialog() {
+      if (!requireWritableAction(setMoveStatus)) return;
       const selected = Array.from(state.selectedFileIds);
       if (!selected.length || state.view !== 'own') return;
       setMoveStatus('');
@@ -1441,6 +2308,7 @@
     }
 
     async function moveFiles(ids, parentID) {
+      if (!requireWritableAction()) return;
       const normalized = Array.from(new Set((ids || []).map((id) => String(id).trim()).filter(Boolean)));
       if (!normalized.length) return;
       try {
@@ -1463,6 +2331,7 @@
     }
 
     async function renameFile(id, name) {
+      if (!requireWritableAction(setDetailsStatus)) return;
       const normalized = String(name || '').trim();
       if (!id || !normalized) return;
       try {
@@ -1487,6 +2356,7 @@
     }
 
     async function openShareDialog(file) {
+      if (!requireWritableAction(setUploadStatus)) return;
       if (!file) return;
       closeDetailsDialog();
       state.shareFile = file;
@@ -1664,6 +2534,7 @@
     }
 
     async function createShare() {
+      if (!requireWritableAction(setShareStatus)) return;
       if (!state.shareFile) return;
       const useManual = !el.shareManualField.classList.contains('hidden');
       const selectedID = Number(el.shareRecipientSelect.value);
@@ -1700,6 +2571,7 @@
     }
 
     async function revokeShare(shareID) {
+      if (!requireWritableAction(setShareStatus)) return;
       if (!state.shareFile || !shareID) return;
       try {
         await api(`/files/${state.shareFile.id}/shares/${shareID}`, { method: 'DELETE', csrf: true });
@@ -1711,6 +2583,7 @@
     }
 
     async function createPublicLink() {
+      if (!requireWritableAction(setShareStatus)) return;
       if (!state.shareFile) return;
       const password = String(el.publicPasswordInput.value || '').trim();
       const minLength = getPublicLinkPasswordMinLength();
@@ -1824,6 +2697,7 @@
     }
 
     async function revokePublicLink(linkID) {
+      if (!requireWritableAction(setShareStatus)) return;
       if (!state.shareFile || !linkID) return;
       try {
         await api(`/files/${state.shareFile.id}/public-links/${linkID}`, { method: 'DELETE', csrf: true });
@@ -1887,6 +2761,7 @@
     }
 
     async function uploadSelected() {
+      if (!requireWritableAction()) return;
       const files = selectedUploadFiles();
       if (!files.length) return;
       if (state.view !== 'own') {
@@ -2048,6 +2923,10 @@
     }
 
     async function runUploadQueue() {
+      if (state.readOnlyMapMode) {
+        setUploadStatus(readOnlyMapModeMessage(), true);
+        return;
+      }
       if (state.uploadQueueRunning) return;
       state.uploadQueueRunning = true;
       try {
@@ -3009,6 +3888,349 @@
       }
     }
 
+    function setMFAStatus(message, error = false) {
+      el.mfaStatus.textContent = message;
+      el.mfaStatus.classList.toggle('error', error);
+    }
+
+    function clearSecurityDraft() {
+      el.mfaTotpEnrollBox.classList.add('hidden');
+      el.mfaTotpSecretInput.value = '';
+      el.mfaTotpCodeInput.value = '';
+      el.mfaTotpQR.classList.add('hidden');
+      el.mfaTotpQR.src = '';
+      el.mfaPasskeyNameInput.value = '';
+      el.mfaLocalPasswordInput.value = '';
+      el.mfaLocalPasswordConfirmInput.value = '';
+      el.mfaLocalPasswordConfirmInput.classList.add('hidden');
+      el.setLocalPasswordBtn.disabled = true;
+    }
+
+    function updateLocalPasswordActions() {
+      const password = String(el.mfaLocalPasswordInput.value || '');
+      const confirm = String(el.mfaLocalPasswordConfirmInput.value || '');
+      const hasPassword = password.trim().length > 0;
+      el.mfaLocalPasswordConfirmInput.classList.toggle('hidden', !hasPassword);
+      if (!hasPassword) {
+        el.setLocalPasswordBtn.disabled = true;
+        return;
+      }
+      const validLength = password.trim().length >= 5;
+      const matches = password === confirm && confirm.length > 0;
+      el.setLocalPasswordBtn.disabled = !(validLength && matches);
+    }
+
+    function showRecoveryCodes(codes, prefix) {
+      if (!Array.isArray(codes) || !codes.length) return;
+      el.mfaRecoveryCodesOutput.value = codes.join('\n');
+      el.mfaRecoveryCodesBox.classList.remove('hidden');
+      setMFAStatus(prefix || 'Recovery codes generated. Save them now.');
+    }
+
+    function renderPasskeyRows(passkeys) {
+      const items = Array.isArray(passkeys) ? passkeys : [];
+      if (!items.length) {
+        el.mfaPasskeysBody.innerHTML = '<tr><td class="muted">No passkeys configured.</td><td></td></tr>';
+        return;
+      }
+      const rows = items.map((item) => {
+        const id = String(item && item.id ? item.id : '');
+        const displayName = String(item && item.display_name ? item.display_name : 'Passkey');
+        const escapedName = escapeHTML(displayName);
+        const escapedID = escapeHTML(id);
+        return `<tr data-passkey-id="${escapedID}">
+          <td>
+            <input type="text" value="${escapedName}" maxlength="80" data-passkey-name="${escapedID}" aria-label="Passkey name">
+          </td>
+          <td class="row-actions">
+            <button data-passkey-rename="${escapedID}">Save</button>
+            <button data-passkey-delete="${escapedID}">Delete</button>
+          </td>
+        </tr>`;
+      });
+      el.mfaPasskeysBody.innerHTML = rows.join('');
+    }
+
+    function renderMFAStatus(status) {
+      state.mfaStatus = status || null;
+      const data = status || {};
+      const totpEnabled = Boolean(data.totp_enabled);
+      const webauthnCredentials = Array.isArray(data.webauthn_credentials) ? data.webauthn_credentials : [];
+      const passwordConfigured = Boolean(data.password_configured);
+      const remaining = Number.isFinite(Number(data.recovery_codes_remaining))
+        ? Number(data.recovery_codes_remaining)
+        : 0;
+
+      el.mfaRecoveryRemainingInput.value = String(remaining);
+      renderPasskeyRows(webauthnCredentials);
+      if (passwordConfigured) {
+        el.mfaLocalPasswordInput.placeholder = 'Configured. Enter new value to rotate.';
+      } else {
+        el.mfaLocalPasswordInput.placeholder = 'At least 5 characters';
+      }
+      el.startTotpEnrollBtn.textContent = totpEnabled ? 'Reconfigure TOTP' : 'Set up TOTP';
+      el.regenerateRecoveryBtn.disabled = !totpEnabled;
+      el.disableTotpBtn.disabled = !totpEnabled;
+      el.disableLocalPasswordBtn.disabled = !passwordConfigured;
+      updateLocalPasswordActions();
+    }
+
+    async function loadMFAStatus() {
+      const data = await api('/auth/mfa/status');
+      renderMFAStatus(data);
+      return data;
+    }
+
+    async function openSecurityDialog() {
+      if (!state.user) return;
+      clearSecurityDraft();
+      el.mfaRecoveryCodesBox.classList.add('hidden');
+      el.mfaRecoveryCodesOutput.value = '';
+      el.securityModal.classList.remove('hidden');
+      setMFAStatus('Loading...');
+      try {
+        await loadMFAStatus();
+        setMFAStatus('Loaded.');
+      } catch (err) {
+        setMFAStatus(err.message, true);
+      }
+    }
+
+    function closeSecurityDialog() {
+      el.securityModal.classList.add('hidden');
+      clearSecurityDraft();
+      el.mfaRecoveryCodesBox.classList.add('hidden');
+      el.mfaRecoveryCodesOutput.value = '';
+      setMFAStatus('');
+    }
+
+    async function startTotpEnrollmentFromSecurity() {
+      if (!state.user) return;
+      el.startTotpEnrollBtn.disabled = true;
+      setMFAStatus('Starting TOTP setup...');
+      try {
+        const data = await api('/auth/mfa/totp/enroll/start', { method: 'POST', csrf: true });
+        clearSecurityDraft();
+        const totp = data && data.totp ? data.totp : {};
+        el.mfaTotpSecretInput.value = totp.secret || '';
+        if (totp.qr_image_url) {
+          el.mfaTotpQR.src = totp.qr_image_url;
+          el.mfaTotpQR.classList.remove('hidden');
+        }
+        el.mfaTotpEnrollBox.classList.remove('hidden');
+        el.mfaTotpCodeInput.focus();
+        setMFAStatus('Scan QR code and enter authenticator code.');
+      } catch (err) {
+        setMFAStatus(err.message, true);
+      } finally {
+        el.startTotpEnrollBtn.disabled = false;
+      }
+    }
+
+    async function confirmTotpEnrollmentFromSecurity() {
+      if (!state.user) return;
+      const code = String(el.mfaTotpCodeInput.value || '').trim();
+      if (!code) {
+        setMFAStatus('Enter local 2FA code.', true);
+        el.mfaTotpCodeInput.focus();
+        return;
+      }
+      el.confirmTotpEnrollBtn.disabled = true;
+      setMFAStatus('Confirming TOTP...');
+      try {
+        const data = await api('/auth/mfa/totp/enroll/confirm', {
+          method: 'POST',
+          csrf: true,
+          body: JSON.stringify({ code }),
+        });
+        clearSecurityDraft();
+        showRecoveryCodes(data.recovery_codes, 'TOTP enabled. Save recovery codes now.');
+        await loadMFAStatus();
+      } catch (err) {
+        setMFAStatus(err.message, true);
+      } finally {
+        el.confirmTotpEnrollBtn.disabled = false;
+      }
+    }
+
+    async function registerWebauthnFromSecurity() {
+      if (!state.user) return;
+      const displayName = String(el.mfaPasskeyNameInput.value || '').trim() || 'Passkey';
+      el.registerWebauthnBtn.disabled = true;
+      setMFAStatus('Waiting for WebAuthn device...');
+      try {
+        await runWebAuthnLocalMFARegister(displayName);
+        el.mfaPasskeyNameInput.value = '';
+        await loadMFAStatus();
+        setMFAStatus('Passkey added.');
+      } catch (err) {
+        setMFAStatus(err.message, true);
+      } finally {
+        el.registerWebauthnBtn.disabled = false;
+      }
+    }
+
+    async function regenerateRecoveryCodes() {
+      if (!state.user) return;
+      const confirmed = window.confirm('Regenerate recovery codes? Existing unused codes will stop working.');
+      if (!confirmed) return;
+      el.regenerateRecoveryBtn.disabled = true;
+      setMFAStatus('Regenerating recovery codes...');
+      try {
+        const data = await api('/auth/mfa/recovery/regenerate', {
+          method: 'POST',
+          csrf: true,
+        });
+        showRecoveryCodes(data.recovery_codes, 'Recovery codes regenerated. Save them now.');
+        await loadMFAStatus();
+      } catch (err) {
+        setMFAStatus(err.message, true);
+      } finally {
+        el.regenerateRecoveryBtn.disabled = false;
+      }
+    }
+
+    async function setLocalPasswordFromSecurity() {
+      if (!state.user) return;
+      const password = String(el.mfaLocalPasswordInput.value || '');
+      const confirm = String(el.mfaLocalPasswordConfirmInput.value || '');
+      if (!password.trim()) {
+        setMFAStatus('Enter local password.', true);
+        el.mfaLocalPasswordInput.focus();
+        return;
+      }
+      if (password.trim().length < 5) {
+        setMFAStatus(humanizeError('local_password_too_short'), true);
+        el.mfaLocalPasswordInput.focus();
+        return;
+      }
+      if (password !== confirm) {
+        setMFAStatus(humanizeError('local_password_mismatch'), true);
+        el.mfaLocalPasswordConfirmInput.focus();
+        return;
+      }
+      el.setLocalPasswordBtn.disabled = true;
+      setMFAStatus('Saving local password...');
+      try {
+        await api('/auth/local-password/set', {
+          method: 'POST',
+          csrf: true,
+          body: JSON.stringify({ password }),
+        });
+        el.mfaLocalPasswordInput.value = '';
+        el.mfaLocalPasswordConfirmInput.value = '';
+        el.mfaLocalPasswordConfirmInput.classList.add('hidden');
+        await loadMFAStatus();
+        setMFAStatus('Local password updated.');
+      } catch (err) {
+        setMFAStatus(err.message, true);
+      } finally {
+        updateLocalPasswordActions();
+      }
+    }
+
+    async function disableLocalPasswordFromSecurity() {
+      if (!state.user) return;
+      const confirmed = window.confirm('Disable local password fallback?');
+      if (!confirmed) return;
+      el.disableLocalPasswordBtn.disabled = true;
+      setMFAStatus('Disabling local password...');
+      try {
+        await api('/auth/local-password', { method: 'DELETE', csrf: true });
+        el.mfaLocalPasswordInput.value = '';
+        el.mfaLocalPasswordConfirmInput.value = '';
+        el.mfaLocalPasswordConfirmInput.classList.add('hidden');
+        await loadMFAStatus();
+        setMFAStatus('Local password disabled.');
+      } catch (err) {
+        setMFAStatus(err.message, true);
+      }
+    }
+
+    async function disableTotpFromSecurity() {
+      if (!state.user) return;
+      const confirmed = window.confirm('Disable TOTP for this account?');
+      if (!confirmed) return;
+      el.disableTotpBtn.disabled = true;
+      setMFAStatus('Disabling TOTP...');
+      try {
+        await api('/auth/mfa/totp', { method: 'DELETE', csrf: true });
+        await loadMFAStatus();
+        setMFAStatus('TOTP disabled.');
+      } catch (err) {
+        setMFAStatus(err.message, true);
+      }
+    }
+
+    async function renamePasskeyFromSecurity(credentialID, displayName) {
+      if (!state.user) return;
+      const cleanCredentialID = String(credentialID || '').trim();
+      const cleanDisplayName = String(displayName || '').trim() || 'Passkey';
+      if (!cleanCredentialID) {
+        setMFAStatus(humanizeError('webauthn_credential_required'), true);
+        return;
+      }
+      setMFAStatus('Saving passkey name...');
+      try {
+        await api(`/auth/mfa/webauthn/${encodeURIComponent(cleanCredentialID)}`, {
+          method: 'PATCH',
+          csrf: true,
+          body: JSON.stringify({ display_name: cleanDisplayName }),
+        });
+        await loadMFAStatus();
+        setMFAStatus('Passkey name updated.');
+      } catch (err) {
+        setMFAStatus(err.message, true);
+      }
+    }
+
+    async function deletePasskeyFromSecurity(credentialID) {
+      if (!state.user) return;
+      const cleanCredentialID = String(credentialID || '').trim();
+      if (!cleanCredentialID) {
+        setMFAStatus(humanizeError('webauthn_credential_required'), true);
+        return;
+      }
+      const confirmed = window.confirm('Delete this passkey?');
+      if (!confirmed) return;
+      setMFAStatus('Deleting passkey...');
+      try {
+        await api(`/auth/mfa/webauthn/${encodeURIComponent(cleanCredentialID)}`, {
+          method: 'DELETE',
+          csrf: true,
+        });
+        await loadMFAStatus();
+        setMFAStatus('Passkey deleted.');
+      } catch (err) {
+        setMFAStatus(err.message, true);
+      }
+    }
+
+    function handlePasskeyListClick(event) {
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) return;
+      const renameID = target.getAttribute('data-passkey-rename');
+      if (renameID) {
+        const nameInput = el.mfaPasskeysBody.querySelector(`input[data-passkey-name="${renameID}"]`);
+        const value = nameInput instanceof HTMLInputElement ? nameInput.value : '';
+        renamePasskeyFromSecurity(renameID, value);
+        return;
+      }
+      const deleteID = target.getAttribute('data-passkey-delete');
+      if (deleteID) {
+        deletePasskeyFromSecurity(deleteID);
+      }
+    }
+
+    function handlePasskeyListKeydown(event) {
+      if (event.key !== 'Enter') return;
+      const target = event.target;
+      if (!(target instanceof HTMLInputElement)) return;
+      const credentialID = target.getAttribute('data-passkey-name');
+      if (!credentialID) return;
+      renamePasskeyFromSecurity(credentialID, target.value);
+    }
+
     async function sha256Hex(file, onProgress) {
       const chunkSize = 8 * 1024 * 1024;
       const sha = new SHA256();
@@ -3464,6 +4686,7 @@
     }
 
     async function enqueueDroppedStructure(dataTransfer, parentID) {
+      if (!requireWritableAction()) return { queued: 0, resumed: 0 };
       const uploads = await collectDroppedUploads(dataTransfer);
       if (!uploads.length) return { queued: 0, resumed: 0 };
       const folderCache = new Map();
@@ -3495,7 +4718,6 @@
         const data = await api('/admin/settings');
         fillAdminUploadSettings(data.upload_settings || {});
         fillAdminLicense(data.instance_id || '', data.license || {});
-        renderAdminAccountLimits(data.telegram_account_limits || []);
         setAdminStatus('Loaded.');
       } catch (err) {
         setAdminStatus(err.message, true);
@@ -3504,7 +4726,6 @@
 
     function closeAdminPanel() {
       el.adminModal.classList.add('hidden');
-      state.adminEditingAccountID = '';
     }
 
     function setAdminLicenseStatus(message, error = false) {
@@ -3559,11 +4780,6 @@
       const value = Number(input.value);
       if (!Number.isFinite(value) || value < 0) throw new Error(`${name} is invalid`);
       return Math.floor(value);
-    }
-
-    function optionalAdminNumber(input, name) {
-      if (input.value.trim() === '') return null;
-      return adminNumber(input, name);
     }
 
     async function saveAdminUploadSettings() {
@@ -3622,79 +4838,23 @@
       }
     }
 
-    function renderAdminAccountLimits(limits) {
-      state.adminAccountLimits = limits;
-      if (!limits.length) {
-        el.adminAccountEditor.classList.add('hidden');
-        state.adminEditingAccountID = '';
-        el.adminLimitsBody.innerHTML = '<tr><td colspan="4" class="muted">No account overrides.</td></tr>';
-        return;
-      }
-      el.adminLimitsBody.innerHTML = limits.map((limit) => {
-        const user = limit.display_name || limit.username || `Telegram ${limit.telegram_id}`;
-        const speed = Number(limit.target_upload_bytes_per_second || 0);
-        const cooldown = Number(limit.cooldown_between_parts_ms || 0);
-        const parallel = limit.max_parallel_uploads || '-';
-        const selected = state.adminEditingAccountID === limit.user_id ? ' class="selected-row"' : '';
-        return `
-          <tr${selected}>
-            <td>${escapeHTML(user)}</td>
-            <td>${escapeHTML(formatBytes(Number(limit.telegram_document_limit_bytes || 0)))}</td>
-            <td>${escapeHTML(`${parallel} parallel, ${speed ? `${formatBytes(speed)}/s` : 'unlimited'}, ${cooldown} ms`)}</td>
-            <td><button data-admin-edit-account="${escapeHTML(limit.user_id)}">Edit</button></td>
-          </tr>
-        `;
-      }).join('');
-      el.adminLimitsBody.querySelectorAll('[data-admin-edit-account]').forEach((button) => {
-        button.addEventListener('click', () => editAdminAccountLimit(button.dataset.adminEditAccount));
-      });
-    }
-
-    function editAdminAccountLimit(userID) {
-      const limit = state.adminAccountLimits.find((item) => item.user_id === userID);
-      if (!limit) return;
-      state.adminEditingAccountID = userID;
-      const user = limit.display_name || limit.username || `Telegram ${limit.telegram_id}`;
-      el.adminAccountEditorTitle.textContent = `Editing ${user}`;
-      el.adminAccountDocumentLimitInput.value = limit.telegram_document_limit_bytes || '';
-      el.adminAccountSafetyMarginInput.value = limit.upload_safety_margin_bytes || 0;
-      el.adminAccountParallelInput.value = limit.max_parallel_uploads ?? '';
-      el.adminAccountRateInput.value = limit.target_upload_bytes_per_second ?? '';
-      el.adminAccountCooldownInput.value = limit.cooldown_between_parts_ms ?? '';
-      el.adminAccountPremiumInput.checked = Boolean(limit.is_premium);
-      el.adminAccountEditor.classList.remove('hidden');
-      renderAdminAccountLimits(state.adminAccountLimits);
-    }
-
-    async function saveAdminAccountLimit() {
-      if (!state.user || state.user.role !== 'admin' || !state.adminEditingAccountID) return;
-      setAdminStatus('Saving account override...');
-      el.saveAdminAccountLimitBtn.disabled = true;
+    async function removeAdminLicense() {
+      if (!state.user || state.user.role !== 'admin') return;
+      if (!window.confirm('Remove installed license and fallback to Community?')) return;
+      setAdminLicenseStatus('Removing...');
+      el.removeAdminLicenseBtn.disabled = true;
       try {
-        const payload = {
-          telegram_document_limit_bytes: adminNumber(el.adminAccountDocumentLimitInput, 'Account document limit'),
-          upload_safety_margin_bytes: adminNumber(el.adminAccountSafetyMarginInput, 'Account safety margin'),
-          is_premium: el.adminAccountPremiumInput.checked,
-          max_parallel_uploads: optionalAdminNumber(el.adminAccountParallelInput, 'Account parallel uploads'),
-          target_upload_bytes_per_second: optionalAdminNumber(el.adminAccountRateInput, 'Account target rate'),
-          cooldown_between_parts_ms: optionalAdminNumber(el.adminAccountCooldownInput, 'Account cooldown'),
-        };
-        const data = await api(`/admin/telegram-accounts/${encodeURIComponent(state.adminEditingAccountID)}/limits`, {
-          method: 'PATCH',
+        const data = await api('/admin/settings/license', {
+          method: 'DELETE',
           csrf: true,
-          body: JSON.stringify(payload),
         });
-        const updated = data.telegram_account_limit || payload;
-        state.adminAccountLimits = state.adminAccountLimits.map((limit) => (
-          limit.user_id === state.adminEditingAccountID ? updated : limit
-        ));
-        renderAdminAccountLimits(state.adminAccountLimits);
-        editAdminAccountLimit(updated.user_id);
-        setAdminStatus('Account override saved.');
+        fillAdminLicense(data.instance_id || state.adminInstanceID, data.license || {});
+        el.adminLicenseRawInput.value = '';
+        setAdminLicenseStatus('License removed.');
       } catch (err) {
-        setAdminStatus(err.message, true);
+        setAdminLicenseStatus(err.message, true);
       } finally {
-        el.saveAdminAccountLimitBtn.disabled = false;
+        el.removeAdminLicenseBtn.disabled = false;
       }
     }
 
@@ -3738,8 +4898,49 @@
     }
 
     el.startQrBtn.addEventListener('click', startQR);
+    el.continueRememberedBtn.addEventListener('click', continueRememberedLogin);
+    el.forgetRememberedBtn.addEventListener('click', forgetRememberedDevice);
+    el.useAnotherAccountBtn.addEventListener('click', useAnotherAccount);
     el.sendCodeBtn.addEventListener('click', sendTelegramCode);
     el.loginWithCodeBtn.addEventListener('click', loginWithCode);
+    el.loginUseWebauthnBtn.addEventListener('click', async () => {
+      try {
+        const verified = await tryWebAuthnLocalMFAVerify();
+        if (!verified) {
+          if (hasMethod('totp') || hasMethod('recovery')) {
+            showLocalCodeVerification(true);
+          } else if (hasMethod('password')) {
+            showLocalPasswordVerification();
+          } else {
+            el.loginStatus.classList.add('error');
+            el.loginStatus.textContent = 'Passkey is required for this account.';
+          }
+        }
+      } catch (err) {
+        el.loginStatus.classList.add('error');
+        if (isWebAuthnUserAgentDenied(err)) {
+          el.loginStatus.textContent = 'Passkey request was denied or cancelled. Use 2FA code, recovery key, or local password.';
+        } else {
+          el.loginStatus.textContent = err.message;
+        }
+      }
+    });
+    el.loginUsePasswordBtn.addEventListener('click', () => showLocalPasswordVerification());
+    el.localPasswordToggleBtn.addEventListener('click', toggleLocalPasswordVisibility);
+    el.loginCountrySelect.addEventListener('change', () => {
+      clearTelegramCodeRetryState();
+      state.phoneCountry = String(el.loginCountrySelect.value || '').trim() || state.phoneCountry;
+      updatePhoneCountryHint();
+      refreshPhonePreview();
+    });
+    el.loginPhoneInput.addEventListener('input', () => {
+      clearTelegramCodeRetryState();
+      refreshPhonePreview();
+    });
+    el.loginPhoneInput.addEventListener('paste', () => {
+      clearTelegramCodeRetryState();
+      setTimeout(refreshPhonePreview, 0);
+    });
     el.loginPhoneInput.addEventListener('keydown', (event) => {
       if (event.key === 'Enter') sendTelegramCode();
     });
@@ -3749,7 +4950,13 @@
     el.loginPasswordInput.addEventListener('keydown', (event) => {
       if (event.key === 'Enter') loginWithCode();
     });
-    el.logoutBtn.addEventListener('click', logout);
+    el.localPasswordInput.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') loginWithCode();
+    });
+    el.logoutBtn.addEventListener('click', () => logout(false));
+    el.logoutForgetBtn.addEventListener('click', () => logout(true));
+    el.reconnectTelegramBtn.addEventListener('click', startReconnectTelegram);
+    el.securityBtn.addEventListener('click', openSecurityDialog);
     el.adminBtn.addEventListener('click', openAdminPanel);
     el.refreshBtn.addEventListener('click', refreshFiles);
     el.ownFilesBtn.addEventListener('click', () => setView('own'));
@@ -3777,9 +4984,15 @@
     el.moveSelectedBtn.addEventListener('click', openMoveDialog);
     el.deleteSelectedBtn.addEventListener('click', () => deleteFiles(Array.from(state.selectedFileIds)));
     el.clearSelectionBtn.addEventListener('click', clearSelection);
-    el.dropZone.addEventListener('click', () => el.fileInput.click());
+    el.dropZone.addEventListener('click', () => {
+      if (!requireWritableAction()) return;
+      el.fileInput.click();
+    });
     el.dropZone.addEventListener('keydown', (event) => {
-      if (event.key === 'Enter' || event.key === ' ') el.fileInput.click();
+      if (event.key === 'Enter' || event.key === ' ') {
+        if (!requireWritableAction()) return;
+        el.fileInput.click();
+      }
     });
     el.fileInput.addEventListener('change', () => {
       state.droppedFiles = [];
@@ -3857,6 +5070,30 @@
     el.importRecoveryBtn.addEventListener('click', startRecoveryImport);
     el.recoveryFileInput.addEventListener('change', importRecoveryFile);
     el.closeDetailsBtn.addEventListener('click', closeDetailsDialog);
+    el.closeSecurityBtn.addEventListener('click', closeSecurityDialog);
+    el.startTotpEnrollBtn.addEventListener('click', startTotpEnrollmentFromSecurity);
+    el.confirmTotpEnrollBtn.addEventListener('click', confirmTotpEnrollmentFromSecurity);
+    el.registerWebauthnBtn.addEventListener('click', registerWebauthnFromSecurity);
+    el.mfaPasskeysBody.addEventListener('click', handlePasskeyListClick);
+    el.mfaPasskeysBody.addEventListener('keydown', handlePasskeyListKeydown);
+    el.disableTotpBtn.addEventListener('click', disableTotpFromSecurity);
+    el.regenerateRecoveryBtn.addEventListener('click', regenerateRecoveryCodes);
+    el.setLocalPasswordBtn.addEventListener('click', setLocalPasswordFromSecurity);
+    el.disableLocalPasswordBtn.addEventListener('click', disableLocalPasswordFromSecurity);
+    el.mfaLocalPasswordInput.addEventListener('input', updateLocalPasswordActions);
+    el.mfaLocalPasswordConfirmInput.addEventListener('input', updateLocalPasswordActions);
+    el.mfaTotpCodeInput.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') confirmTotpEnrollmentFromSecurity();
+    });
+    el.mfaPasskeyNameInput.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') registerWebauthnFromSecurity();
+    });
+    el.mfaLocalPasswordInput.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') setLocalPasswordFromSecurity();
+    });
+    el.mfaLocalPasswordConfirmInput.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' && !el.setLocalPasswordBtn.disabled) setLocalPasswordFromSecurity();
+    });
     el.saveDetailsFileNameBtn.addEventListener('click', () => {
       if (!state.detailsFile) return;
       renameFile(state.detailsFile.id, el.detailsFileNameInput.value);
@@ -3897,6 +5134,7 @@
     el.closeAdminBtn.addEventListener('click', closeAdminPanel);
     el.saveAdminUploadSettingsBtn.addEventListener('click', saveAdminUploadSettings);
     el.saveAdminLicenseBtn.addEventListener('click', saveAdminLicense);
+    el.removeAdminLicenseBtn.addEventListener('click', removeAdminLicense);
     el.pickAdminLicenseFileBtn.addEventListener('click', () => el.adminLicenseFileInput.click());
     el.adminLicenseFileInput.addEventListener('change', async () => {
       const file = el.adminLicenseFileInput.files && el.adminLicenseFileInput.files[0];
@@ -3923,9 +5161,11 @@
         setAdminLicenseStatus('Select instance ID and copy manually.', true);
       }
     });
-    el.saveAdminAccountLimitBtn.addEventListener('click', saveAdminAccountLimit);
     el.adminModal.addEventListener('click', (event) => {
       if (event.target === el.adminModal) closeAdminPanel();
+    });
+    el.securityModal.addEventListener('click', (event) => {
+      if (event.target === el.securityModal) closeSecurityDialog();
     });
     el.shareModal.addEventListener('click', (event) => {
       if (event.target === el.shareModal) closeShareDialog();
@@ -3948,6 +5188,10 @@
         closeDetailsDialog();
         return;
       }
+      if (!el.securityModal.classList.contains('hidden')) {
+        closeSecurityDialog();
+        return;
+      }
       if (!el.adminModal.classList.contains('hidden')) {
         closeAdminPanel();
         return;
@@ -3965,5 +5209,6 @@
       }
     });
     window.addEventListener('hashchange', applyRoute);
+    setPhoneCountryOptions();
     setUploadDebugEnabled(state.uploadDebugEnabled);
     loadMe();

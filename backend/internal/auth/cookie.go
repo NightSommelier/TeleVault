@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"time"
 
-	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/config"
+	"github.com/NightSommelier/TeleVault/backend/internal/config"
 )
 
 const RefreshCookieName = "td_refresh"
@@ -24,6 +24,31 @@ func SetRefreshCookie(w http.ResponseWriter, cfg config.Config, token string, ex
 func ClearRefreshCookie(w http.ResponseWriter, cfg config.Config) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     RefreshCookieName,
+		Value:    "",
+		Path:     "/",
+		Expires:  time.Unix(0, 0),
+		MaxAge:   -1,
+		HttpOnly: true,
+		Secure:   cfg.SecureCookie,
+		SameSite: sameSite(cfg.CookieSameSite),
+	})
+}
+
+func SetRememberCookie(w http.ResponseWriter, cfg config.Config, token string, expiresAt time.Time) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     RememberCookieName,
+		Value:    token,
+		Path:     "/",
+		Expires:  expiresAt,
+		HttpOnly: true,
+		Secure:   cfg.SecureCookie,
+		SameSite: sameSite(cfg.CookieSameSite),
+	})
+}
+
+func ClearRememberCookie(w http.ResponseWriter, cfg config.Config) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     RememberCookieName,
 		Value:    "",
 		Path:     "/",
 		Expires:  time.Unix(0, 0),

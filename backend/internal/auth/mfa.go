@@ -21,6 +21,8 @@ import (
 
 var ErrLocalMFAInvalidCode = errors.New("invalid local mfa code")
 var ErrLocalMFANotConfigured = errors.New("local mfa not configured")
+var ErrLocalPasswordNotConfigured = errors.New("local password not configured")
+var ErrWebAuthnCredentialNotFound = errors.New("webauthn credential not found")
 
 type AuthSession struct {
 	ID            string
@@ -50,6 +52,14 @@ type WebAuthnChallenge struct {
 	Kind      string
 	Session   webauthn.SessionData
 	ExpiresAt time.Time
+}
+
+type WebAuthnCredentialEntry struct {
+	ID          string
+	DisplayName string
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+	LastUsedAt  sql.NullTime
 }
 
 func (s *SessionStore) SessionByRefreshToken(ctx context.Context, refreshTokenHash []byte) (AuthSession, error) {
@@ -245,7 +255,32 @@ ORDER BY created_at ASC`, userID)
 	return credentials, nil
 }
 
-func (s *SessionStore) UpsertWebAuthnCredential(ctx context.Context, userID string, credential webauthn.Credential) error {
+func (s *SessionStore) ListWebAuthnCredentialEntries(ctx context.Context, userID string) ([]WebAuthnCredentialEntry, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT id, display_name, created_at, updated_at, last_used_at
+FROM user_webauthn_credentials
+WHERE user_id = $1
+ORDER BY created_at ASC`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	entries := make([]WebAuthnCredentialEntry, 0, 4)
+	for rows.Next() {
+		var entry WebAuthnCredentialEntry
+		if err := rows.Scan(&entry.ID, &entry.DisplayName, &entry.CreatedAt, &entry.UpdatedAt, &entry.LastUsedAt); err != nil {
+			return nil, err
+		}
+		entries = append(entries, entry)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return entries, nil
+}
+
+func (s *SessionStore) UpsertWebAuthnCredential(ctx context.Context, userID string, credential webauthn.Credential, displayName string, markUsed bool) error {
 	raw, err := json.Marshal(credential)
 	if err != nil {
 		return err
@@ -253,18 +288,38 @@ func (s *SessionStore) UpsertWebAuthnCredential(ctx context.Context, userID stri
 	if len(credential.ID) == 0 {
 		return errors.New("credential id is required")
 	}
-	_, err = s.db.ExecContext(ctx, `
-INSERT INTO user_webauthn_credentials (user_id, credential_id, credential_json, updated_at)
-VALUES ($1, $2, $3, now())
+	cleanDisplayName := normalizeWebAuthnDisplayName(displayName)
+	lastUsedAt := sql.NullTime{}
+	if markUsed {
+		lastUsedAt = sql.NullTime{Time: time.Now().UTC(), Valid: true}
+	}
+	result, err := s.db.ExecContext(ctx, `
+INSERT INTO user_webauthn_credentials (user_id, credential_id, credential_json, display_name, last_used_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, now())
 ON CONFLICT (credential_id)
 DO UPDATE SET
     credential_json = EXCLUDED.credential_json,
-    updated_at = now()`,
+    updated_at = now(),
+    last_used_at = CASE WHEN EXCLUDED.last_used_at IS NULL THEN user_webauthn_credentials.last_used_at ELSE EXCLUDED.last_used_at END,
+    display_name = CASE WHEN btrim(EXCLUDED.display_name) = '' THEN user_webauthn_credentials.display_name ELSE EXCLUDED.display_name END
+WHERE user_webauthn_credentials.user_id = EXCLUDED.user_id`,
 		userID,
 		credential.ID,
 		raw,
+		cleanDisplayName,
+		lastUsedAt,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return ErrWebAuthnCredentialNotFound
+	}
+	return nil
 }
 
 func (s *SessionStore) CreateWebAuthnChallenge(ctx context.Context, userID string, kind string, session webauthn.SessionData, ttl time.Duration) (string, error) {
@@ -377,6 +432,124 @@ WHERE user_id = $1
 	return count, nil
 }
 
+func (s *SessionStore) UpsertLocalPasswordHash(ctx context.Context, userID string, passwordHash string) error {
+	_, err := s.db.ExecContext(ctx, `
+INSERT INTO user_local_passwords (user_id, password_hash, updated_at)
+VALUES ($1, $2, now())
+ON CONFLICT (user_id)
+DO UPDATE SET
+    password_hash = EXCLUDED.password_hash,
+    updated_at = now()`,
+		userID,
+		passwordHash,
+	)
+	return err
+}
+
+func (s *SessionStore) LocalPasswordHash(ctx context.Context, userID string) (string, error) {
+	var hash string
+	if err := s.db.QueryRowContext(ctx, `
+SELECT password_hash
+FROM user_local_passwords
+WHERE user_id = $1`, userID).Scan(&hash); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", ErrLocalPasswordNotConfigured
+		}
+		return "", err
+	}
+	if strings.TrimSpace(hash) == "" {
+		return "", ErrLocalPasswordNotConfigured
+	}
+	return hash, nil
+}
+
+func (s *SessionStore) IsLocalPasswordConfigured(ctx context.Context, userID string) (bool, error) {
+	var exists bool
+	if err := s.db.QueryRowContext(ctx, `
+SELECT EXISTS(
+    SELECT 1
+    FROM user_local_passwords
+    WHERE user_id = $1
+)`, userID).Scan(&exists); err != nil {
+		return false, err
+	}
+	return exists, nil
+}
+
+func (s *SessionStore) DeleteLocalPassword(ctx context.Context, userID string) error {
+	_, err := s.db.ExecContext(ctx, `
+DELETE FROM user_local_passwords
+WHERE user_id = $1`, userID)
+	return err
+}
+
+func (s *SessionStore) DeleteLocalTOTP(ctx context.Context, userID string) error {
+	_, err := s.db.ExecContext(ctx, `
+DELETE FROM user_local_totp
+WHERE user_id = $1`, userID)
+	return err
+}
+
+func (s *SessionStore) DeleteWebAuthnCredentials(ctx context.Context, userID string) error {
+	_, err := s.db.ExecContext(ctx, `
+DELETE FROM user_webauthn_credentials
+WHERE user_id = $1`, userID)
+	return err
+}
+
+func (s *SessionStore) DeleteWebAuthnCredential(ctx context.Context, userID string, credentialID string) error {
+	result, err := s.db.ExecContext(ctx, `
+DELETE FROM user_webauthn_credentials
+WHERE user_id = $1
+  AND id = $2`,
+		userID,
+		credentialID,
+	)
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return ErrWebAuthnCredentialNotFound
+	}
+	return nil
+}
+
+func (s *SessionStore) RenameWebAuthnCredential(ctx context.Context, userID string, credentialID string, displayName string) error {
+	cleanDisplayName := normalizeWebAuthnDisplayName(displayName)
+	result, err := s.db.ExecContext(ctx, `
+UPDATE user_webauthn_credentials
+SET display_name = $3,
+    updated_at = now()
+WHERE user_id = $1
+  AND id = $2`,
+		userID,
+		credentialID,
+		cleanDisplayName,
+	)
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return ErrWebAuthnCredentialNotFound
+	}
+	return nil
+}
+
+func (s *SessionStore) DeleteRecoveryCodes(ctx context.Context, userID string) error {
+	_, err := s.db.ExecContext(ctx, `
+DELETE FROM user_mfa_recovery_codes
+WHERE user_id = $1`, userID)
+	return err
+}
+
 func NewTOTPSecret() (string, error) {
 	raw := make([]byte, 20)
 	if _, err := rand.Read(raw); err != nil {
@@ -473,6 +646,18 @@ func mfaUserLabel(user User) string {
 		return user.DisplayName.String
 	}
 	return "telegram-" + strconv.FormatInt(user.TelegramID, 10)
+}
+
+func normalizeWebAuthnDisplayName(name string) string {
+	const maxLen = 80
+	clean := strings.TrimSpace(name)
+	if clean == "" {
+		return "Passkey"
+	}
+	if len(clean) > maxLen {
+		return clean[:maxLen]
+	}
+	return clean
 }
 
 type webAuthnUser struct {

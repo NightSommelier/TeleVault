@@ -22,10 +22,10 @@ import (
 	"filippo.io/age"
 	"golang.org/x/crypto/argon2"
 
-	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/auth"
-	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/crypto/agefile"
-	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/licensing"
-	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/telegramartifact"
+	"github.com/NightSommelier/TeleVault/backend/internal/auth"
+	"github.com/NightSommelier/TeleVault/backend/internal/crypto/agefile"
+	"github.com/NightSommelier/TeleVault/backend/internal/licensing"
+	"github.com/NightSommelier/TeleVault/backend/internal/telegramartifact"
 )
 
 const (

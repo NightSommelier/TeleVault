@@ -9,8 +9,11 @@ import (
 	"io"
 	"math"
 	"math/big"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gotd/td/session"
 	"github.com/gotd/td/telegram"
@@ -21,8 +24,10 @@ import (
 	"github.com/gotd/td/tg"
 	"github.com/gotd/td/tgerr"
 
-	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/auth"
+	"github.com/NightSommelier/TeleVault/backend/internal/auth"
 )
+
+var floodWaitPattern = regexp.MustCompile(`(?i)FLOOD_WAIT_?(\d+)`)
 
 func mapTelegramSignInError(err error) error {
 	switch {
@@ -35,16 +40,173 @@ func mapTelegramSignInError(err error) error {
 	}
 }
 
+func mapTelegramCodeSendError(err error) error {
+	if err == nil {
+		return nil
+	}
+	switch {
+	case tgerr.Is(err, "PHONE_NUMBER_INVALID"):
+		return auth.ErrTelegramPhoneInvalid
+	case tgerr.Is(err, "PHONE_NUMBER_FLOOD"), tgerr.Is(err, "PHONE_PASSWORD_FLOOD"):
+		return auth.ErrTelegramSendCodeRateLimited
+	case tgerr.Is(err, "PHONE_CODE_HASH_EMPTY"), tgerr.Is(err, "PHONE_CODE_HASH_INVALID"):
+		return auth.ErrInvalidChallenge
+	}
+	wait := parseFloodWait(err)
+	if wait > 0 {
+		return auth.TelegramRateLimitError{RetryAfter: wait}
+	}
+	return err
+}
+
+func mapTelegramSessionValidationError(err error) error {
+	if err == nil {
+		return nil
+	}
+	switch {
+	case tgerr.Is(err, "AUTH_KEY_UNREGISTERED"),
+		tgerr.Is(err, "SESSION_REVOKED"),
+		tgerr.Is(err, "SESSION_EXPIRED"),
+		tgerr.Is(err, "USER_DEACTIVATED"),
+		tgerr.Is(err, "USER_DEACTIVATED_BAN"):
+		return auth.ErrTelegramSessionInvalid
+	default:
+		return err
+	}
+}
+
+func parseFloodWait(err error) time.Duration {
+	if err == nil {
+		return 0
+	}
+	matches := floodWaitPattern.FindStringSubmatch(err.Error())
+	if len(matches) != 2 {
+		return 0
+	}
+	seconds, parseErr := strconv.Atoi(matches[1])
+	if parseErr != nil || seconds <= 0 {
+		return 0
+	}
+	return time.Duration(seconds) * time.Second
+}
+
+func mapTelegramSentCodeType(codeType tg.AuthSentCodeTypeClass) (string, int) {
+	switch value := codeType.(type) {
+	case *tg.AuthSentCodeTypeApp:
+		return "app", value.GetLength()
+	case *tg.AuthSentCodeTypeSMS:
+		return "sms", value.GetLength()
+	case *tg.AuthSentCodeTypeCall:
+		return "call", value.GetLength()
+	case *tg.AuthSentCodeTypeFlashCall:
+		return "flash_call", 0
+	case *tg.AuthSentCodeTypeMissedCall:
+		return "missed_call", value.GetLength()
+	case *tg.AuthSentCodeTypeEmailCode:
+		return "email", value.GetLength()
+	case *tg.AuthSentCodeTypeSetUpEmailRequired:
+		return "email_setup_required", 0
+	case *tg.AuthSentCodeTypeFragmentSMS:
+		return "fragment_sms", value.GetLength()
+	case *tg.AuthSentCodeTypeFirebaseSMS:
+		return "firebase_sms", value.GetLength()
+	case *tg.AuthSentCodeTypeSMSWord:
+		return "sms_word", 0
+	case *tg.AuthSentCodeTypeSMSPhrase:
+		return "sms_phrase", 0
+	default:
+		return "unknown", 0
+	}
+}
+
+func mapTelegramNextCodeType(codeType tg.AuthCodeTypeClass) string {
+	switch codeType.(type) {
+	case *tg.AuthCodeTypeSMS:
+		return "sms"
+	case *tg.AuthCodeTypeCall:
+		return "call"
+	case *tg.AuthCodeTypeFlashCall:
+		return "flash_call"
+	case *tg.AuthCodeTypeMissedCall:
+		return "missed_call"
+	case *tg.AuthCodeTypeFragmentSMS:
+		return "fragment_sms"
+	default:
+		return "unknown"
+	}
+}
+
 type Client struct {
 	appID   int
 	appHash string
+	profile ClientProfile
+}
+
+type ClientProfile struct {
+	DeviceModel    string
+	SystemVersion  string
+	AppVersion     string
+	LangCode       string
+	SystemLangCode string
+}
+
+func DefaultClientProfile() ClientProfile {
+	return ClientProfile{
+		DeviceModel:    "Desktop",
+		SystemVersion:  "Linux",
+		AppVersion:     "TeleVault",
+		LangCode:       "en",
+		SystemLangCode: "en",
+	}
+}
+
+func (p ClientProfile) DeviceConfig() telegram.DeviceConfig {
+	return telegram.DeviceConfig{
+		DeviceModel:    p.DeviceModel,
+		SystemVersion:  p.SystemVersion,
+		AppVersion:     p.AppVersion,
+		LangCode:       p.LangCode,
+		SystemLangCode: p.SystemLangCode,
+	}
 }
 
 func NewClient(appID int, appHash string) *Client {
+	return NewClientWithProfile(appID, appHash, DefaultClientProfile())
+}
+
+func NewClientWithProfile(appID int, appHash string, profile ClientProfile) *Client {
 	return &Client{
 		appID:   appID,
 		appHash: appHash,
+		profile: profile,
 	}
+}
+
+func (c *Client) deviceConfig() telegram.DeviceConfig {
+	return c.profile.DeviceConfig()
+}
+
+func telegramCodeChallengeFromSent(sent tg.AuthSentCodeClass) (auth.TelegramCodeChallenge, error) {
+	code, ok := sent.(*tg.AuthSentCode)
+	if !ok {
+		return auth.TelegramCodeChallenge{}, fmt.Errorf("unexpected auth code response %T", sent)
+	}
+	if strings.TrimSpace(code.PhoneCodeHash) == "" {
+		return auth.TelegramCodeChallenge{}, errors.New("telegram returned empty phone_code_hash")
+	}
+
+	challenge := auth.TelegramCodeChallenge{
+		PhoneCodeHash: code.PhoneCodeHash,
+		CodeType:      "unknown",
+	}
+	challenge.CodeType, challenge.CodeLength = mapTelegramSentCodeType(code.Type)
+	if nextCodeType, ok := code.GetNextType(); ok {
+		challenge.NextCodeType = mapTelegramNextCodeType(nextCodeType)
+	}
+	if timeout, ok := code.GetTimeout(); ok {
+		challenge.TimeoutSecs = timeout
+	}
+	return challenge, nil
 }
 
 func (c *Client) SendCode(ctx context.Context, phone string) (auth.TelegramCodeChallenge, error) {
@@ -53,11 +215,11 @@ func (c *Client) SendCode(ctx context.Context, phone string) (auth.TelegramCodeC
 		NoUpdates:         true,
 		SessionStorage:    storage,
 		UpdateHandler:     nil,
-		Device:            telegram.DeviceConfig{AppVersion: "TeleVault"},
+		Device:            c.deviceConfig(),
 		CompressThreshold: -1,
 	})
 
-	var phoneCodeHash string
+	var challenge auth.TelegramCodeChallenge
 	if err := client.Run(ctx, func(ctx context.Context) error {
 		sent, err := client.API().AuthSendCode(ctx, &tg.AuthSendCodeRequest{
 			PhoneNumber: phone,
@@ -66,21 +228,12 @@ func (c *Client) SendCode(ctx context.Context, phone string) (auth.TelegramCodeC
 			Settings:    tg.CodeSettings{},
 		})
 		if err != nil {
-			return err
+			return mapTelegramCodeSendError(err)
 		}
-
-		code, ok := sent.(*tg.AuthSentCode)
-		if !ok {
-			return fmt.Errorf("unexpected auth.sendCode response %T", sent)
-		}
-
-		phoneCodeHash = code.PhoneCodeHash
-		return nil
+		challenge, err = telegramCodeChallengeFromSent(sent)
+		return err
 	}); err != nil {
 		return auth.TelegramCodeChallenge{}, err
-	}
-	if phoneCodeHash == "" {
-		return auth.TelegramCodeChallenge{}, errors.New("telegram returned empty phone_code_hash")
 	}
 
 	sessionBytes, err := storage.Bytes(nil)
@@ -88,10 +241,50 @@ func (c *Client) SendCode(ctx context.Context, phone string) (auth.TelegramCodeC
 		return auth.TelegramCodeChallenge{}, err
 	}
 
-	return auth.TelegramCodeChallenge{
-		PhoneCodeHash: phoneCodeHash,
-		Session:       base64.StdEncoding.EncodeToString(sessionBytes),
-	}, nil
+	challenge.Session = base64.StdEncoding.EncodeToString(sessionBytes)
+	return challenge, nil
+}
+
+func (c *Client) ResendCode(ctx context.Context, phone string, challenge auth.TelegramCodeChallenge) (auth.TelegramCodeChallenge, error) {
+	sessionBytes, err := base64.StdEncoding.DecodeString(challenge.Session)
+	if err != nil {
+		return auth.TelegramCodeChallenge{}, err
+	}
+
+	storage := &session.StorageMemory{}
+	if err := storage.StoreSession(ctx, sessionBytes); err != nil {
+		return auth.TelegramCodeChallenge{}, err
+	}
+
+	client := telegram.NewClient(c.appID, c.appHash, telegram.Options{
+		NoUpdates:         true,
+		SessionStorage:    storage,
+		UpdateHandler:     nil,
+		Device:            c.deviceConfig(),
+		CompressThreshold: -1,
+	})
+
+	var resent auth.TelegramCodeChallenge
+	if err := client.Run(ctx, func(ctx context.Context) error {
+		sent, err := client.API().AuthResendCode(ctx, &tg.AuthResendCodeRequest{
+			PhoneNumber:   phone,
+			PhoneCodeHash: challenge.PhoneCodeHash,
+		})
+		if err != nil {
+			return mapTelegramCodeSendError(err)
+		}
+		resent, err = telegramCodeChallengeFromSent(sent)
+		return err
+	}); err != nil {
+		return auth.TelegramCodeChallenge{}, err
+	}
+
+	updatedSession, err := storage.Bytes(nil)
+	if err != nil {
+		return auth.TelegramCodeChallenge{}, err
+	}
+	resent.Session = base64.StdEncoding.EncodeToString(updatedSession)
+	return resent, nil
 }
 
 func (c *Client) SignIn(ctx context.Context, request auth.TelegramLoginRequest) (string, auth.TelegramProfile, error) {
@@ -109,7 +302,7 @@ func (c *Client) SignIn(ctx context.Context, request auth.TelegramLoginRequest) 
 		NoUpdates:         true,
 		SessionStorage:    storage,
 		UpdateHandler:     nil,
-		Device:            telegram.DeviceConfig{AppVersion: "TeleVault"},
+		Device:            c.deviceConfig(),
 		CompressThreshold: -1,
 	})
 
@@ -166,7 +359,7 @@ func (c *Client) StartQRLogin(ctx context.Context) (auth.TelegramQRLoginAttempt,
 		NoUpdates:         false,
 		SessionStorage:    storage,
 		UpdateHandler:     dispatcher,
-		Device:            telegram.DeviceConfig{AppVersion: "TeleVault"},
+		Device:            c.deviceConfig(),
 		CompressThreshold: -1,
 	})
 
@@ -302,6 +495,34 @@ func (c *Client) StartQRLogin(ctx context.Context) (auth.TelegramQRLoginAttempt,
 	}
 }
 
+func (c *Client) ValidateSession(ctx context.Context, encodedSession string) error {
+	sessionBytes, err := base64.StdEncoding.DecodeString(encodedSession)
+	if err != nil {
+		return err
+	}
+
+	storage := &session.StorageMemory{}
+	if err := storage.StoreSession(ctx, sessionBytes); err != nil {
+		return err
+	}
+
+	client := telegram.NewClient(c.appID, c.appHash, telegram.Options{
+		NoUpdates:         true,
+		SessionStorage:    storage,
+		UpdateHandler:     nil,
+		Device:            c.deviceConfig(),
+		CompressThreshold: -1,
+	})
+
+	return client.Run(ctx, func(ctx context.Context) error {
+		_, err := client.API().UsersGetUsers(ctx, []tg.InputUserClass{&tg.InputUserSelf{}})
+		if err != nil {
+			return mapTelegramSessionValidationError(err)
+		}
+		return nil
+	})
+}
+
 func (c *Client) UploadEncryptedPart(ctx context.Context, encodedSession string, storagePeer string, name string, mimeType string, body io.Reader) (auth.TelegramUploadResult, error) {
 	sessionBytes, err := base64.StdEncoding.DecodeString(encodedSession)
 	if err != nil {
@@ -320,7 +541,7 @@ func (c *Client) UploadEncryptedPart(ctx context.Context, encodedSession string,
 		NoUpdates:         true,
 		SessionStorage:    storage,
 		UpdateHandler:     nil,
-		Device:            telegram.DeviceConfig{AppVersion: "TeleVault"},
+		Device:            c.deviceConfig(),
 		CompressThreshold: -1,
 	})
 
@@ -388,7 +609,7 @@ func (c *Client) DownloadEncryptedPart(ctx context.Context, encodedSession strin
 		NoUpdates:         true,
 		SessionStorage:    storage,
 		UpdateHandler:     nil,
-		Device:            telegram.DeviceConfig{AppVersion: "TeleVault"},
+		Device:            c.deviceConfig(),
 		CompressThreshold: -1,
 	})
 
@@ -431,7 +652,7 @@ func (c *Client) DeleteEncryptedPart(ctx context.Context, encodedSession string,
 		NoUpdates:         true,
 		SessionStorage:    storage,
 		UpdateHandler:     nil,
-		Device:            telegram.DeviceConfig{AppVersion: "TeleVault"},
+		Device:            c.deviceConfig(),
 		CompressThreshold: -1,
 	})
 
@@ -470,7 +691,7 @@ func (c *Client) ListKnownUserIDs(ctx context.Context, encodedSession string, st
 		NoUpdates:         true,
 		SessionStorage:    storage,
 		UpdateHandler:     nil,
-		Device:            telegram.DeviceConfig{AppVersion: "TeleVault"},
+		Device:            c.deviceConfig(),
 		CompressThreshold: -1,
 	})
 

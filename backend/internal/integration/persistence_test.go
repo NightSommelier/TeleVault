@@ -12,14 +12,14 @@ import (
 	"testing"
 	"time"
 
-	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/adminsettings"
-	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/adminusers"
-	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/auth"
-	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/config"
-	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/db"
-	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/files"
-	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/telegramprobe"
-	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/uploads"
+	"github.com/NightSommelier/TeleVault/backend/internal/adminsettings"
+	"github.com/NightSommelier/TeleVault/backend/internal/adminusers"
+	"github.com/NightSommelier/TeleVault/backend/internal/auth"
+	"github.com/NightSommelier/TeleVault/backend/internal/config"
+	"github.com/NightSommelier/TeleVault/backend/internal/db"
+	"github.com/NightSommelier/TeleVault/backend/internal/files"
+	"github.com/NightSommelier/TeleVault/backend/internal/telegramprobe"
+	"github.com/NightSommelier/TeleVault/backend/internal/uploads"
 )
 
 func TestAuthPersistenceChallengeAndSessionLifecycle(t *testing.T) {
@@ -1780,13 +1780,13 @@ func ensureLatestMigration(t *testing.T, database *sql.DB) {
 SELECT EXISTS (
     SELECT 1
     FROM schema_migrations
-			WHERE version = '000029'
+			WHERE version = '000031'
 )`).Scan(&exists)
 	if err != nil {
 		t.Fatalf("schema migration check failed: %v", err)
 	}
 	if !exists {
-		t.Fatalf("TEST_DATABASE_URL database is not migrated through 000029; run go run ./cmd/migrate up first")
+		t.Fatalf("TEST_DATABASE_URL database is not migrated through 000031; run go run ./cmd/migrate up first")
 	}
 }
 

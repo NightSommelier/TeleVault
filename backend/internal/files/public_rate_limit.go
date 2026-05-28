@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"time"
 
-	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/auth"
+	"github.com/NightSommelier/TeleVault/backend/internal/auth"
 )
 
 type PublicRateLimitSettings struct {

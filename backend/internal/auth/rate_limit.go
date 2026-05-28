@@ -21,6 +21,7 @@ type RateLimitDecision struct {
 	Allowed    bool
 	RetryAfter time.Duration
 	Err        error
+	Key        string
 }
 
 type RateLimitStore interface {
@@ -88,8 +89,10 @@ func (l *RateLimiter) allow(ctx context.Context, key string, limit int, window t
 	if err != nil {
 		decision = allowDecision()
 		decision.Err = err
+		decision.Key = key
 		return decision
 	}
+	decision.Key = key
 	return decision
 }
 

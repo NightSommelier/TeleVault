@@ -1,6 +1,7 @@
 package applog
 
 import (
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -37,6 +38,8 @@ func New(level string, options Options) *slog.Logger {
 		fileWriter, err := newRotatingFileWriter(logPath, maxBytes, maxBackups)
 		if err == nil {
 			writer = io.MultiWriter(os.Stdout, fileWriter)
+		} else {
+			_, _ = fmt.Fprintf(os.Stderr, "televault logger: failed to enable file log %q: %v\n", logPath, err)
 		}
 	}
 	return slog.New(slog.NewJSONHandler(writer, &slog.HandlerOptions{

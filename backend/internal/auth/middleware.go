@@ -92,3 +92,39 @@ func (h *Handler) RequireAdmin(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 	})
 }
+
+func (h *Handler) RequireTelegramSessionWritable(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user, ok := UserFromContext(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "missing_authenticated_user")
+			return
+		}
+		status, statusErr := h.resolveTelegramSessionStatus(r.Context(), user.ID)
+		if statusErr == "telegram_session_status_failed" {
+			writeError(w, http.StatusInternalServerError, "telegram_session_status_failed")
+			return
+		}
+		if statusErr == "telegram_session_check_failed" {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+				"error":                   "telegram_session_check_failed",
+				"read_only_map_mode":      true,
+				"telegram_session_status": status,
+			})
+			return
+		}
+		if status != "ok" {
+			errCode := "telegram_session_missing_read_only"
+			if status == "stale" {
+				errCode = "telegram_session_stale"
+			}
+			writeJSON(w, http.StatusForbidden, map[string]any{
+				"error":                   errCode,
+				"read_only_map_mode":      true,
+				"telegram_session_status": status,
+			})
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}

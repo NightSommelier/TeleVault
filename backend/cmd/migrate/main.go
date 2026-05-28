@@ -12,9 +12,9 @@ import (
 	"strings"
 	"time"
 
-	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/applog"
-	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/config"
-	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/db"
+	"github.com/NightSommelier/TeleVault/backend/internal/applog"
+	"github.com/NightSommelier/TeleVault/backend/internal/config"
+	"github.com/NightSommelier/TeleVault/backend/internal/db"
 )
 
 func main() {

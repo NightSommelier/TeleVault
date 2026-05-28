@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/auth"
-	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/config"
-	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/licensing"
+	"github.com/NightSommelier/TeleVault/backend/internal/auth"
+	"github.com/NightSommelier/TeleVault/backend/internal/config"
+	"github.com/NightSommelier/TeleVault/backend/internal/licensing"
 )
 
 type Handler struct {
@@ -204,6 +204,36 @@ func (h *Handler) PatchLicense(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "license_state_load_failed")
 		return
 	}
+	entitlement := licensing.EffectiveEntitlement(saved)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"instance_id": instanceID,
+		"license":     licenseStateResponse(saved, entitlement, instanceID),
+	})
+}
+
+func (h *Handler) DeleteLicense(w http.ResponseWriter, r *http.Request) {
+	user, ok := auth.UserFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "missing_authenticated_user")
+		return
+	}
+
+	instanceID, err := h.store.InstanceID(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "admin_settings_load_failed")
+		return
+	}
+
+	saved, err := h.licenseStore.Clear(r.Context(), user.ID)
+	if err != nil {
+		if errors.Is(err, licensing.ErrInvalidState) {
+			writeError(w, http.StatusBadRequest, "license_invalid")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "license_install_failed")
+		return
+	}
+
 	entitlement := licensing.EffectiveEntitlement(saved)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"instance_id": instanceID,

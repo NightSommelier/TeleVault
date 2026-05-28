@@ -17,9 +17,9 @@ import (
 
 	"filippo.io/age"
 
-	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/auth"
-	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/crypto/agefile"
-	"gitrepo.pp.ua/Sommelier/TeleVault/backend/internal/telegramartifact"
+	"github.com/NightSommelier/TeleVault/backend/internal/auth"
+	"github.com/NightSommelier/TeleVault/backend/internal/crypto/agefile"
+	"github.com/NightSommelier/TeleVault/backend/internal/telegramartifact"
 )
 
 const (
