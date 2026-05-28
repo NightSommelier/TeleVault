@@ -6,7 +6,7 @@ import (
 )
 
 const (
-	validDatabaseURL        = "postgres://televault:televault@localhost:5432/televault2?sslmode=disable"
+	validDatabaseURL        = "postgres://televault:televault@localhost:5432/televault?sslmode=disable"
 	validSessionSecret      = "session-secret-with-at-least-32-bytes"
 	validRefreshTokenPepper = "refresh-pepper-with-at-least-32-bytes"
 	validAgeIdentity        = "AGE-SECRET-KEY-1234567890ABCDEFGHIJKLMNOPQRSTUV"

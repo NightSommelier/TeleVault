@@ -16,7 +16,7 @@
     <img alt="Issues" src="https://img.shields.io/github/issues/NightSommelier/TeleVault" />
     <img alt="CI" src="https://img.shields.io/badge/ci-go%20test%20%7C%20go%20vet%20%7C%20node%20check-passing" />
   </p>
-  <img src="./docs/assets/dashboard-preview.svg" alt="TeleVault dashboard preview" width="100%" />
+  <img src="./docs/assets/preview.png" alt="TeleVault dashboard preview" width="100%" />
 </div>
 
 ## What Is TeleVault?
@@ -64,8 +64,9 @@ TeleVault is independent and is not affiliated with Telegram.
 
 ## Screenshots / Demo
 
-![Upload flow](./docs/assets/upload-flow-preview.svg)
-![File browser](./docs/assets/file-browser-preview.svg)
+![File browser](./docs/assets/preview.png)
+![Item details](./docs/assets/preview-details.png)
+![Share file](./docs/assets/preview-share.png)
 
 ## Why TeleVault?
 
