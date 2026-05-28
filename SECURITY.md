@@ -81,4 +81,3 @@ TeleVault does not claim unlimited storage, full zero-knowledge guarantees, or b
 ## Hardening References
 
 - [Threat model](./docs/threat-model.md)
-- [Recovery bundles](./docs/development/recovery.md)
