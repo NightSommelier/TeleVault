@@ -1,6 +1,7 @@
 x-app: &app
   build: .
-  image: televault:latest
+  pull_policy: missing
+  image: ${TELEVAULT_IMAGE:-televault:latest}
   restart: unless-stopped
 
 

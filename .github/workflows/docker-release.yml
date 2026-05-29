@@ -20,9 +20,23 @@ jobs:
       - name: Derive release metadata
         id: meta
         run: |
-          echo "owner=$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
-          echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-          echo "build_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+          owner="$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')"
+          ref_tag="$GITHUB_REF_NAME"
+          version="${ref_tag#v}"
+          tags="ghcr.io/${owner}/televault:${ref_tag}"
+
+          if [[ "${version}" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            major="${BASH_REMATCH[1]}"
+            minor="${BASH_REMATCH[2]}"
+            tags="ghcr.io/${owner}/televault:latest"$'\n'"${tags}"$'\n'"ghcr.io/${owner}/televault:v${major}.${minor}"$'\n'"ghcr.io/${owner}/televault:v${major}"
+          fi
+
+          {
+            echo "owner=${owner}"
+            echo "version=${version}"
+            printf 'tags<<EOF\n%s\nEOF\n' "${tags}"
+            echo "build_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -44,9 +58,7 @@ jobs:
           file: ./Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: |
-            ghcr.io/${{ steps.meta.outputs.owner }}/televault:${{ steps.meta.outputs.version }}
-            ghcr.io/${{ steps.meta.outputs.owner }}/televault:latest
+          tags: ${{ steps.meta.outputs.tags }}
           build-args: |
             APP_VERSION=${{ steps.meta.outputs.version }}
             APP_COMMIT=${{ github.sha }}

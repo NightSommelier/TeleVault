@@ -73,14 +73,21 @@ TeleVault is independent and is not affiliated with Telegram.
 
 ## Quick Start
 
+Fast path with the published GHCR image:
+
 ```bash
 git clone https://github.com/NightSommelier/TeleVault.git
 cd TeleVault
 cp .env.example .env
-docker compose up -d --build
+docker compose pull
+docker compose up -d --no-build
 ```
 
 Open `http://localhost:8080` and complete first login via Telegram (phone/code or QR).
+
+If you want a local build from source, set `TELEVAULT_IMAGE=televault:latest` in `.env` and use `docker compose up -d --build`.
+
+Stable GHCR releases are published as `latest`, `vX.Y.Z`, `vX.Y`, and `vX`.
 
 Recommended first-run step: enable Local 2FA in `Security`.
 
@@ -93,6 +100,7 @@ Minimal required variables in `.env`:
 | `APP_SESSION_SECRET` | Session signing secret |
 | `REFRESH_TOKEN_PEPPER` | Refresh-token hash pepper |
 | `APP_AGE_IDENTITY` | AGE secret identity for encryption |
+| `TELEVAULT_IMAGE` | Optional Docker Compose image override. Set to `ghcr.io/nightsommelier/televault:latest` for fast start, or `televault:latest` for local source builds. |
 | `TELEGRAM_SESSION_KEY` | Encryption key for stored Telegram sessions |
 | `TELEGRAM_API_ID` / `TELEGRAM_API_HASH` | Telegram API app credentials |
 | `POSTGRES_PASSWORD` | PostgreSQL password for Compose stack |
