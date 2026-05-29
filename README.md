@@ -10,10 +10,6 @@
   </p>
   <p>
     <img alt="License" src="https://img.shields.io/badge/license-AGPLv3%20%2B%20Commercial-0f766e" />
-    <img alt="Release" src="https://img.shields.io/github/v/release/NightSommelier/TeleVault" />
-    <img alt="Docker Pulls" src="https://img.shields.io/badge/docker-pulls-community-lightgrey" />
-    <img alt="Stars" src="https://img.shields.io/github/stars/NightSommelier/TeleVault" />
-    <img alt="Issues" src="https://img.shields.io/github/issues/NightSommelier/TeleVault" />
     <img alt="CI" src="https://img.shields.io/badge/ci-go%20test%20%7C%20go%20vet%20%7C%20node%20check-passing" />
   </p>
   <img src="./docs/assets/preview.png" alt="TeleVault dashboard preview" width="100%" />
