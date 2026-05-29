@@ -165,6 +165,19 @@ Contributions are welcome. Start with:
 
 TeleVault uses dual licensing: `AGPLv3 + Commercial License`.
 
+The Community source code is available under AGPLv3. A paid Commercial
+License is required for non-AGPL terms, proprietary or closed-source use,
+commercial product/service embedding, commercial support/warranty terms,
+and access to paid Pro/Team modules, private images, or commercial update
+channels.
+
+Revenue-generating product/service use should be covered by a paid
+Commercial License unless the party relies solely on AGPLv3 and fully
+complies with AGPLv3. Paid Pro/Team artifacts and commercial update rights
+are only available under commercial terms.
+
+Without a separate written commercial agreement, AGPLv3 terms apply.
+
 For commercial licensing, contact `sommelier@matrix.co.ua`.
 
 See [LICENSE.md](./LICENSE.md) for details.

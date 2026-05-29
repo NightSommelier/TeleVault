@@ -70,6 +70,7 @@ Commercial licensing is built around a separate licensing server and local insta
 - signed license artifact bound to `instance_id` and verified locally in TeleVault;
 - no mandatory runtime dependency on licensing-server reachability;
 - optional online renewals later, but no mandatory heartbeat checks;
+- revenue-generating product/service use should be covered by a paid Commercial License unless the party relies solely on AGPLv3 and fully complies with AGPLv3;
 - Pro/Team capabilities are shipped as compiled commercial modules in signed build artifacts, not as runtime-loaded plugins;
 - an active license is required to download new commercial module releases, private image updates, and update metadata;
 - when a license expires, the instance keeps the last installed commercial modules in restricted mode, but new commercial module updates stop until renewal;

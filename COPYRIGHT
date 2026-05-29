@@ -1,17 +1,22 @@
-# Copyright Notice
+Copyright Notice
+================
 
 Copyright (c) 2026 TeleVault contributors
 
-TeleVault is licensed under the GNU Affero General Public License v3.0 (AGPLv3).
+TeleVault is dual-licensed:
 
-You may use, modify, and distribute this software under the terms of the AGPLv3 license.
+1. GNU Affero General Public License v3.0 (AGPLv3), or
+2. a separate paid Commercial License from the copyright holder.
 
-Commercial licenses are available for organizations that require:
+Community source code is available under AGPLv3. Without a separate
+commercial agreement, AGPLv3 terms apply.
 
-* proprietary usage
-* closed-source modifications
-* commercial redistribution
-* SaaS deployment without AGPL obligations
+Commercial licenses are required for non-AGPL terms, revenue-generating
+product/service use that is not relying solely on AGPLv3 compliance,
+proprietary usage, closed-source modifications, commercial redistribution,
+SaaS/managed-service deployment without AGPL obligations, commercial
+support/warranty terms, paid Pro/Team modules, private images, and
+commercial update channels.
 
 For commercial licensing inquiries:
 [sommelier@matrix.co.ua](mailto:sommelier@matrix.co.ua)

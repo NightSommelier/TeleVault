@@ -3,12 +3,38 @@ SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-TeleVault-Commercial
 TeleVault Dual-License Notice
 =============================
 
+Copyright (c) 2026 Sommelier.
+
+This notice applies to TeleVault source code in this repository unless a
+file states otherwise. Third-party dependencies and assets remain under
+their own licenses.
+
 TeleVault is available under a dual-license model:
 
 1. GNU Affero General Public License v3.0 (AGPLv3), or
 2. Commercial License from the copyright holder.
 
-You may choose either license for your use case.
+The Community source code is available under AGPLv3. If you use,
+modify, distribute, or operate TeleVault under AGPLv3, you must comply
+with AGPLv3, including the network-use source availability obligations
+for modified versions.
+
+A separate paid Commercial License is required for non-AGPL terms,
+including proprietary or closed-source use, embedding TeleVault into a
+commercial product or service, distributing closed-source builds,
+commercial support/warranty terms, and access to paid Pro/Team modules,
+private images, or commercial update channels.
+
+Commercial revenue-generating use of TeleVault as part of a paid product,
+paid service, managed service, customer deliverable, internal business
+platform, or other revenue-producing operation must be covered by a paid
+Commercial License unless the party relies solely on AGPLv3 and fully
+complies with all AGPLv3 obligations. Paid Pro/Team modules, private
+images, commercial update channels, commercial support, and commercial
+warranty terms are not granted under AGPLv3.
+
+The Commercial License is not granted by this file. It requires a
+separate written agreement with the copyright holder.
 
 For commercial licensing, contact:
 sommelier@matrix.co.ua
