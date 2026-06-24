@@ -123,5 +123,5 @@ If a future feature or doc makes TeleVault look more like a hosted storage provi
 - `v0.4.0` published baseline: local signed-license verification, Community/Pro/Team backend gates, Community owner binding enforcement, and invite-capacity enforcement.
 - `v0.4.1` scope implemented in current tree: local instance 2FA (`TOTP + WebAuthn + 10 recovery codes`) and gate hardening.
 - `v0.4.2` in stabilization: remembered-device re-entry, local challenge re-auth, Telegram-disconnected safety mode.
-- `v0.4.2` public release summary draft: `docs/development/release-notes-v0.4.2-community.md`.
+- `v0.4.2` published on 2026-05-29: `docs/release-notes-v0.4.2-community.md`.
 - `v0.5.0` target: commercial module/update-right channel hardening, payment-provider integration path, and recovery-map/storage portability hardening.
