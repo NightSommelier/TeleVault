@@ -31,3 +31,45 @@ jobs:
 
       - name: Run checks
         run: make check
+
+  integration-postgres:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: televault_integration
+          POSTGRES_USER: televault
+          POSTGRES_PASSWORD: integration-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U televault -d televault_integration"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+    env:
+      TEST_DATABASE_URL: postgres://televault:integration-password@127.0.0.1:5432/televault_integration?sslmode=disable
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache: true
+          cache-dependency-path: backend/go.sum
+
+      - name: Apply migrations
+        working-directory: backend
+        env:
+          DATABASE_URL: ${{ env.TEST_DATABASE_URL }}
+        run: go run ./cmd/migrate up
+
+      - name: Run PostgreSQL integration tests
+        working-directory: backend
+        run: go test ./internal/integration -count=1

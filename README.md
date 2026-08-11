@@ -79,6 +79,7 @@ Fast path with the published GHCR image:
 git clone https://github.com/NightSommelier/TeleVault.git
 cd TeleVault
 cp .env.example .env
+cp docker-compose.quickstart.yml docker-compose.override.yml
 docker compose pull
 docker compose up -d --no-build
 ```
@@ -186,6 +187,6 @@ are only available under commercial terms.
 
 Without a separate written commercial agreement, AGPLv3 terms apply.
 
-For commercial licensing, contact `sommelier@matrix.co.ua`.
+For commercial licensing, contact `admin@matrix.co.ua`.
 
 See [LICENSE.md](./LICENSE.md) for details.
