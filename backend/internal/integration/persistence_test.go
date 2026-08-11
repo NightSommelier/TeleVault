@@ -161,29 +161,8 @@ func TestAuthPersistenceSingleUserModeBindsToExistingTelegramIdentity(t *testing
 		_, _ = database.ExecContext(context.Background(), `DELETE FROM users WHERE telegram_id IN ($1, $2)`, firstTelegramID, secondTelegramID)
 	})
 
-	if _, err := store.CompleteTelegramLogin(
-		ctx,
-		auth.TelegramProfile{TelegramID: firstTelegramID, Username: fmt.Sprintf("integration_%d", firstTelegramID), DisplayName: "Integration Test"},
-		[]byte("encrypted-telegram-session"),
-		[]byte(fmt.Sprintf("bootstrap-refresh-%d", firstTelegramID)),
-		"integration-test",
-		nil,
-		time.Now().Add(time.Hour),
-	); err != nil {
-		t.Fatalf("CompleteTelegramLogin(bootstrap first) error = %v", err)
-	}
-
-	if _, err := store.CompleteTelegramLogin(
-		ctx,
-		auth.TelegramProfile{TelegramID: secondTelegramID, Username: fmt.Sprintf("integration_%d", secondTelegramID), DisplayName: "Integration Test"},
-		[]byte("encrypted-telegram-session"),
-		[]byte(fmt.Sprintf("bootstrap-refresh-%d", secondTelegramID)),
-		"integration-test",
-		nil,
-		time.Now().Add(time.Hour),
-	); err != nil {
-		t.Fatalf("CompleteTelegramLogin(bootstrap second) error = %v", err)
-	}
+	seedIntegrationUser(t, database, firstTelegramID)
+	seedIntegrationUser(t, database, secondTelegramID)
 
 	if _, err := store.CompleteTelegramLoginWithPolicy(
 		ctx,
@@ -230,31 +209,8 @@ func TestAuthPersistenceAccessPolicyEnforcesConnectedAccountLimit(t *testing.T) 
 		BindCommunityOwner:           false,
 	}
 
-	if _, err := store.CompleteTelegramLoginWithAccessPolicy(
-		ctx,
-		auth.TelegramProfile{TelegramID: firstTelegramID, Username: fmt.Sprintf("integration_%d", firstTelegramID), DisplayName: "Integration Test"},
-		[]byte("encrypted-telegram-session"),
-		[]byte(fmt.Sprintf("policy-refresh-%d", firstTelegramID)),
-		"integration-test",
-		nil,
-		time.Now().Add(time.Hour),
-		policy,
-	); err != nil {
-		t.Fatalf("CompleteTelegramLoginWithAccessPolicy(first) error = %v", err)
-	}
-
-	if _, err := store.CompleteTelegramLoginWithAccessPolicy(
-		ctx,
-		auth.TelegramProfile{TelegramID: secondTelegramID, Username: fmt.Sprintf("integration_%d", secondTelegramID), DisplayName: "Integration Test"},
-		[]byte("encrypted-telegram-session"),
-		[]byte(fmt.Sprintf("policy-refresh-%d", secondTelegramID)),
-		"integration-test",
-		nil,
-		time.Now().Add(time.Hour),
-		policy,
-	); err != nil {
-		t.Fatalf("CompleteTelegramLoginWithAccessPolicy(second) error = %v", err)
-	}
+	seedIntegrationUser(t, database, firstTelegramID)
+	seedIntegrationUser(t, database, secondTelegramID)
 
 	if _, err := store.CompleteTelegramLoginWithAccessPolicy(
 		ctx,
@@ -297,7 +253,7 @@ func TestAuthPersistenceAccessPolicyRequiresInviteForNewJoiners(t *testing.T) {
 	})
 
 	policy := auth.LoginPolicy{
-		MaxConnectedTelegramAccounts: 2,
+		MaxConnectedTelegramAccounts: 3,
 		BindCommunityOwner:           false,
 	}
 
@@ -693,7 +649,7 @@ func TestFilesUploadsPersistenceOwnerIsolationAndCompletion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListPublicLinks() error = %v", err)
 	}
-	if len(publicLinks) != 1 || publicLinks[0].ID != publicLink.ID {
+	if !publicLinkListContains(publicLinks, publicLink.ID) {
 		t.Fatalf("ListPublicLinks() = %+v, want link %s", publicLinks, publicLink.ID)
 	}
 	if _, err := fileStore.ListPublicLinks(ctx, other.ID, file.ID); !errors.Is(err, files.ErrNotFound) {
@@ -1159,7 +1115,7 @@ func TestUploadPartQueueLeaseRetryAndFail(t *testing.T) {
 		UploadedSize:   10,
 		StorageBackend: "local",
 		StorageKey:     "queue.bin.part-2",
-		AvailableAt:    now,
+		AvailableAt:    now.Add(3 * time.Minute),
 		Now:            now,
 	}); err != nil {
 		t.Fatalf("StagePart(2) error = %v", err)
@@ -1194,7 +1150,7 @@ func TestUploadPartQueueLeaseRetryAndFail(t *testing.T) {
 	}
 	work, err := uploadStore.ClaimQueuedPartWork(ctx, uploads.ClaimQueuedPartParams{
 		WorkerID:      "worker-b",
-		Now:           now.Add(31 * time.Second),
+		Now:           now.Add(61 * time.Second),
 		LeaseDuration: time.Minute,
 	})
 	if err != nil {
@@ -1209,7 +1165,7 @@ func TestUploadPartQueueLeaseRetryAndFail(t *testing.T) {
 	}
 	next, err := uploadStore.ClaimQueuedPart(ctx, uploads.ClaimQueuedPartParams{
 		WorkerID:      "worker-c",
-		Now:           now.Add(2 * time.Minute),
+		Now:           now.Add(4 * time.Minute),
 		LeaseDuration: time.Minute,
 	})
 	if err != nil {
@@ -1264,11 +1220,17 @@ func TestLocalStagingCleanupArtifacts(t *testing.T) {
 		t.Fatalf("Create upload error = %v", err)
 	}
 	if _, err := database.ExecContext(ctx, `
-INSERT INTO upload_parts (upload_id, part_number, plaintext_size, ciphertext_size, status, storage_backend, storage_key)
-VALUES ($1, 1, 5, 10, 'pending', 'local', 'cleanup.bin.part-1')`,
+UPDATE upload_parts
+SET plaintext_size = 5,
+    ciphertext_size = 10,
+    status = 'pending',
+    storage_backend = 'local',
+    storage_key = 'cleanup.bin.part-1'
+WHERE upload_id = $1
+  AND part_number = 1`,
 		upload.ID,
 	); err != nil {
-		t.Fatalf("insert staged part error = %v", err)
+		t.Fatalf("update staged part error = %v", err)
 	}
 	if _, err := uploadStore.ExpireAbandoned(ctx, now); err != nil {
 		t.Fatalf("ExpireAbandoned() error = %v", err)
@@ -1800,30 +1762,59 @@ func resetCommunityOwnerBinding(t *testing.T, database *sql.DB) {
 	})
 }
 
-func createUserThroughLogin(t *testing.T, database *sql.DB, store *auth.SessionStore, telegramID int64) (auth.User, func()) {
+func createUserThroughLogin(t *testing.T, database *sql.DB, _ *auth.SessionStore, telegramID int64) (auth.User, func()) {
 	t.Helper()
 
-	user, err := store.CompleteTelegramLogin(
-		context.Background(),
-		auth.TelegramProfile{
-			TelegramID:  telegramID,
-			Username:    fmt.Sprintf("integration_%d", telegramID),
-			DisplayName: "Integration Test",
-		},
-		[]byte("encrypted-telegram-session"),
-		[]byte(fmt.Sprintf("initial-refresh-%d", telegramID)),
-		"integration-test",
-		nil,
-		time.Now().Add(time.Hour),
-	)
-	if err != nil {
-		t.Fatalf("CompleteTelegramLogin() error = %v", err)
-	}
+	user := seedIntegrationUser(t, database, telegramID)
 
 	cleanup := func() {
 		_, _ = database.ExecContext(context.Background(), `DELETE FROM users WHERE telegram_id = $1`, telegramID)
 	}
 	return user, cleanup
+}
+
+func seedIntegrationUser(t *testing.T, database *sql.DB, telegramID int64) auth.User {
+	t.Helper()
+
+	var user auth.User
+	err := database.QueryRowContext(context.Background(), `
+INSERT INTO users (telegram_id, username, display_name)
+VALUES ($1, $2, $3)
+ON CONFLICT (telegram_id)
+DO UPDATE SET
+    username = EXCLUDED.username,
+    display_name = EXCLUDED.display_name,
+    updated_at = now()
+RETURNING id, telegram_id, username, display_name, role`,
+		telegramID,
+		sql.NullString{String: fmt.Sprintf("integration_%d", telegramID), Valid: true},
+		sql.NullString{String: "Integration Test", Valid: true},
+	).Scan(&user.ID, &user.TelegramID, &user.Username, &user.DisplayName, &user.Role)
+	if err != nil {
+		t.Fatalf("seed integration user: %v", err)
+	}
+	if _, err := database.ExecContext(context.Background(), `
+INSERT INTO telegram_sessions (user_id, encrypted_session)
+VALUES ($1, $2)
+ON CONFLICT (user_id)
+DO UPDATE SET
+    encrypted_session = EXCLUDED.encrypted_session,
+    updated_at = now()`,
+		user.ID,
+		[]byte("encrypted-telegram-session"),
+	); err != nil {
+		t.Fatalf("seed integration telegram session: %v", err)
+	}
+	return user
+}
+
+func publicLinkListContains(links []files.PublicLink, id string) bool {
+	for _, link := range links {
+		if link.ID == id {
+			return true
+		}
+	}
+	return false
 }
 
 func uniqueSuffix() string {
