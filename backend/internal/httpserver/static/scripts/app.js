@@ -47,6 +47,8 @@
       telegramCodeNextType: '',
       telegramCodeCanResend: false,
       telegramCodePhone: '',
+      telegramCodeRequestStartedAt: 0,
+      telegramCodeRequestTimer: null,
       telegramSessionStatus: '',
     };
 
@@ -88,6 +90,7 @@
       localPasswordToggleBtn: document.getElementById('localPasswordToggleBtn'),
       loginUseWebauthnBtn: document.getElementById('loginUseWebauthnBtn'),
       loginUsePasswordBtn: document.getElementById('loginUsePasswordBtn'),
+      loginDeliveryState: document.getElementById('loginDeliveryState'),
       qrImage: document.getElementById('qrImage'),
       loginStatus: document.getElementById('loginStatus'),
       logoutBtn: document.getElementById('logoutBtn'),
@@ -515,6 +518,28 @@
       el.sendCodeBtn.disabled = false;
     }
 
+    function setTelegramCodeRequestState(active, message) {
+      clearInterval(state.telegramCodeRequestTimer);
+      state.telegramCodeRequestTimer = null;
+      state.telegramCodeRequestStartedAt = active ? Date.now() : 0;
+      el.loginDeliveryState.classList.toggle('hidden', !active && !message);
+      el.loginDeliveryState.classList.toggle('busy', Boolean(active));
+      el.loginDeliveryState.setAttribute('aria-busy', active ? 'true' : 'false');
+
+      const render = () => {
+        const elapsed = state.telegramCodeRequestStartedAt
+          ? Math.max(0, Math.floor((Date.now() - state.telegramCodeRequestStartedAt) / 1000))
+          : 0;
+        const suffix = active ? ` ${elapsed}s elapsed.` : '';
+        el.loginDeliveryState.textContent = `${message || ''}${suffix}`.trim();
+      };
+
+      render();
+      if (active) {
+        state.telegramCodeRequestTimer = setInterval(render, 1000);
+      }
+    }
+
     function updateTelegramCodeRetryButton() {
       const now = Date.now();
       const retryAt = Number(state.telegramCodeRetryAt || 0);
@@ -587,7 +612,8 @@
 
       switch (type) {
         case 'app':
-          details.push('Code sent to Telegram app.');
+          details.push('Telegram accepted the request and chose app delivery.');
+          details.push('Check the Telegram service chat on every already signed-in device; this is not an SMS.');
           break;
         case 'sms':
           details.push('Code sent by SMS.');
@@ -632,6 +658,8 @@
       }
       if (nextType) {
         details.push(`Next method: ${nextType}.`);
+      } else if (type === 'app') {
+        details.push('Telegram did not offer an SMS or call fallback for this request.');
       }
       details.push('Enter the code and sign in.');
       return details.join(' ');
@@ -774,6 +802,7 @@
       clearInterval(state.qrTimer);
       clearInterval(state.qrCountdownTimer);
       clearTelegramCodeRetryState();
+      setTelegramCodeRequestState(false, '');
       state.qrLoginId = null;
       state.qrExpiresAt = null;
       state.loginMFAContext = '';
@@ -821,6 +850,7 @@
         clearInterval(state.qrTimer);
         clearInterval(state.qrCountdownTimer);
         clearTelegramCodeRetryState();
+        setTelegramCodeRequestState(false, '');
       }
     }
 
@@ -924,6 +954,7 @@
       clearInterval(state.qrTimer);
       clearInterval(state.qrCountdownTimer);
       clearTelegramCodeRetryState();
+      setTelegramCodeRequestState(false, '');
       state.qrLoginId = null;
       state.qrExpiresAt = null;
       state.loginMFAContext = '';
@@ -957,6 +988,7 @@
       clearInterval(state.qrTimer);
       clearInterval(state.qrCountdownTimer);
       clearTelegramCodeRetryState();
+      setTelegramCodeRequestState(false, '');
       state.qrLoginId = null;
       state.qrExpiresAt = null;
       state.loginMFAContext = '';
@@ -1003,8 +1035,11 @@
         state.telegramCodePhone === phone);
       const endpoint = canResend ? '/auth/telegram/resend-code' : '/auth/telegram/send-code';
       el.sendCodeBtn.disabled = true;
+      el.startQrBtn.disabled = true;
       el.loginStatus.classList.remove('error');
-      el.loginStatus.textContent = canResend ? `Requesting ${telegramRetryLabel(retryType)} code...` : 'Sending code...';
+      const deliveryLabel = canResend ? telegramRetryLabel(retryType) : 'Telegram app or SMS';
+      el.loginStatus.textContent = canResend ? `Requesting ${deliveryLabel} code...` : 'Sending code request...';
+      setTelegramCodeRequestState(true, `Waiting for Telegram to accept the ${deliveryLabel} code request. Keep this tab open.`);
       try {
         const data = await api(endpoint, {
           method: 'POST',
@@ -1014,9 +1049,11 @@
         el.loginCodeField.classList.remove('hidden');
         el.loginWithCodeBtn.classList.remove('hidden');
         applyTelegramCodeDeliveryState(data && data.delivery, phone);
+        setTelegramCodeRequestState(false, 'Telegram accepted the code request. Check the delivery instructions below.');
         el.loginStatus.textContent = describeTelegramCodeDelivery(data && data.delivery);
         el.loginCodeInput.focus();
       } catch (err) {
+        setTelegramCodeRequestState(false, 'Telegram code request failed. Check the error below and try again.');
         el.loginStatus.classList.add('error');
         if (err && err.code === 'invalid_auth_challenge') {
           clearTelegramCodeRetryState();
@@ -1032,6 +1069,7 @@
           el.loginStatus.textContent = err.message;
         }
       } finally {
+        el.startQrBtn.disabled = false;
         updateTelegramCodeRetryButton();
       }
     }
@@ -1922,12 +1960,15 @@
       const selectedCount = state.selectedFileIds.size;
       const visibleCount = files.filter((file) => !(file.upload_id || file.is_pending_upload)).length;
       const shouldShow = state.view === 'own' && selectedCount > 0;
+      const readOnly = Boolean(state.readOnlyMapMode);
       el.selectionBar.classList.toggle('hidden', !shouldShow);
       el.selectionSummary.textContent = selectedCount === 1
         ? '1 item selected.'
         : `${selectedCount} items selected.`;
-      el.moveSelectedBtn.disabled = selectedCount === 0;
-      el.deleteSelectedBtn.disabled = selectedCount === 0;
+      el.moveSelectedBtn.disabled = readOnly || selectedCount === 0;
+      el.deleteSelectedBtn.disabled = readOnly || selectedCount === 0;
+      el.moveSelectedBtn.title = readOnly ? 'Read-only mode' : '';
+      el.deleteSelectedBtn.title = readOnly ? 'Read-only mode' : '';
       el.clearSelectionBtn.disabled = selectedCount === 0;
       el.selectAllVisibleBtn.disabled = visibleCount === 0;
       el.selectAllVisibleBtn.textContent = selectedCount === visibleCount && visibleCount > 0 ? 'Deselect all' : 'Select all';
@@ -2250,6 +2291,7 @@
     }
 
     async function confirmMoveSelected() {
+      if (!requireWritableAction(setMoveStatus)) return;
       const selected = Array.from(state.selectedFileIds);
       if (!selected.length || state.view !== 'own') return;
       const targetID = String(el.moveTargetSelect.value || '');
@@ -2297,8 +2339,10 @@
         el.moveTargetSelect.disabled = true;
         return;
       }
-      el.moveTargetSelect.disabled = false;
-      el.confirmMoveBtn.disabled = false;
+      const readOnly = Boolean(state.readOnlyMapMode);
+      el.moveTargetSelect.disabled = readOnly;
+      el.confirmMoveBtn.disabled = readOnly;
+      el.confirmMoveBtn.title = readOnly ? 'Read-only mode' : '';
       el.moveTargetSelect.value = state.currentFolderId || '';
     }
 

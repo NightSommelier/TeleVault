@@ -296,6 +296,35 @@
       color: var(--muted);
       overflow-wrap: anywhere;
     }
+    .delivery-state {
+      width: min(340px, 100%);
+      min-height: 34px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 8px 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--soft);
+      color: var(--ink);
+      font-size: 12px;
+      font-weight: 650;
+      text-align: left;
+    }
+    .delivery-state.busy::before {
+      content: "";
+      width: 14px;
+      height: 14px;
+      flex: 0 0 auto;
+      border: 2px solid rgba(15, 118, 110, .22);
+      border-top-color: var(--primary);
+      border-radius: 999px;
+      animation: delivery-spin .8s linear infinite;
+    }
+    @keyframes delivery-spin {
+      to { transform: rotate(360deg); }
+    }
     #readOnlyBanner {
       display: flex;
       align-items: center;
