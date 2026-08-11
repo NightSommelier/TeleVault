@@ -760,6 +760,17 @@ func validateManifest(manifest Manifest) error {
 			if part.TelegramPeer == "" {
 				return fmt.Errorf("%w: part %s missing telegram peer", ErrInvalidManifest, part.ID)
 			}
+			if part.StorageBackend != "" && part.StorageBackend != "telegram" {
+				return fmt.Errorf("%w: part %s has unsupported storage backend", ErrInvalidManifest, part.ID)
+			}
+			if part.StorageBackend == "" || part.StorageBackend == "telegram" {
+				if part.StorageLocator != "" && part.StorageLocator != part.TelegramPeer {
+					return fmt.Errorf("%w: part %s storage locator mismatch", ErrInvalidManifest, part.ID)
+				}
+				if part.StorageOwnerUser != "" && part.StorageOwnerUser != manifest.User.ID {
+					return fmt.Errorf("%w: part %s storage owner mismatch", ErrInvalidManifest, part.ID)
+				}
+			}
 			if part.TelegramMessageID <= 0 {
 				return fmt.Errorf("%w: part %s missing telegram message id", ErrInvalidManifest, part.ID)
 			}

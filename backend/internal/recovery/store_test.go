@@ -65,6 +65,42 @@ func TestValidateManifestRejectsUnsafeShapes(t *testing.T) {
 				manifest.Files[0].ParentID = manifest.Files[1].ID
 			},
 		},
+		{
+			name: "unsupported storage backend",
+			mutate: func(manifest *Manifest) {
+				manifest.Files[1].Parts[0].StorageBackend = "s3"
+			},
+		},
+		{
+			name: "telegram storage locator mismatch",
+			mutate: func(manifest *Manifest) {
+				part := &manifest.Files[1].Parts[0]
+				part.StorageLocator = "other-peer"
+			},
+		},
+		{
+			name: "telegram storage owner mismatch",
+			mutate: func(manifest *Manifest) {
+				part := &manifest.Files[1].Parts[0]
+				part.StorageOwnerUser = "other-user"
+			},
+		},
+		{
+			name: "legacy storage locator mismatch",
+			mutate: func(manifest *Manifest) {
+				part := &manifest.Files[1].Parts[0]
+				part.StorageBackend = ""
+				part.StorageLocator = "other-peer"
+			},
+		},
+		{
+			name: "legacy storage owner mismatch",
+			mutate: func(manifest *Manifest) {
+				part := &manifest.Files[1].Parts[0]
+				part.StorageBackend = ""
+				part.StorageOwnerUser = "other-user"
+			},
+		},
 	}
 
 	for _, tc := range cases {
@@ -81,6 +117,17 @@ func TestValidateManifestRejectsUnsafeShapes(t *testing.T) {
 
 func TestValidateManifestAcceptsRecoveryShape(t *testing.T) {
 	if err := validateManifest(testManifest()); err != nil {
+		t.Fatalf("validateManifest() error = %v", err)
+	}
+}
+
+func TestValidateManifestAcceptsLegacyStorageShape(t *testing.T) {
+	manifest := testManifest()
+	part := &manifest.Files[1].Parts[0]
+	part.StorageBackend = ""
+	part.StorageLocator = ""
+	part.StorageOwnerUser = ""
+	if err := validateManifest(manifest); err != nil {
 		t.Fatalf("validateManifest() error = %v", err)
 	}
 }
@@ -124,6 +171,9 @@ func testPart(id string, number int) PartEntry {
 		PlaintextStart:    &start,
 		PlaintextEnd:      &end,
 		PlaintextSize:     &size,
+		StorageBackend:    "telegram",
+		StorageLocator:    "self",
+		StorageOwnerUser:  "user-1",
 		TelegramPeer:      "self",
 		TelegramMessageID: 101,
 		CiphertextSize:    42,
