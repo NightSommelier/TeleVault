@@ -157,7 +157,7 @@ Supporting services:
 - [x] Remembered-device flow
 - [x] Community owner binding and invite-capacity enforcement
 - [x] Local signed-license verification
-- [ ] Final `v0.4.2` manual smoke closure and release tag
+- [x] `v0.4.2` Community release published on 2026-05-29
 - [ ] Commercial update-right channel hardening (`v0.5.0` target)
 - [ ] Payment-provider integration for licensing flow
 
